@@ -1,0 +1,104 @@
+{
+  "name": "rehearsal-vscode",
+  "displayName": "Rehearsal",
+  "description": "See whether database changes are ready for a safe local rehearsal without memorizing CLI commands.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "rehearsal-db",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0",
+    "node": ">=22 <27"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "categories": [
+    "Testing",
+    "Other"
+  ],
+  "keywords": [
+    "postgresql",
+    "supabase",
+    "database",
+    "migrations",
+    "testing"
+  ],
+  "main": "./dist/src/extension.js",
+  "activationEvents": [
+    "onView:rehearsal.projects",
+    "onCommand:rehearsal.refresh",
+    "workspaceContains:rehearsal.config.mjs"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rehearsal",
+          "title": "Rehearsal",
+          "icon": "media/rehearsal.svg"
+        }
+      ]
+    },
+    "views": {
+      "rehearsal": [
+        {
+          "id": "rehearsal.projects",
+          "name": "Projects"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "rehearsal.refresh",
+        "title": "Rehearsal: Refresh Project Overview",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "rehearsal.openDocumentation",
+        "title": "Rehearsal: Open Documentation"
+      },
+      {
+        "command": "rehearsal.showCliCommand",
+        "title": "Rehearsal: Show Equivalent CLI Command"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "rehearsal.refresh",
+          "when": "view == rehearsal.projects",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Rehearsal",
+      "properties": {
+        "rehearsal.configPath": {
+          "type": "string",
+          "default": "",
+          "scope": "resource",
+          "markdownDescription": "Optional project-relative path passed to Rehearsal as `--config=<path>`. Leave empty to use the CLI's fail-closed discovery."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.build.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:lab": "tsx scripts/verify-test-lab.ts",
+    "check": "npm run typecheck && npm test && npm run build && npm run format:check",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@types/vscode": "1.96.0",
+    "prettier": "^3.9.0",
+    "tsx": "^4.20.0",
+    "typescript": "7.0.2",
+    "vitest": "^5.0.0"
+  }
+}
