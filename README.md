@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Ddupasquier/rehearsal-db/main/docs/site/logo-mark.svg" width="96" height="96" alt="Rehearsal logo" />
+  <img src="media/rehearsal-readme.png" width="96" height="96" alt="Rehearsal logo" />
 </p>
 
 <h1 align="center">Rehearsal for VS Code</h1>
@@ -25,6 +25,13 @@ code .
 
 Press `F5` and choose **Run Rehearsal Extension**. The development host opens Rehearsal
 Test Lab. Open the Rehearsal activity-bar view and choose **Refresh Project Overview**.
+
+To try the packaged extension instead:
+
+```bash
+npm run package:vsix -- --out rehearsal-vscode-0.0.1.vsix
+code --install-extension rehearsal-vscode-0.0.1.vsix --force
+```
 
 The workspace repository must install `@rehearsal-db/core`. A nested project may use the
 repository's normal hoisted dependency, but resolution never crosses the Git repository

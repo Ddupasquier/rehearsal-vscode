@@ -1,10 +1,13 @@
 .github/**
 .vscode/**
+.gitignore
 docs/**
 scripts/**
 tests/**
 src/**
 *.map
+dist/**/*.d.ts
+dist/**/*.map
 tsconfig.json
 tsconfig.build.json
 vitest.config.mts

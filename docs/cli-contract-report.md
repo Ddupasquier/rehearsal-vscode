@@ -1,8 +1,7 @@
 # Editor-facing CLI audit
 
 Validated against an exact local `@rehearsal-db/core@0.1.0-rc.2` candidate built from
-core commit `4e098b3b689e9d2c9534eef7b3682220efaf74e9` plus the reviewed VS Code
-Electron/Node subprocess correction. Candidate SHA-256:
+core commit `6316b7f2f2361ba9e91b07ca130760c57590910e`. Candidate SHA-256:
 `f4be2f5e00f0083b12fc8fce3aab6b50e05645e905c5e47fd88c255d19753219`.
 This identifies the tested candidate; it does not claim that the registry's earlier
 artifact with the same prerelease version has identical bytes.
@@ -96,3 +95,24 @@ PostgreSQL and clean-room library projects; it did not start either runtime.
 Opening the local application and external documentation links was intentionally not
 part of this read-only observation. No browser or running database behavior is inferred
 from it.
+
+## Packaged installation observation
+
+The committed prototype was packaged as a 14-file, 56.05 KB VSIX with SHA-256
+`9ba6209dbdf931d7a225cfc2ee7068d859b6eb9fe7b970749838e5b3bc0dd453`. The archive
+contains the runtime JavaScript, extension manifest, documentation, license, and two
+media assets; it excludes source files, tests, declaration files, and source maps.
+
+The exact VSIX was installed into isolated VS Code user-data and extensions directories
+as `rehearsal-db.rehearsal-vscode@0.0.1`, then launched without
+`--extensionDevelopmentPath`. Its commands appeared in the Command Palette, and its
+Projects view independently rendered the candidate-backed PostgreSQL Test Lab fixture
+as ready and the clean-room library fixture as needing setup. This verifies packaged
+discovery and rendering; Marketplace publication, update delivery, and external-link
+navigation remain untested.
+
+The same core artifact completed Test Lab's full candidate-acceptance workflow for both
+PostgreSQL and Supabase targets, including onboarding, source preparation, baselines,
+lifecycle, cleanup, identity, application, and unrelated-container isolation. That
+acceptance validates the core candidate used by the extension; Test Lab is not part of
+the extension product or runtime dependency.

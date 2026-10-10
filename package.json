@@ -6,6 +6,15 @@
   "private": true,
   "publisher": "rehearsal-db",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ddupasquier/rehearsal-vscode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ddupasquier/rehearsal-db/issues"
+  },
+  "homepage": "https://ddupasquier.github.io/rehearsal-db/",
+  "icon": "media/rehearsal-readme.png",
   "engines": {
     "vscode": "^1.96.0",
     "node": ">=22 <27"
@@ -89,6 +98,7 @@
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "vitest run",
     "test:lab": "tsx scripts/verify-test-lab.ts",
+    "package:vsix": "npm run build && vsce package",
     "check": "npm run typecheck && npm test && npm run build && npm run format:check",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -96,6 +106,7 @@
   "devDependencies": {
     "@types/node": "22.20.5",
     "@types/vscode": "1.96.0",
+    "@vscode/vsce": "4.0.0",
     "prettier": "^3.9.0",
     "tsx": "^4.20.0",
     "typescript": "7.0.2",
