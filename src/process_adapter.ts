@@ -51,6 +51,7 @@ interface PackageManifest {
   readonly name?: unknown;
   readonly version?: unknown;
   readonly bin?: unknown;
+  readonly rehearsalContracts?: unknown;
 }
 
 export interface ResolvedRehearsal {
@@ -58,6 +59,7 @@ export interface ResolvedRehearsal {
   readonly manifestPath: string;
   readonly binPath: string;
   readonly version: string;
+  readonly projectDiscoverySchema: 1 | null;
 }
 
 export interface RunOptions {
@@ -195,7 +197,19 @@ export const resolveWorkspaceRehearsal = async (
       "The workspace Rehearsal CLI file is missing.",
     );
   }
-  return { packageRoot, manifestPath, binPath, version: manifest.version };
+  const contracts =
+    manifest.rehearsalContracts &&
+    typeof manifest.rehearsalContracts === "object" &&
+    !Array.isArray(manifest.rehearsalContracts)
+      ? (manifest.rehearsalContracts as Record<string, unknown>)
+      : {};
+  return {
+    packageRoot,
+    manifestPath,
+    binPath,
+    version: manifest.version,
+    projectDiscoverySchema: contracts.projectDiscovery === 1 ? 1 : null,
+  };
 };
 
 const ALLOWED_ENVIRONMENT = new Set([
@@ -250,6 +264,7 @@ const runProcess = async ({
   signal,
   timeoutMs,
   outputLimitBytes,
+  timeoutMessage,
 }: {
   readonly binPath: string;
   readonly arguments: readonly string[];
@@ -258,6 +273,7 @@ const runProcess = async ({
   readonly signal?: AbortSignal;
   readonly timeoutMs: number;
   readonly outputLimitBytes: number;
+  readonly timeoutMessage: string;
 }): Promise<{ stdout: string; stderrBytes: number; exitCode: number }> =>
   new Promise((resolvePromise, reject) => {
     if (signal?.aborted) {
@@ -288,8 +304,7 @@ const runProcess = async ({
       setTimeout(() => stopOwnedProcess(child, "SIGKILL"), 500).unref();
     };
     const timeout = setTimeout(
-      () =>
-        stop(new AdapterError("timeout", "Rehearsal inspection timed out.")),
+      () => stop(new AdapterError("timeout", timeoutMessage)),
       timeoutMs,
     );
     const onAbort = () =>
@@ -384,6 +399,7 @@ export const runVersion = async (
     ...(options.signal ? { signal: options.signal } : {}),
     timeoutMs: 5_000,
     outputLimitBytes: DEFAULT_OUTPUT_LIMIT,
+    timeoutMessage: "The Rehearsal version check took longer than 5 seconds.",
   });
   if (execution.exitCode !== 0) {
     throw new AdapterError(
@@ -415,6 +431,7 @@ export const runRehearsalJson = async <Data>(
     "--json",
     ...(config ? [`--config=${config}`] : []),
   ];
+  const timeoutSeconds = Math.ceil((options.timeoutMs ?? 60_000) / 1_000);
   const execution = await runProcess({
     binPath: resolved.binPath,
     arguments: arguments_,
@@ -423,6 +440,7 @@ export const runRehearsalJson = async <Data>(
     ...(options.signal ? { signal: options.signal } : {}),
     timeoutMs: options.timeoutMs ?? 60_000,
     outputLimitBytes: options.outputLimitBytes ?? DEFAULT_OUTPUT_LIMIT,
+    timeoutMessage: `The Rehearsal ${options.expectedCommand} check took longer than ${timeoutSeconds} ${timeoutSeconds === 1 ? "second" : "seconds"}.`,
   });
   let parsed: ReturnType<typeof parseEnvelope<Data>>;
   try {

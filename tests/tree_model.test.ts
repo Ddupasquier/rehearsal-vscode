@@ -17,6 +17,32 @@ describe("tree model", () => {
     ).toBe("Rehearsal documentation");
   });
 
+  it("explains that a source or unrelated folder is not a consumer project", () => {
+    const items = overviewItems({
+      workspaceName: "rehearsal-vscode",
+      workspaceRoot: "/workspace",
+      availability: "package_missing",
+      error: {
+        code: "package_missing",
+        message: "The workspace-local Rehearsal package could not be resolved.",
+        suggestions: [],
+      },
+    });
+
+    expect(items[0]).toMatchObject({
+      id: "package",
+      label: "No Rehearsal project found",
+      description: "Open your app's folder",
+      extensionAction: "installPackage",
+    });
+    expect(items[0]?.tooltip).toContain(
+      "This folder does not have @rehearsal-db/core installed.",
+    );
+    expect(overviewItemAccessibilityLabel(items[0]!)).toBe(
+      "No Rehearsal project found, Open your app's folder",
+    );
+  });
+
   it("uses plain-language read-only project state and CLI equivalents", () => {
     const items = overviewItems({
       workspaceName: "fixture",
@@ -62,6 +88,7 @@ describe("tree model", () => {
             state: "stopped",
             reason: "runtime_not_running",
             runtimeTarget: "postgresql",
+            verifiedRuntimeAvailable: true,
             endpoint: null,
           },
         ],
@@ -95,19 +122,39 @@ describe("tree model", () => {
     );
   });
 
+  it("offers a direct update action for an incompatible project package", () => {
+    const items = overviewItems({
+      workspaceName: "legacy",
+      workspaceRoot: "/workspace",
+      availability: "package_outdated",
+      version: "0.1.0-rc.2",
+      compatibility: {
+        state: "outdated",
+        installedVersion: "0.1.0-rc.2",
+        minimumVersion: "0.1.0-rc.4",
+      },
+    });
+
+    expect(items[0]).toMatchObject({
+      label: "Update Rehearsal",
+      description: "0.1.0-rc.2 → 0.1.0-rc.4+",
+      extensionAction: "updatePackage",
+    });
+  });
+
   it("does not surface stale project details during an active operation", () => {
     const items = overviewItems({
       workspaceName: "fixture",
       workspaceRoot: "/workspace",
       availability: "operation_active",
-      version: "0.1.0-rc.2",
+      version: "0.1.0-rc.4",
       activity: {
         schemaVersion: 1,
         state: "busy",
         operation: {
           kind: "run",
           startedAt: "2026-10-10T00:00:00.000Z",
-          rehearsalVersion: "0.1.0-rc.2",
+          rehearsalVersion: "0.1.0-rc.4",
         },
       },
       baseline: {

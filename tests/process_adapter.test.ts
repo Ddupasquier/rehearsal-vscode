@@ -23,14 +23,23 @@ const waitFor = async (
   throw new Error(message);
 };
 
-const workspace = async (script: string, version = "9.9.9") => {
+const workspace = async (
+  script: string,
+  version = "9.9.9",
+  rehearsalContracts?: Record<string, number>,
+) => {
   const root = await mkdtemp(join(tmpdir(), "rehearsal-vscode-"));
   roots.push(root);
   const packageRoot = join(root, "node_modules/@rehearsal-db/core");
   await mkdir(packageRoot, { recursive: true });
   await writeFile(
     join(packageRoot, "package.json"),
-    `${JSON.stringify({ name: "@rehearsal-db/core", version, bin: { rehearsal: "cli.mjs" } })}\n`,
+    `${JSON.stringify({
+      name: "@rehearsal-db/core",
+      version,
+      bin: { rehearsal: "cli.mjs" },
+      ...(rehearsalContracts ? { rehearsalContracts } : {}),
+    })}\n`,
   );
   await writeFile(join(packageRoot, "cli.mjs"), script);
   return root;
@@ -97,6 +106,28 @@ if (process.argv.includes("--version")) console.log(JSON.stringify({name:"@rehea
     await expect(runVersion(nested)).resolves.toMatchObject({
       version: "9.9.9",
     });
+  });
+
+  it("advertises only the supported project-discovery manifest contract", async () => {
+    const supported = await workspace(
+      `console.log(JSON.stringify({name:"@rehearsal-db/core",version:"9.9.9"}));`,
+      "9.9.9",
+      { projectDiscovery: 1 },
+    );
+    const unsupported = await workspace(
+      `console.log(JSON.stringify({name:"@rehearsal-db/core",version:"9.9.9"}));`,
+      "9.9.9",
+      { projectDiscovery: 2 },
+    );
+
+    await expect(resolveWorkspaceRehearsal(supported)).resolves.toMatchObject({
+      projectDiscoverySchema: 1,
+    });
+    await expect(resolveWorkspaceRehearsal(unsupported)).resolves.toMatchObject(
+      {
+        projectDiscoverySchema: null,
+      },
+    );
   });
 
   it("accepts doctor not-ready exit 1 and preserves explicit config arguments", async () => {
@@ -199,7 +230,10 @@ setInterval(() => {}, 1000);
         expectedCommand: "doctor",
         timeoutMs: 20,
       }),
-    ).rejects.toMatchObject({ code: "timeout" });
+    ).rejects.toMatchObject({
+      code: "timeout",
+      message: "The Rehearsal doctor check took longer than 1 second.",
+    });
   });
 
   it("rejects malformed or mismatched JSON without exposing process output", async () => {

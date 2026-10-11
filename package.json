@@ -1,11 +1,17 @@
 {
-  "name": "rehearsal-vscode",
+  "name": "rehearsal",
   "displayName": "Rehearsal",
   "description": "See whether database changes are ready for a safe local rehearsal without memorizing CLI commands.",
-  "version": "0.0.1",
+  "version": "0.1.1",
   "private": true,
   "publisher": "rehearsal-db",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
+  "preview": true,
+  "pricing": "Trial",
+  "galleryBanner": {
+    "color": "#17252e",
+    "theme": "dark"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ddupasquier/rehearsal-vscode.git"
@@ -22,6 +28,16 @@
   "extensionKind": [
     "workspace"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Rehearsal shows static guidance only and runs no workspace process until the folder is trusted."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Rehearsal requires a local project and its workspace-installed CLI."
+    }
+  },
   "categories": [
     "Testing",
     "Other"
@@ -37,6 +53,13 @@
   "activationEvents": [
     "onView:rehearsal.projects",
     "onCommand:rehearsal.refresh",
+    "onCommand:rehearsal.openWorkspace",
+    "onCommand:rehearsal.openPrivacy",
+    "onCommand:rehearsal.openSupport",
+    "onCommand:rehearsal.openLicense",
+    "onCommand:rehearsal.resetLocalState",
+    "onCommand:rehearsal.workspaceAction",
+    "onCommand:rehearsal.treeAction",
     "workspaceContains:rehearsal.config.mjs"
   ],
   "contributes": {
@@ -57,6 +80,36 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "rehearsal.projects",
+        "contents": "Open a local project to see whether its database changes are ready.\n[Open Rehearsal Workspace](command:rehearsal.openWorkspace)\n[Read the getting-started guide](command:rehearsal.openDocumentation)"
+      }
+    ],
+    "walkthroughs": [
+      {
+        "id": "rehearsal.getStarted",
+        "title": "Get started with Rehearsal",
+        "description": "Understand your project, create a safe local baseline, and test database changes before deployment.",
+        "steps": [
+          {
+            "id": "open-project",
+            "title": "Open your application project",
+            "description": "Open the folder that contains `package.json` and your database migrations. Rehearsal never borrows a package from another repository."
+          },
+          {
+            "id": "open-workspace",
+            "title": "Open the Rehearsal workspace",
+            "description": "[Open Project Workspace](command:rehearsal.openWorkspace) to see detected facts, suggestions, decisions, migration state, and local runtime status."
+          },
+          {
+            "id": "follow-next-step",
+            "title": "Follow the next best step",
+            "description": "Use the primary action on Overview. Installs, updates, migrations, resets, and cleanup always show an explicit confirmation or Rehearsal's own guided review."
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "rehearsal.refresh",
@@ -64,8 +117,29 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "rehearsal.openWorkspace",
+        "title": "Rehearsal: Open Project Workspace",
+        "icon": "$(layout)"
+      },
+      {
         "command": "rehearsal.openDocumentation",
         "title": "Rehearsal: Open Documentation"
+      },
+      {
+        "command": "rehearsal.openPrivacy",
+        "title": "Rehearsal: View Privacy and Data Use"
+      },
+      {
+        "command": "rehearsal.openSupport",
+        "title": "Rehearsal: View Support Policy"
+      },
+      {
+        "command": "rehearsal.openLicense",
+        "title": "Rehearsal: View License Terms"
+      },
+      {
+        "command": "rehearsal.resetLocalState",
+        "title": "Rehearsal: Reset Saved Editor State"
       },
       {
         "command": "rehearsal.showCliCommand",
@@ -75,9 +149,14 @@
     "menus": {
       "view/title": [
         {
+          "command": "rehearsal.openWorkspace",
+          "when": "view == rehearsal.projects",
+          "group": "navigation@1"
+        },
+        {
           "command": "rehearsal.refresh",
           "when": "view == rehearsal.projects",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ]
     },
@@ -89,6 +168,14 @@
           "default": "",
           "scope": "resource",
           "markdownDescription": "Optional project-relative path passed to Rehearsal as `--config=<path>`. Leave empty to use the CLI's fail-closed discovery."
+        },
+        "rehearsal.inspectionTimeoutSeconds": {
+          "type": "number",
+          "default": 90,
+          "minimum": 15,
+          "maximum": 300,
+          "scope": "resource",
+          "markdownDescription": "Maximum time for each read-only Rehearsal inspection command. Increase this only when a large local project needs more time; the extension still cancels only processes it owns."
         }
       }
     }
@@ -97,7 +184,10 @@
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.build.json",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "vitest run",
+    "preview": "tsx scripts/preview-workspace.ts",
     "test:lab": "tsx scripts/verify-test-lab.ts",
+    "verify:vsix": "tsx scripts/verify-private-vsix.ts",
+    "commercial:verify": "tsx scripts/verify-commercial-readiness.ts",
     "package:vsix": "npm run build && vsce package",
     "check": "npm run typecheck && npm test && npm run build && npm run format:check",
     "format": "prettier --write .",
