@@ -1,9 +1,22 @@
 import { execFile } from "node:child_process";
-import { chmod, cp, lstat, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, resolve } from "node:path";
 import { promisify } from "node:util";
 import { inspectProject } from "../src/project_snapshot.js";
+import {
+  bootstrapProjectDiscovery,
+  type WorkspaceEntryKind,
+} from "../src/bootstrap_discovery.js";
 
 const execFileAsync = promisify(execFile);
 const labRoot = resolve(__dirname, "../../rehearsal-test-lab");
@@ -52,6 +65,38 @@ const installCandidate = async (
   );
 };
 
+const bootstrapProfile = async (workspaceRoot: string, workspaceName: string) =>
+  bootstrapProjectDiscovery({
+    workspaceName,
+    async kind(path): Promise<WorkspaceEntryKind> {
+      try {
+        const metadata = await lstat(resolve(workspaceRoot, path));
+        if (metadata.isSymbolicLink()) return "symlink";
+        if (metadata.isFile()) return "file";
+        if (metadata.isDirectory()) return "directory";
+        return null;
+      } catch {
+        return null;
+      }
+    },
+    async readText(path, maximumBytes): Promise<string | null> {
+      try {
+        const target = resolve(workspaceRoot, path);
+        const metadata = await lstat(target);
+        if (
+          metadata.isSymbolicLink() ||
+          !metadata.isFile() ||
+          metadata.size > maximumBytes
+        ) {
+          return null;
+        }
+        return await readFile(target, "utf8");
+      } catch {
+        return null;
+      }
+    },
+  });
+
 const main = async (): Promise<void> => {
   const artifactArgument = process.argv[2];
   if (!artifactArgument) {
@@ -81,6 +126,10 @@ const main = async (): Promise<void> => {
       workspaceName: "Test Lab PostgreSQL",
       workspaceRoot: postgresqlRoot,
       trusted: true,
+      bootstrapDiscovery: await bootstrapProfile(
+        postgresqlRoot,
+        "Test Lab PostgreSQL",
+      ),
     });
     if (ready.availability !== "ready") {
       const failedChecks = ready.readiness?.checks
@@ -97,6 +146,14 @@ const main = async (): Promise<void> => {
       );
     }
     if (
+      !ready.baseline.generations?.some(({ active }) => active) ||
+      ready.baseline.generations.length < 2
+    ) {
+      throw new Error(
+        "The Test Lab overview did not expose active and retained baseline versions.",
+      );
+    }
+    if (
       !ready.packageLocation?.endsWith("node_modules/@rehearsal-db/core") ||
       ready.candidates?.targets.length !== 1
     ) {
@@ -107,7 +164,8 @@ const main = async (): Promise<void> => {
     if (
       ready.activity?.state !== "idle" ||
       ready.runtime?.targets.length !== 1 ||
-      ready.runtime.targets[0]?.runtimeTarget !== "postgresql"
+      ready.runtime.targets[0]?.runtimeTarget !== "postgresql" ||
+      ready.runtime.targets[0]?.verifiedRuntimeAvailable !== false
     ) {
       throw new Error(
         "The Test Lab overview did not consume the structured activity and runtime contracts.",
@@ -118,11 +176,31 @@ const main = async (): Promise<void> => {
         "The Test Lab overview did not expose the configured loopback application URL.",
       );
     }
+    if (
+      !ready.discovery ||
+      !ready.discovery.profile.detected.some(
+        ({ id }) => id === "database.migrationDirectories",
+      ) ||
+      !ready.discovery.profile.suggested.some(
+        ({ id }) => id === "application.proofCommand",
+      ) ||
+      !ready.discovery.profile.decisions.some(
+        ({ id }) => id === "privacy.productionData",
+      )
+    ) {
+      throw new Error(
+        "The Test Lab overview did not consume the versioned core discovery profile.",
+      );
+    }
 
     const newUser = await inspectProject({
       workspaceName: "Test Lab Library",
       workspaceRoot: libraryRoot,
       trusted: true,
+      bootstrapDiscovery: await bootstrapProfile(
+        libraryRoot,
+        "Test Lab Library",
+      ),
     });
     if (newUser.availability !== "not_ready") {
       throw new Error(
@@ -137,6 +215,14 @@ const main = async (): Promise<void> => {
         "The Test Lab overview did not retain safe activity and missing-configuration guidance.",
       );
     }
+    if (
+      !newUser.discovery ||
+      newUser.discovery.profile.configuration.state !== "missing"
+    ) {
+      throw new Error(
+        "The clean-room project did not retain its safe missing-configuration profile.",
+      );
+    }
 
     console.log(
       JSON.stringify(
@@ -149,16 +235,25 @@ const main = async (): Promise<void> => {
             packageLocation: ready.packageLocation,
             targetCount: ready.candidates.targets.length,
             baselineRows: ready.baseline.rowCount,
+            retainedBaselines: ready.baseline.generations.length,
             candidateCount: ready.candidates.count,
             applicationUrl: ready.applicationUrl,
             activityState: ready.activity.state,
             runtimeState: ready.runtime.state,
             runtimeTarget: ready.runtime.targets[0]?.runtimeTarget,
+            verifiedRuntimeAvailable:
+              ready.runtime.targets[0]?.verifiedRuntimeAvailable,
+            discoverySource: ready.discovery.source,
+            detected: ready.discovery.profile.detected.length,
+            suggested: ready.discovery.profile.suggested.length,
+            decisions: ready.discovery.profile.decisions.length,
           },
           cleanRoomProject: {
             availability: newUser.availability,
             activityState: newUser.activity.state,
             firstFailedCheck: newUser.readiness.checks[0]?.id,
+            discoverySource: newUser.discovery.source,
+            configurationState: newUser.discovery.profile.configuration.state,
           },
         },
         null,

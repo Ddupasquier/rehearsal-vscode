@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
+import type { WorkspaceActionId } from "./action_catalog.js";
 
 export interface OverviewItem {
   readonly id: string;
@@ -7,6 +8,7 @@ export interface OverviewItem {
   readonly tooltip: string;
   readonly icon: string;
   readonly cliCommand?: string;
+  readonly extensionAction?: WorkspaceActionId;
   readonly url?: string;
 }
 
@@ -52,10 +54,26 @@ export const overviewItems = (
     return [
       {
         id: "package",
-        label: "Rehearsal is not installed here",
-        description: "npm install --save-dev @rehearsal-db/core",
-        tooltip: snapshot.error?.message ?? "Workspace package missing.",
+        label: "No Rehearsal project found",
+        description: "Open your app's folder",
+        tooltip:
+          "This folder does not have @rehearsal-db/core installed. Open a project that uses Rehearsal, or install it in that project with npm install --save-dev @rehearsal-db/core.",
         icon: "package",
+        extensionAction: "installPackage",
+      },
+      documentationItem(),
+    ];
+  }
+  if (snapshot.availability === "package_outdated") {
+    return [
+      {
+        id: "package-update",
+        label: "Update Rehearsal",
+        description: `${snapshot.version ?? "old version"} → ${snapshot.compatibility?.minimumVersion ?? "current"}+`,
+        tooltip:
+          "This project uses a Rehearsal release that predates the extension's safe inspection contract. Select to review the exact package-manager update command.",
+        icon: "cloud-download",
+        extensionAction: "updatePackage",
       },
       documentationItem(),
     ];
@@ -109,15 +127,21 @@ export const overviewItems = (
     });
   }
   if (snapshot.error) {
+    const timedOut = snapshot.error.code === "timeout";
     items.push({
       id: "error",
-      label: snapshot.error.message,
+      label: timedOut
+        ? "Project inspection took too long"
+        : "Project inspection needs attention",
       description: snapshot.error.code,
-      tooltip: [snapshot.error.message, ...snapshot.error.suggestions].join(
-        "\n",
-      ),
+      tooltip: timedOut
+        ? "A read-only Rehearsal check exceeded the configured timeout. Open the project workspace to retry, adjust the timeout, or run Doctor."
+        : [
+            "Rehearsal could not safely complete this project inspection.",
+            ...snapshot.error.suggestions,
+          ].join("\n"),
       icon: "error",
-      cliCommand: "npx rehearsal doctor",
+      extensionAction: "showOutput",
     });
     return [...items, documentationItem()];
   }

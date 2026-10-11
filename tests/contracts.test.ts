@@ -4,6 +4,8 @@ import {
   parseActivityData,
   parseEnvelope,
   parseJson,
+  parseProjectDiscoveryData,
+  parseRuntimeStatus,
   parseStatusData,
   parseVersionResult,
 } from "../src/contracts.js";
@@ -106,6 +108,7 @@ describe("CLI contracts", () => {
       reason: null,
       runtimeTarget: "postgresql",
       projectId: "fixture-rehearsal",
+      verifiedRuntimeAvailable: true,
       endpoint: {
         kind: "postgresql",
         host: "127.0.0.1",
@@ -139,6 +142,22 @@ describe("CLI contracts", () => {
     });
   });
 
+  it("preserves compatibility with cores that predate runtime receipt status", () => {
+    const runtimeStatus = parseRuntimeStatus({
+      schemaVersion: 1,
+      state: "stopped",
+      reason: "runtime_not_running",
+      runtimeTarget: "postgresql",
+      projectId: "fixture-rehearsal",
+      endpoint: null,
+      baselineGenerationId: "baseline-1",
+      candidateSha256: "a".repeat(64),
+      candidates: [],
+    });
+
+    expect(runtimeStatus.verifiedRuntimeAvailable).toBeNull();
+  });
+
   it("rejects unsafe or contradictory structured state", () => {
     expect(() =>
       parseActivityData({
@@ -165,5 +184,97 @@ describe("CLI contracts", () => {
         },
       }),
     ).toThrow("loopback");
+  });
+
+  it("accepts bounded project discovery and rejects unsafe attestations", () => {
+    const profile = {
+      schemaVersion: 1,
+      project: { name: "fixture", packageManifest: "present" },
+      detected: [
+        {
+          category: "detected",
+          id: "package.manager",
+          label: "Package manager",
+          value: "npm",
+          evidence: [
+            {
+              kind: "file",
+              source: "package-lock.json",
+              detail: "npm lockfile is present.",
+            },
+          ],
+        },
+      ],
+      suggested: [
+        {
+          category: "suggested",
+          id: "application.startCommand",
+          label: "Application start command",
+          value: "npm run dev",
+          confidence: "high",
+          configPath: "application.startCommand",
+          review: "Review before use.",
+          evidence: [],
+        },
+      ],
+      decisions: [
+        {
+          category: "decision",
+          id: "privacy.productionData",
+          label: "Production data scope",
+          value: "Requires review",
+          question: "What may be copied?",
+          reason: "Permission cannot be inferred.",
+          evidence: [],
+        },
+      ],
+      configuration: {
+        state: "missing",
+        activePath: null,
+        discoveredPaths: [],
+        fields: [
+          {
+            path: "application.startCommand",
+            status: "suggested",
+            value: "npm run dev",
+            sourceItemIds: ["application.startCommand"],
+          },
+        ],
+      },
+      safety: {
+        projectCodeExecuted: false,
+        environmentFilesRead: false,
+        databaseContacted: false,
+        containerEngineStarted: false,
+      },
+    };
+
+    expect(parseProjectDiscoveryData(profile)).toMatchObject({
+      schemaVersion: 1,
+      suggested: [{ confidence: "high" }],
+    });
+    expect(() =>
+      parseProjectDiscoveryData({
+        ...profile,
+        safety: { ...profile.safety, environmentFilesRead: true },
+      }),
+    ).toThrow("environmentFilesRead");
+    expect(() =>
+      parseProjectDiscoveryData({
+        ...profile,
+        detected: [
+          {
+            ...profile.detected[0],
+            evidence: [
+              {
+                kind: "file",
+                source: "/private/project/package.json",
+                detail: "unsafe",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow("escaped the workspace");
   });
 });

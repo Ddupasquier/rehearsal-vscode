@@ -1,3 +1,6 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
   ActivityData,
@@ -9,13 +12,16 @@ import type {
   StatusData,
   VersionResult,
 } from "../src/contracts.js";
-import { inspectProject } from "../src/project_snapshot.js";
+import {
+  inspectProject,
+  processSnapshotClient,
+} from "../src/project_snapshot.js";
 import type { SnapshotClient } from "../src/project_snapshot.js";
 
 const envelope = <Data>(command: string, data: Data, status = "success") => ({
   result: {
     schemaVersion: 1,
-    rehearsalVersion: "0.1.0-rc.2",
+    rehearsalVersion: "0.1.0-rc.4",
     command,
     status,
     startedAt: "2026-10-09T00:00:00.000Z",
@@ -40,7 +46,7 @@ const client = (
   > {
     return {
       name: "@rehearsal-db/core",
-      version: "0.1.0-rc.2",
+      version: "0.1.0-rc.4",
       packageLocation: "node_modules/@rehearsal-db/core",
     };
   },
@@ -75,6 +81,16 @@ const client = (
           target: "postgresql",
           applicationUrl: "http://localhost:5175",
         },
+        application: {
+          startCommand: "npm run dev",
+          proofCommand: "npm test",
+          readiness: {
+            url: "http://localhost:5175/health",
+            expectedStatus: 200,
+            timeoutSeconds: 30,
+          },
+        },
+        cleanup: { retainBaselineGenerations: 4 },
       }),
       "inspect baseline": envelope<BaselineData>("inspect baseline", {
         generationId: "baseline-1",
@@ -110,6 +126,7 @@ const client = (
           reason: "runtime_not_running",
           runtimeTarget: "postgresql",
           projectId: "fixture-rehearsal",
+          verifiedRuntimeAvailable: true,
           endpoint: null,
           baselineGenerationId: "baseline-1",
           candidateSha256: "a".repeat(64),
@@ -124,7 +141,162 @@ const client = (
   },
 });
 
+describe("workspace package compatibility", () => {
+  it("reports an outdated manifest without executing its unsupported CLI", async () => {
+    const workspaceRoot = await mkdtemp(
+      resolve(tmpdir(), "rehearsal-vscode-outdated-"),
+    );
+    try {
+      const packageRoot = resolve(
+        workspaceRoot,
+        "node_modules/@rehearsal-db/core",
+      );
+      await mkdir(resolve(workspaceRoot, ".git"));
+      await mkdir(packageRoot, { recursive: true });
+      await writeFile(
+        resolve(packageRoot, "package.json"),
+        JSON.stringify({
+          name: "@rehearsal-db/core",
+          version: "0.1.0-rc.2",
+          bin: { rehearsal: "cli.mjs" },
+        }),
+      );
+      await writeFile(
+        resolve(packageRoot, "cli.mjs"),
+        'throw new Error("The outdated CLI must not execute.");\n',
+      );
+
+      await expect(
+        processSnapshotClient.version(workspaceRoot),
+      ).resolves.toMatchObject({
+        name: "@rehearsal-db/core",
+        version: "0.1.0-rc.2",
+        packageLocation: "node_modules/@rehearsal-db/core",
+      });
+    } finally {
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("project overview", () => {
+  it("turns an old core package into an actionable update state without running it", async () => {
+    let commandInvoked = false;
+    const result = await inspectProject({
+      workspaceName: "legacy-project",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        async version() {
+          return {
+            name: "@rehearsal-db/core",
+            version: "0.1.0-rc.2",
+            packageLocation: "node_modules/@rehearsal-db/core",
+          };
+        },
+        async command() {
+          commandInvoked = true;
+          throw new Error("must not run an incompatible CLI");
+        },
+      },
+    });
+
+    expect(commandInvoked).toBe(false);
+    expect(result).toMatchObject({
+      availability: "package_outdated",
+      version: "0.1.0-rc.2",
+      compatibility: {
+        state: "outdated",
+        minimumVersion: "0.1.0-rc.4",
+      },
+      error: { code: "package_outdated" },
+    });
+  });
+
+  it("loads the versioned core discovery profile when the package declares it", async () => {
+    const base = client();
+    const profile = {
+      schemaVersion: 1 as const,
+      project: { name: "fixture", packageManifest: "present" as const },
+      detected: [],
+      suggested: [],
+      decisions: [],
+      configuration: {
+        state: "present_unvalidated" as const,
+        activePath: "rehearsal.config.mjs",
+        discoveredPaths: ["rehearsal.config.mjs"],
+        fields: [],
+      },
+      safety: {
+        projectCodeExecuted: false as const,
+        environmentFilesRead: false as const,
+        databaseContacted: false as const,
+        containerEngineStarted: false as const,
+      },
+    };
+    const observed: string[] = [];
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        version: async () => ({
+          name: "@rehearsal-db/core",
+          version: "0.1.0-rc.4",
+          packageLocation: "node_modules/@rehearsal-db/core",
+          projectDiscoverySchema: 1,
+        }),
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ): Promise<{ result: ResultEnvelope<Data>; exitCode: number }> => {
+          observed.push(options.expectedCommand);
+          if (options.expectedCommand === "discover") {
+            return envelope("discover", profile) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          }
+          return base.command<Data>(options);
+        },
+      },
+    });
+
+    expect(observed).toContain("discover");
+    expect(result.discovery).toEqual({ source: "core", profile });
+  });
+
+  it("keeps a safe bootstrap profile when the installed core predates discovery", async () => {
+    const profile = {
+      schemaVersion: 1 as const,
+      project: { name: "fixture", packageManifest: "present" as const },
+      detected: [],
+      suggested: [],
+      decisions: [],
+      configuration: {
+        state: "missing" as const,
+        activePath: null,
+        discoveredPaths: [],
+        fields: [],
+      },
+      safety: {
+        projectCodeExecuted: false as const,
+        environmentFilesRead: false as const,
+        databaseContacted: false as const,
+        containerEngineStarted: false as const,
+      },
+    };
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      bootstrapDiscovery: profile,
+      client: client(),
+    });
+
+    expect(result.discovery).toEqual({ source: "bootstrap", profile });
+  });
+
   it("runs nothing for an untrusted workspace", async () => {
     let invoked = false;
     const blockedClient: SnapshotClient = {
@@ -156,7 +328,7 @@ describe("project overview", () => {
     });
     expect(result).toMatchObject({
       availability: "not_ready",
-      version: "0.1.0-rc.2",
+      version: "0.1.0-rc.4",
       packageLocation: "node_modules/@rehearsal-db/core",
       activity: { state: "idle", operation: null },
       readiness: { state: "NOT READY", failed: 1 },
@@ -173,7 +345,7 @@ describe("project overview", () => {
     });
     expect(result).toMatchObject({
       availability: "ready",
-      version: "0.1.0-rc.2",
+      version: "0.1.0-rc.4",
       activity: { state: "idle", operation: null },
       configPath: "rehearsal.config.mjs",
       baseline: { rowCount: 12, tableCount: 4 },
@@ -186,11 +358,20 @@ describe("project overview", () => {
             state: "stopped",
             reason: "runtime_not_running",
             runtimeTarget: "postgresql",
+            verifiedRuntimeAvailable: true,
             endpoint: null,
           },
         ],
       },
       applicationUrl: "http://localhost:5175",
+      configuration: {
+        application: {
+          startCommand: "npm run dev",
+          proofCommand: "npm test",
+          readinessUrl: "http://localhost:5175/health",
+        },
+        cleanup: { retainBaselineGenerations: 4 },
+      },
     });
   });
 
@@ -208,7 +389,7 @@ describe("project overview", () => {
           operation: {
             kind: "run",
             startedAt: "2026-10-10T00:00:00.000Z",
-            rehearsalVersion: "0.1.0-rc.2",
+            rehearsalVersion: "0.1.0-rc.4",
           },
         },
         observedCommands,
@@ -250,7 +431,7 @@ describe("project overview", () => {
                   operation: {
                     kind: "run",
                     startedAt: "2026-10-10T00:00:00.000Z",
-                    rehearsalVersion: "0.1.0-rc.2",
+                    rehearsalVersion: "0.1.0-rc.4",
                   },
                 },
           ) as { result: ResultEnvelope<Data>; exitCode: number };
@@ -331,7 +512,7 @@ describe("project overview", () => {
           throw new RehearsalCliError(
             {
               schemaVersion: 1,
-              rehearsalVersion: "0.1.0-rc.2",
+              rehearsalVersion: "0.1.0-rc.4",
               status: "error",
               error: {
                 category: "configuration_invalid",
@@ -352,6 +533,52 @@ describe("project overview", () => {
         code: "CONFIGURATION_INVALID",
         message: "The Rehearsal configuration is invalid.",
       },
+    });
+  });
+
+  it("preserves package identity and safe discovery when an inspection times out", async () => {
+    const profile = {
+      schemaVersion: 1 as const,
+      project: { name: "fixture", packageManifest: "present" as const },
+      detected: [],
+      suggested: [],
+      decisions: [],
+      configuration: {
+        state: "missing" as const,
+        activePath: null,
+        discoveredPaths: [],
+        fields: [],
+      },
+      safety: {
+        projectCodeExecuted: false as const,
+        environmentFilesRead: false as const,
+        databaseContacted: false as const,
+        containerEngineStarted: false as const,
+      },
+    };
+    const { AdapterError } = await import("../src/process_adapter.js");
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      bootstrapDiscovery: profile,
+      client: {
+        ...client(),
+        command: async () => {
+          throw new AdapterError(
+            "timeout",
+            "The Rehearsal status check took longer than 90 seconds.",
+          );
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      availability: "error",
+      version: "0.1.0-rc.4",
+      packageLocation: "node_modules/@rehearsal-db/core",
+      discovery: { source: "bootstrap", profile },
+      error: { code: "timeout" },
     });
   });
 });
