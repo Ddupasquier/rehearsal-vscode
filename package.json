@@ -2,7 +2,7 @@
   "name": "rehearsal",
   "displayName": "Rehearsal",
   "description": "See whether database changes are ready for a safe local rehearsal without memorizing CLI commands.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "publisher": "rehearsal-db",
   "license": "SEE LICENSE IN LICENSE",
@@ -60,7 +60,9 @@
     "onCommand:rehearsal.resetLocalState",
     "onCommand:rehearsal.workspaceAction",
     "onCommand:rehearsal.treeAction",
-    "workspaceContains:rehearsal.config.mjs"
+    "workspaceContains:rehearsal.config.mjs",
+    "workspaceContains:**/rehearsal.config.mjs",
+    "workspaceContains:node_modules/@rehearsal-db/core/package.json"
   ],
   "contributes": {
     "viewsContainers": {
@@ -118,8 +120,8 @@
       },
       {
         "command": "rehearsal.openWorkspace",
-        "title": "Rehearsal: Open Project Workspace",
-        "icon": "$(layout)"
+        "title": "Rehearsal: Open Dashboard",
+        "icon": "$(dashboard)"
       },
       {
         "command": "rehearsal.openDocumentation",
@@ -176,6 +178,12 @@
           "maximum": 300,
           "scope": "resource",
           "markdownDescription": "Maximum time for each read-only Rehearsal inspection command. Increase this only when a large local project needs more time; the extension still cancels only processes it owns."
+        },
+        "rehearsal.openDashboardAutomatically": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Open the Rehearsal dashboard automatically once when a trusted single-folder project is first inspected in this VS Code window. Disable this when you prefer to open it from the Rehearsal sidebar or Command Palette."
         }
       }
     }

@@ -57,11 +57,15 @@ code .
 ```
 
 Press `F5` and choose **Run Rehearsal Extension**. The development host opens Rehearsal
-Test Lab. Open the Rehearsal activity-bar view, refresh the project overview, then select
-the project root or choose **Open Project Workspace** from the view toolbar. Use the
-workspace navigation to move among the seven focused destinations. The primary card always shows
-the next useful action. Operational buttons preserve the exact candidate digest and open
-the command in a project-scoped terminal.
+Test Lab and its dashboard opens automatically after the trusted single-folder project is
+inspected. Reopen it at any time with the dashboard button in the Projects view title or
+the explicit **Open Rehearsal dashboard** row at the top of that view. Disable
+`rehearsal.openDashboardAutomatically` when you prefer manual opening. Multi-root
+workspaces stay explicit so the extension never guesses which project you intended.
+
+Use the workspace navigation to move among the seven focused destinations. The primary
+card always shows the next useful action. Operational buttons preserve the exact candidate
+digest and open the command in a project-scoped terminal.
 
 For fast visual review without launching a second VS Code window, run:
 
@@ -78,8 +82,8 @@ To try the packaged extension instead:
 
 ```bash
 npm run verify:vsix
-npm run package:vsix -- --out rehearsal-0.1.1.vsix
-code --install-extension rehearsal-0.1.1.vsix --force
+npm run package:vsix -- --out rehearsal-0.1.2.vsix
+code --install-extension rehearsal-0.1.2.vsix --force
 ```
 
 `verify:vsix` builds the production archive, checks that development-only files are absent,
@@ -101,7 +105,7 @@ Private VSIX installations do not auto-update. Every delivery must identify the 
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-0.1.1.vsix --force
+code --install-extension /absolute/path/to/rehearsal-0.1.2.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

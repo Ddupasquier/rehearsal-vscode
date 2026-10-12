@@ -12,11 +12,32 @@ import {
   WorkspaceRefreshScheduler,
 } from "./workspace_refresh.js";
 
-type TreeNode = WorkspaceNode | DetailNode;
+type TreeNode = DashboardNode | WorkspaceNode | DetailNode;
 
 export interface SnapshotUpdate {
   readonly workspaceKey: string;
   readonly snapshot: ProjectSnapshot;
+}
+
+class DashboardNode extends vscode.TreeItem {
+  readonly kind = "dashboard";
+
+  constructor() {
+    super("Open Rehearsal dashboard", vscode.TreeItemCollapsibleState.None);
+    this.id = "rehearsal:open-dashboard";
+    this.contextValue = "rehearsalDashboardAction";
+    this.iconPath = new vscode.ThemeIcon("dashboard");
+    this.tooltip =
+      "Open the project-aware Rehearsal dashboard. Use the project picker when more than one folder is open.";
+    this.accessibilityInformation = {
+      label: "Open Rehearsal dashboard",
+      role: "button",
+    };
+    this.command = {
+      command: "rehearsal.openWorkspace",
+      title: "Open Rehearsal Dashboard",
+    };
+  }
 }
 
 class WorkspaceNode extends vscode.TreeItem {
@@ -148,11 +169,14 @@ export class RehearsalTreeProvider
 
   getChildren(element?: TreeNode): TreeNode[] {
     if (!element) {
-      return (vscode.workspace.workspaceFolders ?? []).map((folder) =>
-        this.workspaceNode(folder),
-      );
+      return [
+        new DashboardNode(),
+        ...(vscode.workspace.workspaceFolders ?? []).map((folder) =>
+          this.workspaceNode(folder),
+        ),
+      ];
     }
-    if (element.kind === "detail") return [];
+    if (element.kind === "detail" || element.kind === "dashboard") return [];
     const snapshot = this.snapshots.get(element.folder.uri.toString());
     return snapshot
       ? overviewItems(snapshot).map((item) => new DetailNode(element, item))

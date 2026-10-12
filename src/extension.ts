@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { RehearsalTreeProvider } from "./tree_provider.js";
 import { RehearsalWorkspacePanels } from "./workspace_panel.js";
 import { RehearsalWorkspaceActions } from "./workspace_actions.js";
+import { AutomaticDashboardController } from "./automatic_dashboard.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
 
@@ -60,12 +61,57 @@ export const activate = (context: vscode.ExtensionContext): void => {
     treeDataProvider: provider,
     showCollapseAll: true,
   });
+  const automaticDashboard = new AutomaticDashboardController();
+  const tryAutomaticDashboard = (workspaceKey: string): void => {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const folder = folders.find(({ uri }) => uri.toString() === workspaceKey);
+    if (!folder) return;
+    const selected = automaticDashboard.choose({
+      enabled: vscode.workspace
+        .getConfiguration("rehearsal", folder.uri)
+        .get<boolean>("openDashboardAutomatically", true),
+      trusted: vscode.workspace.isTrusted,
+      workspaceKeys: folders.map(({ uri }) => uri.toString()),
+      updatedWorkspaceKey: workspaceKey,
+    });
+    if (!selected) return;
+    output.info(
+      `Opening the Rehearsal dashboard automatically for ${folder.name}.`,
+    );
+    void workspaces
+      .open(selected)
+      .then(() => {
+        output.info(
+          `Opened the Rehearsal dashboard automatically for ${folder.name}.`,
+        );
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        output.error(
+          `Automatic dashboard opening failed for ${folder.name}: ${message}`,
+        );
+      });
+  };
   context.subscriptions.push(
     output,
     provider,
     actions,
     workspaces,
     tree,
+    provider.onDidUpdateSnapshot(({ workspaceKey }) => {
+      tryAutomaticDashboard(workspaceKey);
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      if (vscode.workspace.isTrusted) void provider.refresh();
+    }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (!event.affectsConfiguration("rehearsal.openDashboardAutomatically"))
+        return;
+      const folders = vscode.workspace.workspaceFolders ?? [];
+      if (folders.length === 1 && folders[0]) {
+        tryAutomaticDashboard(folders[0].uri.toString());
+      }
+    }),
     vscode.commands.registerCommand("rehearsal.refresh", async () => {
       await vscode.window.withProgress(
         {
