@@ -30,6 +30,18 @@ export const WORKSPACE_PAGES = [
 
 export type WorkspacePage = (typeof WORKSPACE_PAGES)[number];
 
+const WORKSPACE_PAGE_DETAILS: Readonly<
+  Record<WorkspacePage, { readonly label: string; readonly glyph: string }>
+> = {
+  overview: { label: "Overview", glyph: "⌂" },
+  setup: { label: "Project setup", glyph: "✦" },
+  migrations: { label: "Migrations", glyph: "↗" },
+  runtime: { label: "Environments", glyph: "◫" },
+  "data-auth": { label: "Data & auth", glyph: "◎" },
+  configuration: { label: "Configuration", glyph: "⌘" },
+  activity: { label: "Activity & reports", glyph: "≋" },
+};
+
 type StatusTone = "success" | "warning" | "active" | "muted";
 
 interface ProductStatus {
@@ -212,7 +224,7 @@ const navigationItem = (
 ): string => `
   <button type="button" class="nav-item nav-item--${target}${activePage === target ? " nav-item--active" : ""}" data-rehearsal-page="${target}"${activePage === target ? ' aria-current="page"' : ""}>
     <span class="nav-item__glyph" aria-hidden="true">${escapeHtml(glyph)}</span>
-    <span>${escapeHtml(label)}</span>
+    <span class="nav-item__label">${escapeHtml(label)}</span>
     ${badge ? `<small>${escapeHtml(badge)}</small>` : ""}
   </button>`;
 
@@ -594,7 +606,7 @@ const pageHeader = (
 ): string => `
   <header class="page-heading">
     <p>${escapeHtml(eyebrow)}</p>
-    <h1>${escapeHtml(title)}</h1>
+    <h1 tabindex="-1">${escapeHtml(title)}</h1>
     <span>${escapeHtml(description)}</span>
   </header>`;
 
@@ -622,6 +634,7 @@ export const renderWorkspaceDocument = (
   const candidateCount = snapshot.candidates?.count;
   const targetCount = snapshot.runtime?.targets.length;
   const decisionCount = profile?.decisions.length;
+  const activePageDetails = WORKSPACE_PAGE_DETAILS[activePage];
   const scriptPreferences = JSON.stringify(preferences).replaceAll(
     "<",
     "\\u003c",
@@ -654,7 +667,13 @@ export const renderWorkspaceDocument = (
           <small><i class="status-dot status-dot--${status.tone}" aria-hidden="true"></i>${escapeHtml(status.label)}</small>
         </div>
 
-        <nav class="primary-nav" aria-label="Rehearsal workspace">
+        <button id="compact-navigation-trigger" class="compact-nav-trigger" type="button" aria-expanded="false" aria-controls="workspace-navigation" aria-label="Choose Rehearsal page. Current page: ${escapeHtml(activePageDetails.label)}">
+          <span class="compact-nav-trigger__glyph" aria-hidden="true">${escapeHtml(activePageDetails.glyph)}</span>
+          <span class="compact-nav-trigger__label">${escapeHtml(activePageDetails.label)}</span>
+          <span class="compact-nav-trigger__chevron" aria-hidden="true">⌄</span>
+        </button>
+
+        <nav id="workspace-navigation" class="primary-nav" aria-label="Rehearsal workspace">
           ${navigationItem("overview", "Overview", "⌂", activePage)}
           ${navigationItem("setup", "Project setup", "✦", activePage, decisionCount ? String(decisionCount) : undefined)}
           ${navigationItem("migrations", "Migrations", "↗", activePage, candidateCount ? String(candidateCount) : undefined)}
@@ -684,7 +703,7 @@ export const renderWorkspaceDocument = (
           <div class="overview-heading">
             <div>
               <p class="kicker">PROJECT OVERVIEW</p>
-              <h1>Know what your database change will do.</h1>
+              <h1 tabindex="-1">Know what your database change will do.</h1>
               <span>Rehearsal checks your real project shape in a disposable local environment—before deployment.</span>
             </div>
             <div class="hero-status hero-status--${status.tone}" role="status">
@@ -837,9 +856,27 @@ export const renderWorkspaceDocument = (
         const allowedPages = new Set(${JSON.stringify(WORKSPACE_PAGES)});
         const preferences = ${scriptPreferences};
         const generations = ${scriptGenerations};
+        const compactNavigationQuery = window.matchMedia("(max-width: 1050px)");
+        const compactNavigationTrigger = document.querySelector("#compact-navigation-trigger");
+        const workspaceNavigation = document.querySelector("#workspace-navigation");
+        const setCompactNavigation = (open) => {
+          compactNavigationTrigger?.setAttribute("aria-expanded", String(open));
+          workspaceNavigation?.classList.toggle("primary-nav--open", open);
+        };
+        const updateCompactNavigation = (page) => {
+          const selected = workspaceNavigation?.querySelector('[data-rehearsal-page="' + page + '"]');
+          const label = selected?.querySelector(".nav-item__label")?.textContent?.trim() ?? page;
+          const glyph = selected?.querySelector(".nav-item__glyph")?.textContent?.trim() ?? "";
+          const labelElement = compactNavigationTrigger?.querySelector(".compact-nav-trigger__label");
+          const glyphElement = compactNavigationTrigger?.querySelector(".compact-nav-trigger__glyph");
+          if (labelElement) labelElement.textContent = label;
+          if (glyphElement) glyphElement.textContent = glyph;
+          compactNavigationTrigger?.setAttribute("aria-label", "Choose Rehearsal page. Current page: " + label);
+        };
         const savePreferences = () => vscode?.postMessage({ type: "preferences", preferences });
-        const activate = (page) => {
+        const activate = (page, sourceControl) => {
           if (!allowedPages.has(page)) return;
+          let selectedSection = null;
           document.querySelectorAll("[data-rehearsal-page]").forEach((control) => {
             const selected = control.dataset.rehearsalPage === page;
             if (control.classList.contains("nav-item")) {
@@ -852,14 +889,32 @@ export const renderWorkspaceDocument = (
             const selected = section.id === page;
             section.classList.toggle("workspace-page--active", selected);
             section.hidden = !selected;
+            if (selected) selectedSection = section;
           });
+          updateCompactNavigation(page);
+          setCompactNavigation(false);
+          if (sourceControl?.closest("#workspace-navigation") && compactNavigationQuery.matches) {
+            compactNavigationTrigger?.focus();
+          } else if (sourceControl && !sourceControl.closest("#workspace-navigation")) {
+            selectedSection?.querySelector("h1")?.focus();
+          }
           vscode?.postMessage({ type: "navigate", page });
         };
+        compactNavigationTrigger?.addEventListener("click", () => {
+          setCompactNavigation(compactNavigationTrigger.getAttribute("aria-expanded") !== "true");
+        });
         document.addEventListener("click", (event) => {
           if (!(event.target instanceof Element)) return;
           const control = event.target.closest("[data-rehearsal-page]");
-          if (control) activate(control.dataset.rehearsalPage);
+          if (control) activate(control.dataset.rehearsalPage, control);
+          else if (!event.target.closest(".sidebar")) setCompactNavigation(false);
         });
+        document.addEventListener("keydown", (event) => {
+          if (event.key !== "Escape" || compactNavigationTrigger?.getAttribute("aria-expanded") !== "true") return;
+          setCompactNavigation(false);
+          compactNavigationTrigger.focus();
+        });
+        compactNavigationQuery.addEventListener("change", () => setCompactNavigation(false));
 
         const migrationRows = [...document.querySelectorAll("[data-migration-row]")];
         const migrationSearch = document.querySelector("#migration-search");

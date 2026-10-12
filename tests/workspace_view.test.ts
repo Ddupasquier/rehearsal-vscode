@@ -197,6 +197,18 @@ describe("Rehearsal workspace document", () => {
     expect(html).toContain("10,003");
     expect(html).toContain("20261010000100_add_safe_index.sql");
     expect(html).toContain('aria-label="Rehearsal workspace"');
+    expect(html).toContain('id="compact-navigation-trigger"');
+    expect(html).toContain('aria-controls="workspace-navigation"');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('id="workspace-navigation"');
+    expect(html).toContain("Choose Rehearsal page. Current page: Overview");
+    expect(html).toContain(
+      '<h1 tabindex="-1">Know what your database change will do.</h1>',
+    );
+    expect(html).toContain('window.matchMedia("(max-width: 1050px)")');
+    expect(html).toContain('event.key !== "Escape"');
+    expect(html).toContain("compactNavigationTrigger?.focus()");
+    expect(html).toContain('selectedSection?.querySelector("h1")?.focus()');
     expect(html).toContain('data-rehearsal-page="overview"');
     expect(html).toContain('data-rehearsal-page="setup"');
     expect(html).toContain('data-rehearsal-page="migrations"');
@@ -245,6 +257,7 @@ describe("Rehearsal workspace document", () => {
     );
     expect(html).toContain('id="overview" class="workspace-page" hidden');
     expect(html).toContain('id="setup" class="workspace-page" hidden');
+    expect(html).toContain("Choose Rehearsal page. Current page: Environments");
   });
 
   it("creates an unprepared sandbox instead of offering an open action that must fail", () => {
