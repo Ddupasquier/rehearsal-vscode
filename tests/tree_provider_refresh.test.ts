@@ -103,6 +103,26 @@ afterEach(() => {
 });
 
 describe("RehearsalTreeProvider project watchers", () => {
+  it("keeps an explicit dashboard action at the top of the Projects view", () => {
+    const output = {
+      appendLine: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const provider = new RehearsalTreeProvider(output as never);
+
+    expect(provider.getChildren()[0]).toMatchObject({
+      label: "Open Rehearsal dashboard",
+      iconPath: { id: "dashboard" },
+      command: {
+        command: "rehearsal.openWorkspace",
+        title: "Open Rehearsal Dashboard",
+      },
+    });
+    provider.dispose();
+  });
+
   it("refreshes a changed external package once without a window reload", async () => {
     vi.useFakeTimers();
     const output = {

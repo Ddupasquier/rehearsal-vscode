@@ -11,7 +11,7 @@
 | Publisher     | `rehearsal-db` is reserved in metadata; no Marketplace account is assumed |
 | Product owner | Rehearsal project, administered by Ddupasquier                            |
 | License       | Commercial preview per user; Rehearsal core remains MIT                   |
-| Version       | `0.1.1` commercial preview candidate                                      |
+| Version       | `0.1.2` commercial preview candidate                                      |
 
 Packaging a reviewed commercial-preview candidate is authorized. Marketplace publication,
 publisher/account creation, public pricing, payment setup, and distribution still require
@@ -43,6 +43,11 @@ their own reviewed release decision.
   semantic HTML and VS Code theme tokens
   with the Rehearsal mint accent; it has no custom focus model, network request, or
   independent project-state authority. Technical evidence is progressively disclosed.
+- A trusted single-folder project opens its dashboard once after the first successful
+  inspection in an extension-host session. Later refreshes respect a dashboard the user
+  closed. Multi-root workspaces stay explicit rather than guessing a project. The Projects
+  view also owns a labeled dashboard action as its first row and a dashboard button in its
+  title; automatic opening can be disabled with a resource-scoped setting.
 - Every icon has a plain-language label. Status is never communicated by color alone.
 - Guided actions remain available from the keyboard. Read-only refreshes stay inside the
   adapter; approved operations open their exact public command in a project-scoped
