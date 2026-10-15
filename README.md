@@ -34,6 +34,12 @@ loopback ports. The inspecting core version is separate from the version that re
 the runtime. Older receipts may not record it. These facts are not fresh verification,
 and configured ports do not prove that a service is listening. Use **Verify** for fresh
 runtime evidence.
+Presence, receipt compatibility and long-running review have separate labels and filters.
+A created environment with missing verification is not described as never created.
+**Incompatible** refers only to recorded format/provider metadata—not a guess based on
+version differences. **Long-running review** uses age, not user inactivity. Configured
+sandboxes preserve data on stop/start, including automatic workload stop. Approved
+run/reset can replace data and volumes; reviewed discard removes volumes.
 Each destination presents one focused job instead of one long diagnostic report. The
 workspace includes readiness, the active configuration, baseline metadata, candidate
 migrations, structured local-runtime state, current Rehearsal activity, and local

@@ -648,17 +648,29 @@ const candidateMarkup = (
 const targetMarkup = (snapshot: ProjectSnapshot): string => {
   const targets = snapshot.runtime?.targets;
   if (!targets || targets.length === 0) {
+    const configured = snapshot.resources?.environments;
+    if (configured?.length)
+      return `<div class="runtime-list">${configured.map((entry) => `<article class="runtime-row" data-display-target="${escapeHtml(entry.target)}"><span class="runtime-row__icon" aria-hidden="true">DB</span><span class="runtime-row__copy"><strong>${escapeHtml(entry.target)}</strong><small>${escapeHtml(entry.provider)} · verified receipt unavailable · ${entry.classification?.presence.state === "created" ? "created" : entry.classification?.presence.state === "not-created" ? "not created" : "creation unknown"}</small></span><span class="state-chip">${escapeHtml(entry.state)}</span></article>`).join("")}</div><p class="control-note">Configured resources are visible, but runtime verification is unavailable while Doctor needs attention. No running service or verified database was inferred.</p>`;
     return '<div class="empty-state">No local runtime targets are available yet.</div>';
   }
   return `<div class="runtime-list">${targets
-    .map(
-      ({ name, runtimeTarget, state, reason, verifiedRuntimeAvailable }) => `
+    .map(({ name, runtimeTarget, state, reason, verifiedRuntimeAvailable }) => {
+      const classification = snapshot.resources?.environments.find(
+        (entry) => entry.target === name,
+      )?.classification;
+      const presence =
+        classification?.presence.state === "created"
+          ? "created"
+          : classification?.presence.state === "not-created"
+            ? "not created"
+            : "creation unknown";
+      return `
         <article class="runtime-row" data-display-target="${escapeHtml(name)}">
           <span class="runtime-row__icon" aria-hidden="true">DB</span>
-          <span class="runtime-row__copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(runtimeTarget)}${reason ? ` · ${escapeHtml(reason.replaceAll("_", " "))}` : ""} · ${verifiedRuntimeAvailable === true ? "prepared" : verifiedRuntimeAvailable === false ? "not created" : "preparation unknown"}</small></span>
+          <span class="runtime-row__copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(runtimeTarget)}${reason ? ` · ${escapeHtml(reason.replaceAll("_", " "))}` : ""} · ${verifiedRuntimeAvailable === true ? "verified receipt available" : verifiedRuntimeAvailable === false ? "verified receipt unavailable" : "preparation unknown"} · ${presence}</small></span>
           <span class="state-chip">${escapeHtml(state)}</span>
-        </article>`,
-    )
+        </article>`;
+    })
     .join("")}</div>`;
 };
 
@@ -687,7 +699,7 @@ const resourceInventoryMarkup = (
           entry,
         ) => `<article class="runtime-row" data-display-target="${escapeHtml(entry.target)}">
           <span class="runtime-row__icon" aria-hidden="true">DB</span>
-          <span class="runtime-row__copy"><strong>${escapeHtml(entry.target)}</strong><small>${escapeHtml(entry.provider)} · ${entry.runningContainerCount}/${entry.containerCount} containers running · ${entry.volumeCount} volumes${entry.diskUsageBytes === null ? "" : ` · ${formatGiB(entry.diskUsageBytes)} retained`}${entry.cpuPercent === null ? "" : ` · ${entry.cpuPercent.toFixed(2)}% CPU`}${entry.memoryUsageBytes === null ? "" : ` · ${formatGiB(entry.memoryUsageBytes)} memory`} · ${escapeHtml(entry.retention)} · restart ${escapeHtml(entry.restartPolicies.join(", ") || "not present")}${entry.lastActivityAt ? ` · last activity ${escapeHtml(entry.lastActivityAt)}` : ""}</small></span>
+          <span class="runtime-row__copy"><strong>${escapeHtml(entry.target)}</strong><small>${escapeHtml(entry.provider)} · ${entry.runningContainerCount}/${entry.containerCount} containers running · ${entry.volumeCount} volumes${entry.diskUsageBytes === null ? "" : ` · ${formatGiB(entry.diskUsageBytes)} retained`}${entry.cpuPercent === null ? "" : ` · ${entry.cpuPercent.toFixed(2)}% CPU`}${entry.memoryUsageBytes === null ? "" : ` · ${formatGiB(entry.memoryUsageBytes)} memory`} · stop/start preserves data; reviewed reset/run can replace data and volumes · restart ${escapeHtml(entry.restartPolicies.join(", ") || "not present")}${entry.lastActivityAt ? ` · last observable resource activity ${escapeHtml(entry.lastActivityAt)}` : ""}</small></span>
           <span class="state-chip">${escapeHtml(entry.state)}</span>
         </article>`,
       )
@@ -855,7 +867,7 @@ export const renderWorkspaceDocument = (
   const profile = snapshot.discovery?.profile;
   const safeName = escapeHtml(snapshot.workspaceName);
   const candidateCount = snapshot.candidates?.count;
-  const targetCount = snapshot.runtime?.targets.length;
+  const targetCount = configuredTargets.length || undefined;
   const decisionCount = profile?.decisions.length;
   const activePageDetails = WORKSPACE_PAGE_DETAILS[activePage];
   const scriptPreferences = JSON.stringify(preferences).replaceAll(

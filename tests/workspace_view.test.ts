@@ -547,6 +547,72 @@ const readySnapshot = (): ProjectSnapshot => ({
   },
 });
 
+describe("not-ready configured target rendering", () => {
+  it("shows public configured resources and profile target choices without a baseline or verified runtime", () => {
+    const original = readySnapshot();
+    const {
+      runtime: _runtime,
+      baseline: _baseline,
+      candidates: _candidates,
+      ...partial
+    } = original;
+    const snapshot: ProjectSnapshot = {
+      ...partial,
+      availability: "not_ready",
+      configurationMetadata: {
+        schemaVersion: 1,
+        path: "rehearsal.config.mjs",
+        sourceSha256: "a".repeat(64),
+        fields: [],
+        profiles: [],
+        pathResolution: "Project root",
+        manualFields: "Manual review",
+      },
+      resources: {
+        ...original.resources!,
+        environments: [
+          {
+            ...original.resources!.environments[0]!,
+            state: "absent",
+            containerCount: 0,
+            runningContainerCount: 0,
+            volumeCount: 0,
+            cleanupEligibility: "not-present",
+            classification: {
+              schemaVersion: 1,
+              role: "configured-environment",
+              dataPersistence: "preserved-on-stop",
+              presence: {
+                state: "not-created",
+                reason: "no-owned-resources-observed",
+              },
+              receipt: {
+                state: "unknown",
+                reason: "receipt-unavailable",
+                scope: "format-and-provider-only",
+              },
+              review: {
+                state: "disabled",
+                reason: "cutoff-disabled",
+                staleAfterSeconds: null,
+                lastObservableActivityAt: null,
+              },
+            },
+          },
+        ],
+      },
+    };
+    const html = renderWorkspaceDocument(snapshot, assets, "runtime");
+    expect(html).toContain("verified receipt unavailable · not created");
+    expect(html).toContain('data-display-target="primary"');
+    expect(html).toContain('name="target" value="primary"');
+    expect(html).toContain("Configured resources are visible");
+    expect(html).not.toContain("No local runtime targets are available yet");
+    expect(html).not.toContain("verified receipt available · created");
+    expect(html).toContain('class="state-chip">1 target</span>');
+  });
+});
+
 describe("explicit workspace navigation scroll", () => {
   it("starts each newly selected page at the top instead of carrying the previous page's lower position", () => {
     const view = exerciseViewScript(
@@ -895,6 +961,31 @@ describe("workspace control state and truthful actions", () => {
     expect(controller.imageControl.checked).toBe(false);
     expect(controller.ids.get("#review-image-cleanup")!.disabled).toBe(true);
     expect(controller.state()).toMatchObject({ view: { images: [] } });
+  });
+
+  it("filters created, long-running-review and incompatible resource states through preferences only", () => {
+    const controller = exerciseViewScript(
+      renderWorkspaceDocument(readySnapshot(), assets, "runtime"),
+    );
+    controller.resourceRows[0]!.dataset.state =
+      "running created review-due incompatible";
+    controller.resourceRows[1]!.dataset.state = "stopped created";
+    controller.resourceRows[1]!.dataset.viewTarget = "primary";
+    controller.resourceRows[2]!.dataset.state = "candidate";
+    for (const [state, hidden] of [
+      ["created", [false, false, true]],
+      ["review-due", [false, true, true]],
+      ["incompatible", [false, true, true]],
+      ["not-created", [true, true, true]],
+    ] as const) {
+      controller.ids.get("#resource-state")!.change(state);
+      expect(controller.resourceRows.map((row) => row.hidden)).toEqual(hidden);
+    }
+    expect(
+      controller.messages.every(
+        (message) => (message as { type?: string }).type === "preferences",
+      ),
+    ).toBe(true);
   });
 });
 

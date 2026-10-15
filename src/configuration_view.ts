@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
+import { knownWorkspaceTargets } from "./workspace_view_state.js";
 const escape = (value: string): string =>
   value
     .replaceAll("&", "&amp;")
@@ -56,8 +57,9 @@ export const namedProfileControls = (snapshot: ProjectSnapshot): string => {
   const metadata = snapshot.configurationMetadata;
   if (!metadata)
     return '<p class="control-note">Named project profiles require a core release advertising configuration review.</p>';
-  const targets = snapshot.runtime?.targets.map((target) => target.name) ??
-    snapshot.candidates?.targets.map((target) => target.name) ?? ["primary"];
+  const targets = knownWorkspaceTargets(snapshot);
+  if (targets.length === 0)
+    return '<p class="control-note">Configured target choices are unavailable. Refresh the project or resolve its Doctor checks before reviewing a new profile; no target name is guessed.</p>';
   return `<details class="technical-details"><summary>Save a named project profile</summary><form id="named-profile-controls" class="configuration-controls"><label><span>Profile name</span><input name="name" maxlength="80" required placeholder="Feature branch" /></label><fieldset><legend>Targets to display</legend>${targets.map((target) => `<label><input type="checkbox" name="target" value="${escape(target)}"${target === "primary" ? " checked" : ""} /> ${escape(target)}</label>`).join("")}</fieldset><label><span>Optional local application URL</span><input name="applicationUrl" type="url" maxlength="500" placeholder="http://localhost:5175" /></label><button type="submit" class="button button--primary">Review profile diff</button><p>Saved in the active project configuration. Selecting a profile never starts, stops, resets, or changes data. Reusing a name explicitly replaces only that profile after diff review.</p></form></details>`;
 };
 export const CONFIGURATION_CONTROLS_SCRIPT = `

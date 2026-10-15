@@ -10,7 +10,10 @@ import {
 } from "../src/review_contract.js";
 import { parseMigrationReviewPlan } from "../src/migration_review.js";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
-import { parseEnvironmentProvenance } from "../src/resource_contract.js";
+import {
+  parseEnvironmentClassification,
+  parseEnvironmentProvenance,
+} from "../src/resource_contract.js";
 import {
   parseOperationProgressSnapshot,
   renderOperationProgress,
@@ -443,6 +446,26 @@ const readySnapshot: ProjectSnapshot = {
         retention: "persistent",
         cleanupEligibility: "running",
         restartPolicies: ["no"],
+        classification: parseEnvironmentClassification(
+          {
+            schemaVersion: 1,
+            role: "configured-environment",
+            dataPersistence: "preserved-on-stop",
+            presence: { state: "created", reason: "owned-resources-observed" },
+            receipt: {
+              state: "compatible",
+              reason: "supported-receipt-format-and-provider",
+              scope: "format-and-provider-only",
+            },
+            review: {
+              state: "due",
+              reason: "observable-cutoff-exceeded",
+              staleAfterSeconds: 3600,
+              lastObservableActivityAt: "2026-10-13T17:30:00Z",
+            },
+          },
+          "2026-10-13T18:37:00.000Z",
+        )!,
         // Synthetic UI evidence only: no real runtime or receipt is inspected here.
         provenance: parseEnvironmentProvenance({
           schemaVersion: 1,
@@ -729,8 +752,117 @@ const { baseline: readyBaselineForPreview, ...readyWithoutBaseline } =
   readySnapshot;
 void readyBaselineForPreview;
 
+/** Synthetic visual-state controls only; no engine, project files or receipts are read. */
+const environmentStatePreview = (
+  kind: "not-created" | "incompatible" | "engine-stopped",
+): ProjectSnapshot => {
+  const unavailable = kind === "engine-stopped";
+  const absent = kind === "not-created";
+  const entry = readySnapshot.resources!.environments[0]!;
+  return {
+    ...readySnapshot,
+    workspaceName: `${kind} · synthetic preview`,
+    runtime: {
+      state: unavailable ? "unavailable" : "stopped",
+      targets: readySnapshot.runtime!.targets.map((target) => ({
+        ...target,
+        state: unavailable ? "unavailable" : "stopped",
+        reason: unavailable
+          ? "container_engine_unavailable"
+          : "runtime_not_running",
+        verifiedRuntimeAvailable: false,
+        endpoint: null,
+      })),
+    },
+    resources: {
+      ...readySnapshot.resources!,
+      engine: {
+        ...readySnapshot.resources!.engine,
+        state: unavailable ? "stopped" : "running",
+        disk: unavailable ? null : readySnapshot.resources!.engine.disk,
+        resources: unavailable ? [] : readySnapshot.resources!.engine.resources,
+      },
+      catalog: unavailable
+        ? null
+        : {
+            ...readySnapshot.resources!.catalog!,
+            volumes: absent ? [] : readySnapshot.resources!.catalog!.volumes,
+          },
+      environments: [
+        {
+          ...entry,
+          state: unavailable ? "unavailable" : absent ? "absent" : "stopped",
+          containerCount: unavailable || absent ? 0 : 1,
+          runningContainerCount: 0,
+          volumeCount: unavailable || absent ? 0 : 1,
+          diskUsageBytes: null,
+          cpuPercent: null,
+          memoryUsageBytes: null,
+          memoryLimitBytes: null,
+          createdAt: unavailable || absent ? null : entry.createdAt,
+          lastActivityAt: unavailable || absent ? null : entry.lastActivityAt,
+          cleanupEligibility: unavailable
+            ? "inspection-unavailable"
+            : absent
+              ? "not-present"
+              : "preview-required",
+          provenance:
+            kind === "incompatible"
+              ? {
+                  ...entry.provenance!,
+                  runtime: null,
+                  runtimeReason: "receipt-invalid",
+                }
+              : entry.provenance!,
+          classification: parseEnvironmentClassification({
+            schemaVersion: 1,
+            role: "configured-environment",
+            dataPersistence: "preserved-on-stop",
+            presence: unavailable
+              ? { state: "unknown", reason: "ownership-inspection-unavailable" }
+              : absent
+                ? {
+                    state: "not-created",
+                    reason: "no-owned-resources-observed",
+                  }
+                : { state: "created", reason: "owned-resources-observed" },
+            receipt:
+              kind === "incompatible"
+                ? {
+                    state: "incompatible",
+                    reason: "receipt-invalid",
+                    scope: "format-and-provider-only",
+                  }
+                : {
+                    state: "compatible",
+                    reason: "supported-receipt-format-and-provider",
+                    scope: "format-and-provider-only",
+                  },
+            review: {
+              state: unavailable ? "unknown" : "not-due",
+              reason: unavailable
+                ? "ownership-inspection-unavailable"
+                : "not-running",
+              staleAfterSeconds: 3600,
+              lastObservableActivityAt: null,
+            },
+          })!,
+        },
+      ],
+      stale: {
+        stoppedCount: kind === "incompatible" ? 1 : 0,
+        digest: kind === "incompatible" ? "8".repeat(64) : null,
+        targets: kind === "incompatible" ? ["primary"] : [],
+      },
+    },
+  };
+};
+
 const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
   "/": readySnapshot,
+  "/not-created": environmentStatePreview("not-created"),
+  "/incompatible": environmentStatePreview("incompatible"),
+  "/engine-stopped": environmentStatePreview("engine-stopped"),
   "/profiles": {
     ...readySnapshot,
     workspaceName: "Two-target project · synthetic preview",
@@ -771,6 +903,23 @@ const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
           cpuPercent: null,
           memoryUsageBytes: null,
           cleanupEligibility: "preview-required",
+          classification: parseEnvironmentClassification({
+            schemaVersion: 1,
+            role: "configured-environment",
+            dataPersistence: "preserved-on-stop",
+            presence: { state: "created", reason: "owned-resources-observed" },
+            receipt: {
+              state: "unknown",
+              reason: "provider-not-recorded",
+              scope: "format-and-provider-only",
+            },
+            review: {
+              state: "not-due",
+              reason: "not-running",
+              staleAfterSeconds: 3600,
+              lastObservableActivityAt: null,
+            },
+          })!,
           provenance: parseEnvironmentProvenance({
             schemaVersion: 1,
             inspectorVersion: "0.1.0-rc.4",

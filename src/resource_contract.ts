@@ -21,6 +21,41 @@ export interface EnvironmentProvenanceData {
   readonly runtimeReason: "receipt-unavailable" | "receipt-invalid" | null;
 }
 
+export interface EnvironmentClassificationData {
+  readonly schemaVersion: 1;
+  readonly role: "configured-environment";
+  readonly dataPersistence: "preserved-on-stop";
+  readonly presence: {
+    readonly state: "created" | "not-created" | "unknown";
+    readonly reason:
+      | "owned-resources-observed"
+      | "no-owned-resources-observed"
+      | "ownership-inspection-unavailable";
+  };
+  readonly receipt: {
+    readonly state: "compatible" | "incompatible" | "unknown";
+    readonly reason:
+      | "supported-receipt-format-and-provider"
+      | "receipt-invalid"
+      | "receipt-unavailable"
+      | "provider-not-recorded"
+      | "receipt-binding-mismatch";
+    readonly scope: "format-and-provider-only";
+  };
+  readonly review: {
+    readonly state: "due" | "not-due" | "disabled" | "unknown";
+    readonly reason:
+      | "observable-cutoff-exceeded"
+      | "recent-observable-activity"
+      | "not-running"
+      | "cutoff-disabled"
+      | "ownership-inspection-unavailable"
+      | "observable-activity-unavailable";
+    readonly staleAfterSeconds: number | null;
+    readonly lastObservableActivityAt: string | null;
+  };
+}
+
 export interface ResourceCatalogData {
   readonly schemaVersion: 1;
   readonly images: readonly {
@@ -115,6 +150,137 @@ const exactKeys = (
     throw new ContractError(
       "Environment provenance contains unsupported fields.",
     );
+};
+export const parseEnvironmentClassification = (
+  value: unknown,
+  inspectedAt?: string,
+): EnvironmentClassificationData | undefined => {
+  if (value === undefined) return undefined;
+  const data = record(value);
+  exactKeys(data, [
+    "schemaVersion",
+    "role",
+    "dataPersistence",
+    "presence",
+    "receipt",
+    "review",
+  ]);
+  if (
+    data.schemaVersion !== 1 ||
+    data.role !== "configured-environment" ||
+    data.dataPersistence !== "preserved-on-stop"
+  )
+    throw new ContractError(
+      "Environment classification schema is unsupported.",
+    );
+  const presence = record(data.presence);
+  const receipt = record(data.receipt);
+  const review = record(data.review);
+  exactKeys(presence, ["state", "reason"]);
+  exactKeys(receipt, ["state", "reason", "scope"]);
+  exactKeys(review, [
+    "state",
+    "reason",
+    "staleAfterSeconds",
+    "lastObservableActivityAt",
+  ]);
+  const presenceReason = choice(presence.reason, [
+    "owned-resources-observed",
+    "no-owned-resources-observed",
+    "ownership-inspection-unavailable",
+  ] as const);
+  const presenceStates = {
+    "owned-resources-observed": "created",
+    "no-owned-resources-observed": "not-created",
+    "ownership-inspection-unavailable": "unknown",
+  } as const;
+  const receiptReason = choice(receipt.reason, [
+    "supported-receipt-format-and-provider",
+    "receipt-invalid",
+    "receipt-unavailable",
+    "provider-not-recorded",
+    "receipt-binding-mismatch",
+  ] as const);
+  const receiptStates = {
+    "supported-receipt-format-and-provider": "compatible",
+    "receipt-invalid": "incompatible",
+    "receipt-unavailable": "unknown",
+    "provider-not-recorded": "unknown",
+    "receipt-binding-mismatch": "incompatible",
+  } as const;
+  const reviewReason = choice(review.reason, [
+    "observable-cutoff-exceeded",
+    "recent-observable-activity",
+    "not-running",
+    "cutoff-disabled",
+    "ownership-inspection-unavailable",
+    "observable-activity-unavailable",
+  ] as const);
+  const reviewStates = {
+    "observable-cutoff-exceeded": "due",
+    "recent-observable-activity": "not-due",
+    "not-running": "not-due",
+    "cutoff-disabled": "disabled",
+    "ownership-inspection-unavailable": "unknown",
+    "observable-activity-unavailable": "unknown",
+  } as const;
+  const cutoff =
+    review.staleAfterSeconds === null ? null : number(review.staleAfterSeconds);
+  const last =
+    review.lastObservableActivityAt === null
+      ? null
+      : date(review.lastObservableActivityAt);
+  const aged = [
+    "observable-cutoff-exceeded",
+    "recent-observable-activity",
+  ].includes(reviewReason);
+  if (
+    presence.state !== presenceStates[presenceReason] ||
+    receipt.state !== receiptStates[receiptReason] ||
+    receipt.scope !== "format-and-provider-only" ||
+    review.state !== reviewStates[reviewReason] ||
+    (cutoff !== null && cutoff < 1) ||
+    (reviewReason === "cutoff-disabled" && cutoff !== null) ||
+    (reviewReason !== "ownership-inspection-unavailable" &&
+      reviewReason !== "cutoff-disabled" &&
+      cutoff === null) ||
+    aged !== (last !== null) ||
+    (last !== null && Date.parse(last) <= 0) ||
+    (presence.state === "unknown" && review.state !== "unknown") ||
+    (review.state === "due" && presence.state !== "created")
+  )
+    throw new ContractError(
+      "Environment classification contradicts its evidence.",
+    );
+  if (last !== null && inspectedAt !== undefined) {
+    const age = Date.parse(inspectedAt) - Date.parse(last);
+    if (
+      !Number.isFinite(age) ||
+      age < 0 ||
+      (review.state === "due" && age < cutoff! * 1000) ||
+      (reviewReason === "recent-observable-activity" && age >= cutoff! * 1000)
+    )
+      throw new ContractError(
+        "Environment review age contradicts its observation time.",
+      );
+  }
+  return {
+    schemaVersion: 1,
+    role: "configured-environment",
+    dataPersistence: "preserved-on-stop",
+    presence: { state: presenceStates[presenceReason], reason: presenceReason },
+    receipt: {
+      state: receiptStates[receiptReason],
+      reason: receiptReason,
+      scope: "format-and-provider-only",
+    },
+    review: {
+      state: reviewStates[reviewReason],
+      reason: reviewReason,
+      staleAfterSeconds: cutoff,
+      lastObservableActivityAt: last,
+    },
+  };
 };
 const provenanceVersion = (value: unknown): string => {
   const version = text(value);

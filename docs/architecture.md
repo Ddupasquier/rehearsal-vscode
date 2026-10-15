@@ -121,6 +121,25 @@ time is separately labeled. No new environment registry or historical-copy infer
 Named profiles are reviewed display views of configured targets and optional local browser
 addresses; selecting one never creates a copy or changes operation scope.
 
+Doctor readiness does not gate independent read-only resource facts. With an active
+discovered config, validated configuration metadata and an advertised inventory contract,
+the client can still inspect core-owned resources while a baseline or engine needs
+attention. Readiness stays not-ready; unavailable verification is not inferred from
+those resource facts. Endpoint refusal, malformed metadata and version drift never
+enable a weaker fallback. The final activity check still rejects racing operations.
+
+Optional environment classification schema 1 keeps presence, receipt compatibility and
+age-based review orthogonal to running/stopped operational state. Presence is proved from
+owned containers/volumes, not preparation receipts. Compatibility covers recorded
+format/provider only; unknown legacy metadata and differing writer versions never prove
+runtime incompatibility. The long-running review evaluator shares core's stale-stop
+cutoff semantics but cannot authorize a stop. Configured sandboxes preserve data on
+stop/start regardless of stop-after-run. Approved run/reset can replace data and volumes;
+reviewed discard removes volumes. Persistence does not promise immutable sandbox data
+or stable volume IDs across reset. The editor filters these proven
+classifications and never upgrades an unknown into absence, compatibility or helper
+ownership. Display choices do not execute an operation or change its approval digest.
+
 Resource messages contain only a configured target, an allowlisted action, or selected
 full image IDs. The host maps targets back to the current core snapshot. Image cleanup
 first requests core's exact `--images-only` preview, rejects any runtime/baseline selection,

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
-import { coreConfigurationControls } from "../src/configuration_view.js";
+import {
+  coreConfigurationControls,
+  namedProfileControls,
+} from "../src/configuration_view.js";
+import type { ProjectSnapshot } from "../src/project_snapshot.js";
 
 const metadata = () => ({
   schemaVersion: 1,
@@ -143,6 +147,61 @@ describe("configuration metadata contract", () => {
     expect(result.path).toBe("infrastructure/rehearsal/rehearsal.config.mjs");
     expect(result.fields[0]?.value).toBe("http://localhost:5175");
     expect(result.profiles[0]?.applicationUrl).toBeNull();
+  });
+  it("takes profile target choices from public resources and refuses to invent a default target", () => {
+    const configurationMetadata = {
+      ...parseConfigurationMetadata(metadata()),
+      profiles: [],
+    };
+    const partial: ProjectSnapshot = {
+      workspaceName: "Fresh",
+      workspaceRoot: "/not-read",
+      availability: "not_ready",
+      configurationMetadata,
+      resources: {
+        schemaVersion: 1,
+        inspectedAt: "2026-10-15T12:00:00Z",
+        engine: {
+          state: "stopped",
+          context: "default",
+          disk: null,
+          resources: [],
+        },
+        environments: [
+          {
+            target: "publication",
+            projectId: "fixture-publication",
+            provider: "postgresql",
+            configPath: "publication.config.mjs",
+            state: "unavailable",
+            containerCount: 0,
+            runningContainerCount: 0,
+            volumeCount: 0,
+            diskUsageBytes: null,
+            cpuPercent: null,
+            memoryUsageBytes: null,
+            memoryLimitBytes: null,
+            createdAt: null,
+            lastActivityAt: null,
+            retention: "persistent",
+            cleanupEligibility: "inspection-unavailable",
+            restartPolicies: [],
+          },
+        ],
+        stale: { stoppedCount: 0, digest: null, targets: [] },
+      },
+    };
+    expect(namedProfileControls(partial)).toContain(
+      'name="target" value="publication"',
+    );
+    expect(namedProfileControls(partial)).not.toContain('value="primary"');
+    const { resources: _resources, ...unknown } = partial;
+    expect(namedProfileControls(unknown)).toContain(
+      "Configured target choices are unavailable",
+    );
+    expect(namedProfileControls(unknown)).not.toContain(
+      'id="named-profile-controls"',
+    );
   });
   it("refuses unknown/private field paths, kind substitutions and remote/credential URLs", () => {
     const controls = [metadata(), metadata(), metadata(), metadata()];
