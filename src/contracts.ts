@@ -1,4 +1,5 @@
 import {
+  parseEnvironmentClassification,
   parseEnvironmentProvenance,
   parseResourceCatalog,
 } from "./resource_contract.js";
@@ -256,6 +257,7 @@ export interface ResourceInventoryData {
       "running" | "preview-required" | "not-present" | "inspection-unavailable";
     readonly restartPolicies: readonly string[];
     readonly provenance?: import("./resource_contract.js").EnvironmentProvenanceData;
+    readonly classification?: import("./resource_contract.js").EnvironmentClassificationData;
   }[];
   readonly stale: {
     readonly stoppedCount: number;
@@ -1033,6 +1035,56 @@ export const parseResourceInventoryData = (
       entry.restartPolicies,
       `inventory.environments[${index}].restartPolicies`,
     );
+    const classification = parseEnvironmentClassification(
+      entry.classification,
+      inspectedAt,
+    );
+    const provenance = parseEnvironmentProvenance(entry.provenance);
+    if (
+      classification &&
+      ((entry.state === "unavailable" &&
+        classification.presence.state !== "unknown") ||
+        (classification.presence.state === "created" &&
+          !(
+            Number(entry.containerCount) > 0 || Number(entry.volumeCount) > 0
+          )) ||
+        (classification.presence.state === "not-created" &&
+          (Number(entry.containerCount) !== 0 ||
+            Number(entry.volumeCount) !== 0)) ||
+        (classification.review.state === "due" &&
+          Number(entry.runningContainerCount) < 1) ||
+        (classification.review.reason === "not-running" &&
+          (Number(entry.runningContainerCount) > 0 ||
+            entry.state === "running" ||
+            entry.state === "mixed")) ||
+        (classification.review.reason === "recent-observable-activity" &&
+          Number(entry.runningContainerCount) < 1))
+    )
+      throw new ContractError(
+        "Environment classification contradicts observed resources.",
+      );
+    if (classification && provenance) {
+      const requiredReceiptReason =
+        provenance.runtimeReason === "receipt-invalid"
+          ? "receipt-invalid"
+          : provenance.runtimeReason === "receipt-unavailable"
+            ? "receipt-unavailable"
+            : provenance.runtime?.migrationReason ===
+                "receipt-does-not-match-baseline"
+              ? "receipt-binding-mismatch"
+              : null;
+      if (
+        requiredReceiptReason !== null
+          ? classification.receipt.reason !== requiredReceiptReason
+          : ![
+              "supported-receipt-format-and-provider",
+              "provider-not-recorded",
+            ].includes(classification.receipt.reason)
+      )
+        throw new ContractError(
+          "Environment classification contradicts recorded provenance.",
+        );
+    }
     return {
       target: requireBoundedString(
         entry.target,
@@ -1102,9 +1154,8 @@ export const parseResourceInventoryData = (
       cleanupEligibility:
         entry.cleanupEligibility as (typeof cleanupStates)[number],
       restartPolicies,
-      ...(entry.provenance === undefined
-        ? {}
-        : { provenance: parseEnvironmentProvenance(entry.provenance)! }),
+      ...(classification ? { classification } : {}),
+      ...(provenance ? { provenance } : {}),
     };
   });
   if (!isRecord(value.stale) || !Array.isArray(value.stale.targets)) {

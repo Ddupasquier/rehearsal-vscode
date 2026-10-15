@@ -15,6 +15,34 @@ const size = (bytes: number | null): string =>
       ? `${(bytes / 1024 ** 2).toFixed(1)} MiB`
       : `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 const time = (value: string | null): string => value ?? "Not observable";
+const environmentClassificationMarkup = (
+  entry: ResourceInventoryData["environments"][number],
+): string => {
+  const classification = entry.classification;
+  if (!classification)
+    return '<p class="control-note">Creation, receipt compatibility and long-running review status are unavailable from this core version. Missing verification is not proof that an environment was never created.</p>';
+  const presence =
+    classification.presence.state === "created"
+      ? "Created"
+      : classification.presence.state === "not-created"
+        ? "Not created"
+        : "Creation unknown";
+  const receipt =
+    classification.receipt.state === "compatible"
+      ? "Recorded format and provider supported"
+      : classification.receipt.state === "incompatible"
+        ? "Incompatible receipt — inspect before reuse"
+        : "Receipt compatibility unknown";
+  const review =
+    classification.review.state === "due"
+      ? "Long-running review due"
+      : classification.review.state === "disabled"
+        ? "Long-running review disabled"
+        : classification.review.state === "unknown"
+          ? "Long-running review unavailable"
+          : "No long-running review due";
+  return `<p class="resource-classification"><strong>${presence}</strong> · Persistent data · ${review}</p><p>${receipt}</p><details><summary>Why these environment states?</summary><dl class="resource-facts"><div><dt>Resource role</dt><dd>Configured environment; not a disposable helper. Stop/start preserves data; reviewed reset/run can replace data and volumes; discard removes volumes. Stop-after-run also preserves data.</dd></div><div><dt>Presence</dt><dd>${presence}. ${classification.presence.state === "created" ? "Exact owned containers or volumes were observed." : classification.presence.state === "not-created" ? "A complete ownership inspection found no containers or volumes for this target." : "Ownership inspection is unavailable; existing resources may still be retained."}</dd></div><div><dt>Receipt compatibility</dt><dd>${receipt}. This checks recorded receipt format and provider only, not writer-version compatibility, current database contents, or fresh verification.${classification.receipt.reason === "provider-not-recorded" ? " The legacy receipt does not record its provider." : ""}</dd></div><div><dt>Long-running review</dt><dd>${review}${classification.review.staleAfterSeconds === null ? "" : ` · configured cutoff ${classification.review.staleAfterSeconds} seconds`}${classification.review.lastObservableActivityAt ? ` · last observable container start/stop ${html(classification.review.lastObservableActivityAt)}` : ""}. Resource age does not prove application, database or user inactivity; nothing stops automatically.</dd></div></dl></details>`;
+};
 const environmentProvenanceMarkup = (
   provenance: ResourceInventoryData["environments"][number]["provenance"],
 ): string => {
@@ -104,6 +132,10 @@ export const resourceManagerMarkup = (
           ["all", "Any state"],
           ["running", "Running"],
           ["stopped", "Stopped"],
+          ["created", "Created environments"],
+          ["not-created", "Not created"],
+          ["review-due", "Long-running review due"],
+          ["incompatible", "Incompatible receipts"],
           ["candidate", "Safe image candidates"],
           ["protected", "Protected"],
           ["attached", "Attached volumes"],
@@ -137,9 +169,10 @@ export const resourceManagerMarkup = (
       .map(
         (
           entry,
-        ) => `<article class="resource-card" ${attributes("environment", `${entry.displayName ?? entry.target} ${entry.projectId}`, `${entry.state}${entry.protected ? " protected" : ""}`, "project", entry.diskUsageBytes, entry.createdAt, entry.lastActivityAt, entry.target)}>
+        ) => `<article class="resource-card" ${attributes("environment", `${entry.displayName ?? entry.target} ${entry.projectId}`, `${entry.state}${entry.protected ? " protected" : ""}${entry.classification ? ` ${entry.classification.presence.state}${entry.classification.review.state === "due" ? " review-due" : ""}${entry.classification.receipt.state === "incompatible" ? " incompatible" : ""}` : ""}`, "project", entry.diskUsageBytes, entry.createdAt, entry.lastActivityAt, entry.target)}>
       <div class="resource-card__heading"><strong>${html(entry.displayName ?? entry.target)}</strong><span class="state-chip">${html(entry.state)}${entry.protected ? " · protected" : ""}</span></div>
       <p>${html(entry.provider)} · ${entry.containerCount} containers · ${entry.volumeCount} data volumes · ${size(entry.diskUsageBytes)}</p>
+      ${environmentClassificationMarkup(entry)}
       <p>Last observable resource activity: ${html(time(entry.lastActivityAt))}</p>
       <details><summary>Inspect environment</summary><dl class="resource-facts"><div><dt>Immutable ID</dt><dd><code>${html(entry.projectId)}</code></dd></div><div><dt>Target</dt><dd>${html(entry.target)}</dd></div><div><dt>CPU / memory</dt><dd>${entry.cpuPercent === null ? "Unknown" : `${entry.cpuPercent.toFixed(2)}%`} / ${size(entry.memoryUsageBytes)}</dd></div><div><dt>Oldest owned resource created</dt><dd>${html(time(entry.createdAt))}</dd></div><div><dt>Last inspected</dt><dd>${html(inventory.inspectedAt)}</dd></div>${environmentProvenanceMarkup(entry.provenance)}<div><dt>Restart policy</dt><dd>${html(entry.restartPolicies.join(", ") || "Not present")}</dd></div><div><dt>Images used across this project</dt><dd>${html(
         catalog.images

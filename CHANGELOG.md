@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.5 — 2026-10-15
+
+- Complete environment selection with core-owned presence, receipt-compatibility and
+  long-running review classifications. Inspection stays read-only; age does not prove
+  inactivity and writer-version differences do not prove runtime incompatibility.
+- Correct retained-data labels: stopping after a run does not make database or Storage
+  volumes temporary. Missing verification no longer means an environment was never created.
+- Preserve explicitly selected configured targets when runtime status is unavailable,
+  and cover complete reviewed profile saving and multi-root selection isolation.
+- Keep safe, core-owned environment and profile inspection available before baseline
+  readiness, without bypassing endpoint guards or claiming a verified runtime.
+
 ## 0.1.4 — Environment provenance and evidence bounds
 
 - Adds optional per-target runtime provenance to **Inspect environment**: recorded

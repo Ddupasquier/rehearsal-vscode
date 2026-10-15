@@ -18,6 +18,8 @@ import {
   processSnapshotClient,
 } from "../src/project_snapshot.js";
 import type { SnapshotClient } from "../src/project_snapshot.js";
+import { AdapterError, RehearsalCliError } from "../src/process_adapter.js";
+import { knownWorkspaceTargets } from "../src/workspace_view_state.js";
 
 const envelope = <Data>(command: string, data: Data, status = "success") => ({
   result: {
@@ -140,6 +142,412 @@ const client = (
       exitCode: number;
     };
   },
+});
+
+const partialConfiguration = {
+  schemaVersion: 1,
+  path: "rehearsal.config.mjs",
+  sourceSha256: "a".repeat(64),
+  fields: [],
+  profiles: [],
+  pathResolution: "Paths resolve from project root.",
+  manualFields: "Sensitive settings require review.",
+  patchContract: {
+    schemaVersion: 1,
+    input: "project-local-json-file",
+    maximumBytes: 65536,
+    writesConfiguration: false,
+    executesProposedCommands: false,
+    concurrentChanges: "refuse",
+  },
+};
+const partialDiscovery = {
+  schemaVersion: 1,
+  project: { name: "fixture", packageManifest: "present" },
+  detected: [],
+  suggested: [],
+  decisions: [],
+  configuration: {
+    state: "present_unvalidated",
+    activePath: "rehearsal.config.mjs",
+    discoveredPaths: ["rehearsal.config.mjs"],
+    fields: [],
+  },
+  safety: {
+    projectCodeExecuted: false,
+    environmentFilesRead: false,
+    databaseContacted: false,
+    containerEngineStarted: false,
+  },
+};
+const partialInventory = () => ({
+  schemaVersion: 1,
+  inspectedAt: "2026-10-15T12:00:00Z",
+  engine: { state: "running", context: "default", disk: null, resources: [] },
+  environments: [
+    {
+      target: "primary",
+      projectId: "fixture-rehearsal",
+      provider: "postgresql",
+      configPath: "/workspace/rehearsal.config.mjs",
+      state: "absent",
+      containerCount: 0,
+      runningContainerCount: 0,
+      volumeCount: 0,
+      diskUsageBytes: null,
+      cpuPercent: null,
+      memoryUsageBytes: null,
+      memoryLimitBytes: null,
+      createdAt: null,
+      lastActivityAt: null,
+      retention: "persistent",
+      cleanupEligibility: "not-present",
+      restartPolicies: [],
+      classification: {
+        schemaVersion: 1,
+        role: "configured-environment",
+        dataPersistence: "preserved-on-stop",
+        presence: {
+          state: "not-created",
+          reason: "no-owned-resources-observed",
+        },
+        receipt: {
+          state: "unknown",
+          reason: "receipt-unavailable",
+          scope: "format-and-provider-only",
+        },
+        review: {
+          state: "disabled",
+          reason: "cutoff-disabled",
+          staleAfterSeconds: null,
+          lastObservableActivityAt: null,
+        },
+      },
+    },
+  ],
+  catalog: { schemaVersion: 1, images: [], volumes: [], otherContainers: [] },
+  stale: { stoppedCount: 0, digest: null, targets: [] },
+});
+const partialClient = (
+  options: {
+    inventory?: unknown;
+    metadata?: unknown;
+    discovery?: unknown;
+    details?: boolean;
+    advertised?: boolean;
+    inventoryVersion?: string;
+    inventoryFailure?: Error;
+    metadataStatus?: string;
+    finalBusy?: boolean;
+  } = {},
+) => {
+  const base = client("NOT READY");
+  const calls: Parameters<SnapshotClient["command"]>[0][] = [];
+  let activityCalls = 0;
+  const fake: SnapshotClient = {
+    ...base,
+    version: async () => ({
+      name: "@rehearsal-db/core",
+      version: "0.1.0-rc.4",
+      projectDiscoverySchema: 1,
+      configurationReviewSchema: 1,
+      ...(options.advertised === false
+        ? {}
+        : { resourceInventorySchema: 1 as const }),
+      ...(options.details === false
+        ? {}
+        : { resourceManagerSchema: 1 as const }),
+    }),
+    command: async <Data>(
+      request: Parameters<SnapshotClient["command"]>[0],
+    ) => {
+      calls.push(request);
+      let execution;
+      switch (request.expectedCommand) {
+        case "discover":
+          execution = envelope(
+            "discover",
+            options.discovery ?? partialDiscovery,
+          );
+          break;
+        case "configuration":
+          execution = envelope(
+            "configuration",
+            options.metadata ?? partialConfiguration,
+            options.metadataStatus ?? "success",
+          );
+          break;
+        case "doctor":
+          execution = envelope(
+            "doctor",
+            {
+              state: "NOT READY",
+              checks: [
+                {
+                  id: "configuration",
+                  label: "Configuration",
+                  status: "pass",
+                  detail: "Reviewed configuration is valid.",
+                },
+                {
+                  id: "baseline",
+                  label: "Verified baseline",
+                  status: "fail",
+                  detail:
+                    "Create the reviewed baseline before starting a rehearsal.",
+                  remediation: "Create the baseline.",
+                },
+              ],
+            },
+            "not_ready",
+          );
+          break;
+        case "resources":
+        case "environments":
+          if (options.inventoryFailure) throw options.inventoryFailure;
+          execution = envelope(
+            request.expectedCommand,
+            options.inventory ?? partialInventory(),
+          );
+          if (options.inventoryVersion)
+            execution = {
+              ...execution,
+              result: {
+                ...execution.result,
+                rehearsalVersion: options.inventoryVersion,
+              },
+            };
+          break;
+        case "activity":
+          activityCalls++;
+          execution =
+            activityCalls > 1 && options.finalBusy
+              ? envelope("activity", {
+                  schemaVersion: 1,
+                  state: "busy",
+                  operation: {
+                    kind: "run",
+                    startedAt: "2026-10-15T12:00:00Z",
+                    rehearsalVersion: "0.1.0-rc.4",
+                  },
+                })
+              : await base.command<Data>(request);
+          break;
+        default:
+          throw new Error(
+            "A not-ready inspection attempted a readiness-dependent or mutating command.",
+          );
+      }
+      return execution as { result: ResultEnvelope<Data>; exitCode: number };
+    },
+  };
+  return { fake, calls };
+};
+
+describe("not-ready configured environment inspection", () => {
+  it("retains public resource choices for a valid configuration with no baseline, without inventing verified runtime state", async () => {
+    const { fake, calls } = partialClient();
+    const snapshot = await inspectProject({
+      workspaceName: "Fresh",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot).toMatchObject({
+      availability: "not_ready",
+      configPath: "rehearsal.config.mjs",
+      readiness: { state: "NOT READY", passed: 1, failed: 1 },
+      resources: {
+        environments: [
+          { target: "primary", provider: "postgresql", state: "absent" },
+        ],
+      },
+    });
+    expect(knownWorkspaceTargets(snapshot)).toEqual(["primary"]);
+    expect(snapshot.runtime).toBeUndefined();
+    expect(snapshot.baseline).toBeUndefined();
+    expect(snapshot.candidates).toBeUndefined();
+    expect(calls.map((call) => call.expectedCommand)).toEqual([
+      "activity",
+      "discover",
+      "doctor",
+      "configuration",
+      "resources",
+      "activity",
+    ]);
+    expect(
+      calls.find((call) => call.expectedCommand === "resources")?.configPath,
+    ).toBe("rehearsal.config.mjs");
+    expect(snapshot.readiness?.checks[1]?.remediation).toBe(
+      "Create the baseline.",
+    );
+  });
+  it("keeps stopped-engine configured resources unknown rather than absent without starting it", async () => {
+    const raw = partialInventory();
+    const inventory = {
+      ...raw,
+      engine: { ...raw.engine, state: "stopped" },
+      environments: raw.environments.map((entry) => ({
+        ...entry,
+        state: "unavailable",
+        cleanupEligibility: "inspection-unavailable",
+        classification: {
+          ...entry.classification,
+          presence: {
+            state: "unknown",
+            reason: "ownership-inspection-unavailable",
+          },
+          review: {
+            state: "unknown",
+            reason: "ownership-inspection-unavailable",
+            staleAfterSeconds: null,
+            lastObservableActivityAt: null,
+          },
+        },
+      })),
+      catalog: null,
+    };
+    const { fake, calls } = partialClient({ inventory });
+    const snapshot = await inspectProject({
+      workspaceName: "Stopped",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot.availability).toBe("not_ready");
+    expect(snapshot.resources).toMatchObject({
+      engine: { state: "stopped" },
+      environments: [{ state: "unavailable" }],
+      catalog: null,
+    });
+    expect(knownWorkspaceTargets(snapshot)).toEqual(["primary"]);
+    expect(
+      calls.every((call) =>
+        [
+          "activity",
+          "discover",
+          "doctor",
+          "configuration",
+          "resources",
+        ].includes(call.expectedCommand),
+      ),
+    ).toBe(true);
+  });
+  it("uses the advertised aggregate contract when individual-resource browsing is unsupported", async () => {
+    const { fake, calls } = partialClient({ details: false });
+    const snapshot = await inspectProject({
+      workspaceName: "Aggregate",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot.resources?.environments[0]?.target).toBe("primary");
+    expect(calls.map((call) => call.expectedCommand)).toContain("environments");
+    expect(calls.map((call) => call.expectedCommand)).not.toContain(
+      "resources",
+    );
+  });
+  it("does not inspect resources without validated active configuration and an advertised inventory contract", async () => {
+    for (const options of [
+      { advertised: false },
+      { metadataStatus: "not_ready" },
+      { metadata: { ...partialConfiguration, sourceSha256: "unsafe" } },
+      { metadata: { ...partialConfiguration, path: "other.config.mjs" } },
+      {
+        discovery: {
+          ...partialDiscovery,
+          configuration: {
+            ...partialDiscovery.configuration,
+            activePath: null,
+          },
+        },
+      },
+    ]) {
+      const { fake, calls } = partialClient(options);
+      const snapshot = await inspectProject({
+        workspaceName: "Unavailable",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: fake,
+      });
+      expect(snapshot.availability).toBe("not_ready");
+      expect(snapshot.readiness?.failed).toBe(1);
+      expect(snapshot.resources).toBeUndefined();
+      expect(
+        calls.some((call) =>
+          ["resources", "environments"].includes(call.expectedCommand),
+        ),
+      ).toBe(false);
+    }
+  });
+  it("refuses malformed/version-drifted inventory and keeps the original Doctor guidance", async () => {
+    for (const options of [
+      { inventory: { ...partialInventory(), schemaVersion: 2 } },
+      { inventoryVersion: "9.9.9" },
+      {
+        inventoryFailure: new AdapterError(
+          "timeout",
+          "Read-only inventory timed out.",
+        ),
+      },
+    ]) {
+      const { fake, calls } = partialClient(options);
+      const snapshot = await inspectProject({
+        workspaceName: "Refused",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: fake,
+      });
+      expect(snapshot.availability).toBe("not_ready");
+      expect(snapshot.readiness?.checks[1]?.detail).toBe(
+        "Create the reviewed baseline before starting a rehearsal.",
+      );
+      expect(snapshot.resources).toBeUndefined();
+      expect(calls.at(-1)?.expectedCommand).toBe("activity");
+    }
+  });
+  it("does not bypass a detailed local-endpoint refusal through an aggregate command", async () => {
+    const failure = new RehearsalCliError(
+      {
+        schemaVersion: 1,
+        rehearsalVersion: "0.1.0-rc.4",
+        status: "error",
+        error: {
+          category: "runtime_dependency_failure",
+          code: "RUNTIME_DEPENDENCY_FAILURE",
+          message: "The resource endpoint could not be verified.",
+          suggestions: ["Select the reviewed local engine."],
+          diagnosticId: "safe",
+        },
+      },
+      9,
+    );
+    const { fake, calls } = partialClient({ inventoryFailure: failure });
+    const snapshot = await inspectProject({
+      workspaceName: "Refused",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot.availability).toBe("not_ready");
+    expect(snapshot.resources).toBeUndefined();
+    expect(calls.map((call) => call.expectedCommand)).not.toContain(
+      "environments",
+    );
+  });
+  it("drops partial resources and configuration if an operation starts before the final activity barrier", async () => {
+    const { fake } = partialClient({ finalBusy: true });
+    const snapshot = await inspectProject({
+      workspaceName: "Busy",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot.availability).toBe("operation_active");
+    expect(snapshot.resources).toBeUndefined();
+    expect(snapshot.configurationMetadata).toBeUndefined();
+    expect(snapshot.readiness).toBeUndefined();
+  });
 });
 
 describe("workspace package compatibility", () => {

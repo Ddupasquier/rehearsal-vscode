@@ -567,6 +567,7 @@ export const inspectProject = async ({
     observedReadiness = readiness;
     if (doctor.result.status === "not_ready") {
       let configurationMetadata: ConfigurationMetadata | undefined;
+      let resources: ResourceInventoryData | undefined;
       if (
         version.configurationReviewSchema === 1 &&
         discovery?.configuration.activePath
@@ -578,11 +579,42 @@ export const inspectProject = async ({
             expectedCommand: "configuration",
           });
           requireRehearsalVersion(version.version, [metadata.result]);
+          if (metadata.result.status !== "success")
+            throw new ContractError(
+              "Configuration review did not complete successfully.",
+            );
           configurationMetadata = parseConfigurationMetadata(
             metadata.result.data,
           );
+          if (
+            configurationMetadata.path.replaceAll("\\", "/") !==
+            discovery.configuration.activePath.replaceAll("\\", "/")
+          )
+            configurationMetadata = undefined;
         } catch {
           // An unavailable configuration review must not hide the actionable Doctor result.
+        }
+      }
+      if (configurationMetadata && version.resourceInventorySchema === 1) {
+        try {
+          // Inventory needs validated configuration, not a baseline or running engine.
+          // A detailed endpoint refusal is not authority to bypass its local-engine guard.
+          const command =
+            version.resourceManagerSchema === 1 ? "resources" : "environments";
+          const inventory = await client.command<unknown>({
+            ...common,
+            configPath: configurationMetadata.path,
+            command: [command],
+            expectedCommand: command,
+          });
+          requireRehearsalVersion(version.version, [inventory.result]);
+          if (inventory.result.status !== "success")
+            throw new ContractError(
+              "Resource inventory did not complete successfully.",
+            );
+          resources = parseResourceInventoryData(inventory.result.data);
+        } catch {
+          // Keep the original actionable Doctor checks; unavailable/unsafe optional evidence stays absent.
         }
       }
       const finalActivityExecution = await client.command<ActivityData>({
@@ -608,6 +640,7 @@ export const inspectProject = async ({
         workspaceName,
         workspaceRoot,
         availability: "not_ready",
+        inspectedAt: new Date().toISOString(),
         version: version.version,
         compatibility,
         ...(version.packageLocation
@@ -619,6 +652,7 @@ export const inspectProject = async ({
         ...(configurationMetadata
           ? { configurationMetadata, configPath: configurationMetadata.path }
           : {}),
+        ...(resources ? { resources } : {}),
       };
     }
     const [

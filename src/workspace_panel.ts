@@ -49,6 +49,7 @@ import {
   preferenceStorageKey,
   type WorkspacePreferences,
 } from "./workspace_preferences.js";
+import { knownWorkspaceTargets } from "./workspace_view_state.js";
 import {
   buildVerificationReport,
   renderVerificationReportJson,
@@ -305,10 +306,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
     if (message.type === "preferences") {
       const preferences = normalizeWorkspacePreferences(message.preferences);
-      const targets = new Set([
-        "all",
-        ...(snapshot.runtime?.targets.map(({ name }) => name) ?? []),
-      ]);
+      const targets = new Set(["all", ...knownWorkspaceTargets(snapshot)]);
       const safePreferences = {
         ...preferences,
         selectedTarget: targets.has(preferences.selectedTarget)

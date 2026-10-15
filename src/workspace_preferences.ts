@@ -15,6 +15,10 @@ export interface WorkspacePreferences {
     | "all"
     | "running"
     | "stopped"
+    | "created"
+    | "not-created"
+    | "review-due"
+    | "incompatible"
     | "candidate"
     | "protected"
     | "attached"
@@ -93,6 +97,10 @@ export const normalizeWorkspacePreferences = (
       "all",
       "running",
       "stopped",
+      "created",
+      "not-created",
+      "review-due",
+      "incompatible",
       "candidate",
       "protected",
       "attached",
