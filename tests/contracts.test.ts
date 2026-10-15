@@ -5,12 +5,102 @@ import {
   parseEnvelope,
   parseJson,
   parseProjectDiscoveryData,
+  parseResourceInventoryData,
   parseRuntimeStatus,
   parseStatusData,
   parseVersionResult,
 } from "../src/contracts.js";
 
 describe("CLI contracts", () => {
+  it("accepts bounded resource inventory and rejects unknown state", () => {
+    const data = {
+      schemaVersion: 1,
+      inspectedAt: "2026-10-12T00:00:00.000Z",
+      engine: {
+        state: "running",
+        context: "colima",
+        disk: {
+          backend: "colima",
+          totalBytes: 100,
+          usedBytes: 80,
+          availableBytes: 20,
+          usedPercent: 80,
+        },
+        resources: [
+          {
+            type: "Images",
+            totalCount: 10,
+            activeCount: 2,
+            size: "5GB",
+            reclaimable: "3GB (60%)",
+          },
+        ],
+      },
+      environments: [
+        {
+          target: "primary",
+          projectId: "example-rehearsal",
+          provider: "postgresql",
+          configPath: "/workspace/rehearsal.config.mjs",
+          state: "stopped",
+          containerCount: 1,
+          runningContainerCount: 0,
+          volumeCount: 1,
+          diskUsageBytes: 1_500_000_000,
+          cpuPercent: null,
+          memoryUsageBytes: null,
+          memoryLimitBytes: null,
+          createdAt: "2026-10-11T00:00:00Z",
+          lastActivityAt: "2026-10-11T00:00:00Z",
+          retention: "disposable",
+          cleanupEligibility: "preview-required",
+          restartPolicies: ["no"],
+        },
+      ],
+      stale: { stoppedCount: 1, digest: "a".repeat(64), targets: ["primary"] },
+    };
+    expect(parseResourceInventoryData(data)).toMatchObject({
+      engine: { state: "running", disk: { usedPercent: 80 } },
+      environments: [{ cleanupEligibility: "preview-required" }],
+    });
+    expect(
+      parseResourceInventoryData({
+        ...data,
+        engine: { ...data.engine, state: "stopped" },
+        environments: [
+          {
+            ...data.environments[0],
+            state: "unavailable",
+            containerCount: 0,
+            runningContainerCount: 0,
+            volumeCount: 0,
+            diskUsageBytes: null,
+            cleanupEligibility: "inspection-unavailable",
+          },
+        ],
+      }),
+    ).toMatchObject({
+      engine: { state: "stopped" },
+      environments: [
+        {
+          state: "unavailable",
+          cleanupEligibility: "inspection-unavailable",
+        },
+      ],
+    });
+    expect(() =>
+      parseResourceInventoryData({
+        ...data,
+        environments: [{ ...data.environments[0], state: "foreign" }],
+      }),
+    ).toThrow("state is invalid");
+    expect(() =>
+      parseResourceInventoryData({
+        ...data,
+        environments: [{ ...data.environments[0], cpuPercent: -1 }],
+      }),
+    ).toThrow("cannot be negative");
+  });
   it("accepts the public version result", () => {
     expect(
       parseVersionResult({ name: "@rehearsal-db/core", version: "0.1.0-rc.1" }),

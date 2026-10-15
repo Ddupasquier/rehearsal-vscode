@@ -5,10 +5,12 @@ import {
 } from "./bootstrap_discovery.js";
 import { inspectProject } from "./project_snapshot.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
+import { parseActivityData } from "./contracts.js";
+import type { ActiveOperationMonitorState } from "./active_operation_monitor.js";
 import { overviewItemAccessibilityLabel, overviewItems } from "./tree_model.js";
 import type { OverviewItem } from "./tree_model.js";
 import {
-  PROJECT_REFRESH_PATHS,
+  projectRefreshPatterns,
   WorkspaceRefreshScheduler,
 } from "./workspace_refresh.js";
 
@@ -17,6 +19,11 @@ type TreeNode = DashboardNode | WorkspaceNode | DetailNode;
 export interface SnapshotUpdate {
   readonly workspaceKey: string;
   readonly snapshot: ProjectSnapshot;
+}
+
+export interface InspectionUpdate {
+  readonly workspaceKey: string;
+  readonly state: "loading" | "idle";
 }
 
 class DashboardNode extends vscode.TreeItem {
@@ -46,19 +53,25 @@ class WorkspaceNode extends vscode.TreeItem {
   constructor(
     readonly folder: vscode.WorkspaceFolder,
     readonly snapshot: ProjectSnapshot | undefined,
+    readonly loading: boolean,
   ) {
     super(folder.name, vscode.TreeItemCollapsibleState.Expanded);
     this.id = `workspace:${folder.uri.toString()}`;
     this.contextValue = "rehearsalWorkspace";
     this.iconPath = new vscode.ThemeIcon("folder-library");
-    if (snapshot?.version) this.description = snapshot.version;
-    this.tooltip = snapshot
-      ? `${folder.name}: ${snapshot.availability.replaceAll("_", " ")}`
-      : `${folder.name}: refresh to inspect Rehearsal`;
+    if (loading) this.description = "Checking…";
+    else if (snapshot?.version) this.description = snapshot.version;
+    this.tooltip = loading
+      ? `${folder.name}: safely checking local Rehearsal project information`
+      : snapshot
+        ? `${folder.name}: ${snapshot.availability.replaceAll("_", " ")}`
+        : `${folder.name}: refresh to inspect Rehearsal`;
     this.accessibilityInformation = {
-      label: snapshot?.version
-        ? `${folder.name}, Rehearsal ${snapshot.version}`
-        : folder.name,
+      label: loading
+        ? `${folder.name}, checking Rehearsal project information`
+        : snapshot?.version
+          ? `${folder.name}, Rehearsal ${snapshot.version}`
+          : folder.name,
     };
     this.command = {
       command: "rehearsal.openWorkspace",
@@ -114,17 +127,24 @@ export class RehearsalTreeProvider
 {
   private readonly changes = new vscode.EventEmitter<TreeNode | undefined>();
   private readonly snapshotChanges = new vscode.EventEmitter<SnapshotUpdate>();
+  private readonly inspectionChanges =
+    new vscode.EventEmitter<InspectionUpdate>();
   private readonly snapshots = new Map<string, ProjectSnapshot>();
+  private readonly loadingWorkspaces = new Set<string>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly workspaceWatchers = new Map<
     string,
-    vscode.FileSystemWatcher[]
+    {
+      readonly patterns: readonly string[];
+      readonly watchers: vscode.FileSystemWatcher[];
+    }
   >();
   private readonly refreshScheduler: WorkspaceRefreshScheduler;
   private readonly subscriptions: vscode.Disposable[];
 
   readonly onDidChangeTreeData = this.changes.event;
   readonly onDidUpdateSnapshot = this.snapshotChanges.event;
+  readonly onDidChangeInspection = this.inspectionChanges.event;
 
   constructor(
     private readonly output: vscode.LogOutputChannel,
@@ -152,8 +172,12 @@ export class RehearsalTreeProvider
       }),
       vscode.workspace.onDidGrantWorkspaceTrust(() => void this.refresh()),
       vscode.workspace.onDidChangeConfiguration((event) => {
+        const configPathChanged = event.affectsConfiguration(
+          "rehearsal.configPath",
+        );
+        if (configPathChanged) this.syncWorkspaceWatchers();
         if (
-          event.affectsConfiguration("rehearsal.configPath") ||
+          configPathChanged ||
           event.affectsConfiguration("rehearsal.inspectionTimeoutSeconds")
         ) {
           void this.refresh();
@@ -178,9 +202,19 @@ export class RehearsalTreeProvider
     }
     if (element.kind === "detail" || element.kind === "dashboard") return [];
     const snapshot = this.snapshots.get(element.folder.uri.toString());
-    return snapshot
-      ? overviewItems(snapshot).map((item) => new DetailNode(element, item))
-      : [];
+    const loading = this.loadingWorkspaces.has(element.folder.uri.toString());
+    const items = snapshot ? [...overviewItems(snapshot)] : [];
+    if (loading) {
+      items.unshift({
+        id: "inspection-loading",
+        label: "Checking project information",
+        description: "Please wait",
+        tooltip:
+          "Rehearsal is reading bounded, project-local metadata. You can cancel from the progress notification.",
+        icon: "loading~spin",
+      });
+    }
+    return items.map((item) => new DetailNode(element, item));
   }
 
   async refresh(token?: vscode.CancellationToken): Promise<void> {
@@ -207,6 +241,67 @@ export class RehearsalTreeProvider
     return this.snapshots.get(workspaceKey);
   }
 
+  /** Activity observation never republishes database/configuration details mid-mutation. */
+  publishOperationActivity(
+    workspaceKey: string,
+    raw: unknown,
+    failure?: ActiveOperationMonitorState,
+  ): void {
+    const previous = this.snapshots.get(workspaceKey);
+    if (
+      !previous ||
+      !this.trusted() ||
+      !vscode.workspace.workspaceFolders?.some(
+        ({ uri }) => uri.toString() === workspaceKey,
+      )
+    )
+      return;
+    let activity;
+    try {
+      activity = raw === undefined ? undefined : parseActivityData(raw);
+    } catch {
+      activity = undefined;
+    }
+    if (activity?.state === "idle") return;
+    const snapshot: ProjectSnapshot = {
+      workspaceName: previous.workspaceName,
+      workspaceRoot: previous.workspaceRoot,
+      ...(previous.version ? { version: previous.version } : {}),
+      ...(previous.compatibility
+        ? { compatibility: previous.compatibility }
+        : {}),
+      ...(previous.packageLocation
+        ? { packageLocation: previous.packageLocation }
+        : {}),
+      ...(previous.configPath ? { configPath: previous.configPath } : {}),
+      availability:
+        activity?.state === "busy"
+          ? "operation_active"
+          : activity
+            ? "operation_attention"
+            : "error",
+      ...(activity
+        ? { activity }
+        : {
+            error: {
+              code: `activity_monitor_${failure ?? "unavailable"}`,
+              message:
+                "Live operation activity is no longer available. Refresh the project to inspect its actual state.",
+              suggestions: [
+                "Use Refresh Project Overview or check the owned terminal. No completion or successful cleanup was inferred.",
+              ],
+            },
+          }),
+    };
+    this.snapshots.set(workspaceKey, snapshot);
+    this.snapshotChanges.fire({ workspaceKey, snapshot });
+    this.changes.fire(undefined);
+  }
+
+  inspectionStateFor(workspaceKey: string): "loading" | "idle" {
+    return this.loadingWorkspaces.has(workspaceKey) ? "loading" : "idle";
+  }
+
   async refreshWorkspace(
     workspaceKey: string,
     token?: vscode.CancellationToken,
@@ -230,16 +325,21 @@ export class RehearsalTreeProvider
     this.controllers.clear();
     this.changes.dispose();
     this.snapshotChanges.dispose();
+    this.inspectionChanges.dispose();
     this.refreshScheduler.dispose();
-    for (const watchers of this.workspaceWatchers.values()) {
-      for (const watcher of watchers) watcher.dispose();
+    for (const key of this.workspaceWatchers.keys()) {
+      this.removeWorkspaceWatchers(key);
     }
-    this.workspaceWatchers.clear();
     for (const subscription of this.subscriptions) subscription.dispose();
   }
 
   private workspaceNode(folder: vscode.WorkspaceFolder): WorkspaceNode {
-    return new WorkspaceNode(folder, this.snapshots.get(folder.uri.toString()));
+    const key = folder.uri.toString();
+    return new WorkspaceNode(
+      folder,
+      this.snapshots.get(key),
+      this.loadingWorkspaces.has(key),
+    );
   }
 
   private async refreshFolder(
@@ -250,6 +350,7 @@ export class RehearsalTreeProvider
     this.controllers.get(key)?.abort();
     const controller = new AbortController();
     this.controllers.set(key, controller);
+    this.setInspectionState(key, "loading");
     const cancellation = token?.onCancellationRequested(() =>
       controller.abort(),
     );
@@ -307,13 +408,25 @@ export class RehearsalTreeProvider
         timeoutMs,
         signal: controller.signal,
       });
+    } catch (error) {
+      if (this.controllers.get(key) === controller) {
+        this.controllers.delete(key);
+        this.setInspectionState(key, "idle");
+      }
+      throw error;
     } finally {
       cancellation?.dispose();
     }
-    if (controller.signal.aborted || this.controllers.get(key) !== controller)
+    if (controller.signal.aborted || this.controllers.get(key) !== controller) {
+      if (this.controllers.get(key) === controller) {
+        this.controllers.delete(key);
+        this.setInspectionState(key, "idle");
+      }
       return undefined;
+    }
     this.controllers.delete(key);
     this.snapshots.set(key, snapshot);
+    this.setInspectionState(key, "idle");
     this.snapshotChanges.fire({ workspaceKey: key, snapshot });
     this.output.appendLine(
       `Rehearsal overview for ${folder.name}: ${snapshot.availability.replaceAll("_", " ")}.`,
@@ -366,6 +479,9 @@ export class RehearsalTreeProvider
     for (const key of this.snapshots.keys()) {
       if (!active.has(key)) this.snapshots.delete(key);
     }
+    for (const key of this.loadingWorkspaces) {
+      if (!active.has(key)) this.loadingWorkspaces.delete(key);
+    }
     for (const [key, controller] of this.controllers) {
       if (!active.has(key)) {
         controller.abort();
@@ -377,6 +493,18 @@ export class RehearsalTreeProvider
     }
   }
 
+  private setInspectionState(
+    workspaceKey: string,
+    state: "loading" | "idle",
+  ): void {
+    const loading = state === "loading";
+    if (loading === this.loadingWorkspaces.has(workspaceKey)) return;
+    if (loading) this.loadingWorkspaces.add(workspaceKey);
+    else this.loadingWorkspaces.delete(workspaceKey);
+    this.changes.fire(undefined);
+    this.inspectionChanges.fire({ workspaceKey, state });
+  }
+
   private syncWorkspaceWatchers(): void {
     const folders = vscode.workspace.workspaceFolders ?? [];
     const active = new Set(folders.map(({ uri }) => uri.toString()));
@@ -385,26 +513,46 @@ export class RehearsalTreeProvider
     }
     for (const folder of folders) {
       const key = folder.uri.toString();
-      if (this.workspaceWatchers.has(key)) continue;
-      const watchers = PROJECT_REFRESH_PATHS.map((path) => {
+      const patterns = projectRefreshPatterns(
+        vscode.workspace
+          .getConfiguration("rehearsal", folder.uri)
+          .get<unknown>("configPath", ""),
+      );
+      const previous = this.workspaceWatchers.get(key);
+      if (
+        previous?.patterns.length === patterns.length &&
+        previous.patterns.every((pattern, index) => pattern === patterns[index])
+      )
+        continue;
+      this.removeWorkspaceWatchers(key);
+      const subscription = {
+        patterns,
+        watchers: [] as vscode.FileSystemWatcher[],
+      };
+      this.workspaceWatchers.set(key, subscription);
+      for (const pattern of patterns) {
         const watcher = vscode.workspace.createFileSystemWatcher(
-          new vscode.RelativePattern(folder, path),
+          new vscode.RelativePattern(folder, pattern),
         );
-        const changed = () => this.refreshScheduler.schedule(key);
+        const changed = () => {
+          if (this.workspaceWatchers.get(key) === subscription) {
+            this.refreshScheduler.schedule(key);
+          }
+        };
         watcher.onDidChange(changed);
         watcher.onDidCreate(changed);
         watcher.onDidDelete(changed);
-        return watcher;
-      });
-      this.workspaceWatchers.set(key, watchers);
+        subscription.watchers.push(watcher);
+      }
     }
   }
 
   private removeWorkspaceWatchers(workspaceKey: string): void {
     this.refreshScheduler.cancel(workspaceKey);
-    for (const watcher of this.workspaceWatchers.get(workspaceKey) ?? []) {
+    const subscription = this.workspaceWatchers.get(workspaceKey);
+    this.workspaceWatchers.delete(workspaceKey);
+    for (const watcher of subscription?.watchers ?? []) {
       watcher.dispose();
     }
-    this.workspaceWatchers.delete(workspaceKey);
   }
 }

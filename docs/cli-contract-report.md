@@ -1,10 +1,15 @@
 # Editor-facing CLI audit
 
-Validated against the local `@rehearsal-db/core@0.1.0-rc.4` Environment Workbench
+## Historical Environment Workbench acceptance
+
+The observations below were validated against the local `@rehearsal-db/core@0.1.0-rc.4` Environment Workbench
 candidate. Package SHA-256:
 `468fa219769ec7d0d902a4ce6aed7c8a66087005993f3ba4de39a5179634ba5a`.
 This is candidate evidence, not a registry-publication claim. Test Lab installed that
 exact artifact and exercised both PostgreSQL and Supabase from clean temporary consumers.
+They do not certify later source changes. New resource-manager, configuration-review,
+shape-evidence and progress work requires its own exact-artifact acceptance; the earlier
+native host and VoiceOver observations must not be relabeled as tests of those controls.
 
 ## Result
 
@@ -36,6 +41,7 @@ digest, lock, local-target, confirmation, rollback, and cleanup checks.
 | Baseline             | `inspect baseline --json` | generation, timestamp, counts, verification                  | `0` or versioned error                        |
 | Candidates           | `candidates --json`       | filenames, per-target set, exact SHA-256                     | `0` or versioned error                        |
 | Runtime              | `status --json`           | per-target `runtimeStatus`; human `data.output` is discarded | `0` or versioned error                        |
+| Local resources      | `environments --json`     | exact owned environments, live use, and bounded capacity     | `0` or versioned error                        |
 
 All normal envelopes use `schemaVersion: 1`, `rehearsalVersion`, `command`, `status`,
 timing, warnings, and data. Error envelopes use the same schema version plus a stable
@@ -50,8 +56,9 @@ two-field contract.
 - Use the workspace folder as `cwd` and pass `--config=<relative-path>` when configured.
 - Pass only a documented infrastructure environment allowlist.
 - Bound stdout and stderr independently to 1 MiB.
-- Use 5 seconds for version and a resource-scoped 15–300 second inspection timeout (90
-  seconds by default).
+- Use the resource-scoped 15–300 second inspection timeout (90 seconds by default) for
+  version and detail commands alike. A slow filesystem must not hit a separate hidden
+  five-second limit before the user's timeout setting can apply.
 - Cancel the extension-owned process group with `SIGTERM`, then `SIGKILL` after a short
   grace period. Never signal an existing Rehearsal operation reported by `activity`.
 - Treat cancellation and timeout as adapter states; a killed process cannot promise a JSON
@@ -198,6 +205,12 @@ carry confidence and review text, and every category carries bounded evidence. I
 proposed configuration-field states but performs no write. The extension rejects unknown
 schemas, absolute workspace evidence paths, unbounded values, or a safety declaration
 that admits project-code execution, `.env` access, database contact, or Docker startup.
+
+`explain.baseline.sourceSchemaSha256` and `inspect baseline.sourceSchemaSha256` are
+additive, nullable SHA-256 fields for reviewed source-column metadata. Comparisons use
+that exact receipt when available; missing legacy evidence remains unavailable, even
+when row counts and migration history match. This is not a digest of complete current
+runtime DDL and does not certify schema or application equivalence.
 
 On 2026-10-11, the exact candidate completed Test Lab's full candidate workflow. The
 machine report and isolation report passed for clean adoption, PostgreSQL, Supabase,

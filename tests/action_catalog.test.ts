@@ -72,6 +72,41 @@ describe("workspace action catalog", () => {
     expect(workspaceActionPlan(empty, "migrate")).toBeNull();
   });
 
+  it("never promises to open an application without observed readiness configuration", () => {
+    expect(workspaceActionPlan(snapshot(), "openSandbox")).toBeNull();
+    const configuration = {
+      runtime: {
+        applicationUrl: "http://localhost:5175",
+        serviceProfile: "application" as const,
+      },
+      application: {
+        startCommand: "npm run dev",
+        proofCommand: "npm test",
+        readinessUrl: "http://localhost:5175",
+      },
+      lifecycle: {
+        run: "stop-after-run" as const,
+        open: "stop-on-application-exit" as const,
+      },
+      cleanup: { retainBaselineGenerations: 2 },
+    };
+    expect(
+      workspaceActionPlan(snapshot({ configuration }), "openSandbox")
+        ?.arguments,
+    ).toContain("open");
+    expect(
+      workspaceActionPlan(
+        snapshot({
+          configuration: {
+            ...configuration,
+            application: { ...configuration.application, readinessUrl: null },
+          },
+        }),
+        "openSandbox",
+      ),
+    ).toBeNull();
+  });
+
   it("uses the detected package manager for install and update", () => {
     const outdated = snapshot({
       availability: "package_outdated",

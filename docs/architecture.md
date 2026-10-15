@@ -11,7 +11,7 @@
 | Publisher     | `rehearsal-db` is reserved in metadata; no Marketplace account is assumed |
 | Product owner | Rehearsal project, administered by Ddupasquier                            |
 | License       | Commercial preview per user; Rehearsal core remains MIT                   |
-| Version       | `0.1.2` commercial preview candidate                                      |
+| Version       | `0.1.3` commercial preview candidate                                      |
 
 Packaging a reviewed commercial-preview candidate is authorized. Marketplace publication,
 publisher/account creation, public pricing, payment setup, and distribution still require
@@ -20,8 +20,10 @@ their own reviewed release decision.
 ## Technical foundation
 
 - TypeScript with strict checking and CommonJS output for the desktop extension host.
-- VS Code `^1.96.0` using standard Tree View, commands, progress, notifications, links,
+- VS Code `^1.101.0` using standard Tree View, commands, progress, notifications, links,
   and resource-scoped settings.
+  Version 1.101 moved the extension host to Node.js 22, matching the supported core
+  runtime floor ([official release notes](https://code.visualstudio.com/updates/v1_101)).
 - No UI framework. A native Tree View discovers projects; a narrowly scripted
   `WebviewPanel` owns the product workspace after the Tree prototype proved the contract.
   Its nonce-authorized navigation script only switches among seven rendered destinations
@@ -31,6 +33,8 @@ their own reviewed release decision.
   workspace paths never enter webview HTML.
 - Vitest for pure contract, process, and state-model tests. Test Lab supplies the real
   installed-package acceptance workspace.
+  Unit checks use two workers to bound local memory pressure; live container checks
+  remain serialized by Test Lab's maintained resource guards.
 - macOS and Linux are supported for the prototype. WSL is experimental. Native Windows,
   browser-based VS Code, Codespaces, SSH, and Dev Containers are not claimed yet.
 
@@ -43,12 +47,33 @@ their own reviewed release decision.
   semantic HTML and VS Code theme tokens
   with the Rehearsal mint accent; it has no custom focus model, network request, or
   independent project-state authority. Technical evidence is progressively disclosed.
+- Activity & reports and Environments use one grid spacing rule between their sections.
+  Activity spacing separates summary, comparison/export,
+  command, and history sections. Nested cards do not add their own outer margins;
+  comparison and export cards align in wide views and stack in compact views.
+- Page and card container queries own content layout independently of the window's
+  navigation breakpoint. Two-column pages stack when their actual usable width is
+  insufficient; migration filters become two columns or one column inside their card.
+  Narrow connection cards put each value below its label and give the local-address
+  input a full row. Controls shrink within their parent, technical values wrap, and
+  status labels remain readable rather than disappearing behind clipping. Check all
+  seven destinations at intermediate editor widths as well as the 300px minimum,
+  wide layouts, supported themes, keyboard navigation, and text enlargement. CSS
+  structure tests guard these rules; only rendered inspection establishes layout.
 - A trusted single-folder project opens its dashboard once after the first successful
   inspection in an extension-host session. Later refreshes respect a dashboard the user
   closed. Multi-root workspaces stay explicit rather than guessing a project. The Projects
   view also owns a labeled dashboard action as its first row and a dashboard button in its
   title; automatic opening can be disabled with a resource-scoped setting.
 - Every icon has a plain-language label. Status is never communicated by color alone.
+- Activity places cancellation before progress and historical receipts, and offers it
+  only for an operation started by this extension. The host still checks ownership and
+  asks for confirmation before closing its terminal.
+- Configuration reviews use opaque, read-only in-memory documents, not editable Untitled
+  files. Retention is bounded to 16 reviews, 2 MiB each and 8 MiB total; evicted or closed
+  project reviews show expiry guidance. Trust, workspace and canonical file identity are
+  rechecked throughout approval and before saving. Diffs align unchanged suffixes so a
+  single insertion does not mislabel all later settings as changes.
 - Guided actions remain available from the keyboard. Read-only refreshes stay inside the
   adapter; approved operations open their exact public command in a project-scoped
   integrated terminal.
@@ -59,6 +84,29 @@ their own reviewed release decision.
 
 ## Runtime boundary
 
+The Environments page reads `environments --json` only when the installed package
+declares `rehearsalContracts.resourceInventory: 1`. Core owns Docker inspection,
+ownership labels, capacity measurement, and cleanup eligibility. The extension validates
+and renders that bounded result; it never invokes Docker, Colima, or Supabase itself. If
+the shared engine is stopped, configured environments remain explicitly `unavailable`
+instead of being guessed absent. A missing contract produces an update-oriented empty
+state rather than inferred resources.
+When core additionally advertises `resourceManager: 1`, the adapter uses `resources --json`
+and validates its bounded catalog before rendering individual images, volume attachments,
+and other projects' read-only containers. Older cores keep their aggregate view. Resource
+search/sort/filter state is harmless editor preference data; environment labels and
+protection remain core-owned configuration fields. The configuration editor can insert or
+replace only those two literal fields in one plain runtime object and refuses ambiguous
+or expression-based forms.
+
+Resource messages contain only a configured target, an allowlisted action, or selected
+full image IDs. The host maps targets back to the current core snapshot. Image cleanup
+first requests core's exact `--images-only` preview, rejects any runtime/baseline selection,
+shows a modal with tags, IDs, estimates, and zero selected volumes, then delegates the
+digest-bound apply to the existing owned terminal. Core revalidates all references and
+eligibility before removal. A pin is enforced by core for reset/run/discard as well as
+runtime cleanup, independent of this editor. No individual volume-delete action exists.
+
 Each trusted workspace folder receives its own controller, cancellation signal, package
 resolution, explicit working directory, optional configuration path, and state tree.
 One folder cannot lend its package, configuration, result, or process to another.
@@ -68,6 +116,9 @@ workspace folder. For a nested workspace it may follow normal package-manager ho
 up to—but never above—the containing Git repository. It validates the manifest and
 declared `rehearsal` bin, then launches that bin with the extension host's Node
 executable. It uses argument arrays and `shell: false`.
+Manifest reads are bounded to 1 MiB through a regular-file handle. The executable's
+canonical path must remain inside the canonical package root; a symlink cannot redirect
+inspection to an unrelated program. Internal package-manager links remain supported.
 
 The extension requires `@rehearsal-db/core@0.1.0-rc.4` or newer for the versioned
 activity/runtime inspection contract. Older projects stop after the package version
@@ -76,8 +127,11 @@ action using the detected package manager. The exact dependency command and affe
 manifest/lockfile boundary are shown in a modal before execution.
 
 Each workspace owns narrow file watchers for its root manifest, supported lockfiles,
-installed Rehearsal manifest, and known configuration locations. Related package-manager
-writes are coalesced into one trailing read-only refresh. This keeps the Tree View and an
+installed Rehearsal manifest, known configuration locations, and its explicitly configured
+project-relative configuration file. That optional path is bounded and confined to the
+workspace; glob metacharacters are treated as literal filename characters. Changing the
+configuration-path setting replaces the old watchers and cancels their pending refresh.
+Related file writes are coalesced into one trailing read-only refresh. This keeps the Tree View and an
 open workbench current when Rehearsal is updated in another terminal, without polling,
 running package-manager code, watching unrelated dependencies, or requiring a window
 reload. Removing a workspace disposes its watchers and pending refresh.
@@ -124,6 +178,13 @@ extension. Each inspection command has a resource-scoped 15–300 second timeout
 seconds by default), and timeout messages identify the command that exceeded it. Global
 multi-root refresh runs at most two projects concurrently.
 
+The tree and webview share one explicit inspection lifecycle. Starting a refresh exposes
+an accessible, cancellable loading state without discarding the last completed snapshot.
+When no snapshot exists, the dashboard uses named loading placeholders rather than
+`Unavailable`. A timeout preserves any already-proven package, discovery, readiness, and
+idle-operation evidence, then offers retry, timeout settings, Doctor, diagnostics, and
+support. Unknown values remain honest, but never become a dead end.
+
 Operational actions do not create a second runtime engine. The extension builds only an
 allowlisted public command, previews the exact command in a modal for every terminal action,
 adds stronger language for dependency writes and risky runtime changes, then runs it in a
@@ -134,12 +195,51 @@ validation, cancellation, rollback, and cleanup. Candidate execution is bound to
 digest already returned by `candidates --json`; a stale digest therefore fails closed.
 Configuration creation and baseline/source decisions remain in core's interactive guide.
 
+Explicit editor cancellation observes only public activity for at most 30 seconds,
+then refreshes actual project state. This is a bounded completion check, not idle
+polling or a daemon. Removed workspaces and extension disposal abort the owned read.
+An idle lock does not prove verification passed. Missing terminal exit evidence is
+marked unverified, never silently recorded as successful cancellation.
+
+An explicitly editor-started terminal action also receives an activity-only monitor:
+one serial public `activity --json` read every two seconds for at most five minutes.
+It gives startup at most 30 seconds to expose a busy operation; absence or timeout
+does not mean success. Busy/stale views discard potentially inconsistent project
+details and render only strict public activity. Busy-to-idle triggers one full
+actual refresh. Terminal end, removal, trust loss, disposal and deadline abort the
+owned read and timers. No daemon or idle workspace polling exists; long sessions
+use explicit Refresh after the bounded monitor ends. Cancellation completion uses
+its separate 30-second observer only after active monitoring is disposed.
+
+An active operation gets one full safety render to remove potentially stale project
+details. Further samples of that same operation patch only the bounded, escaped progress
+region in place; elapsed-time ticks do not replace the dashboard document. Navigation,
+keyboard focus, scroll position and expanded evidence remain stable. Operation identity,
+workspace/configuration, inspection mode or safety-state changes invalidate that partial
+path. Failed message delivery falls back only for the still-current document, and a
+hidden/discarded webview gets a fresh document when shown again. Safety transitions take
+precedence over unsaved form drafts so stale controls cannot remain authoritative.
+Explicit navigation to another page starts at the top after preserving the intended
+keyboard focus. Same-page selections and live progress leave scroll position unchanged;
+ordinary document restoration retains its existing saved-scroll behavior.
+
 Known literal configuration fields may be edited through the workbench. The editor accepts
 only bounded loopback URLs, commands, lifecycle enums, and retention counts; requires one
 unambiguous literal per field; shows an exact diff; refuses dirty or concurrently changed
 documents; and asks for modal approval before applying and saving. It does not parse or
 rewrite arbitrary JavaScript expressions. Core remains the authority that validates the
 complete file before any later operation.
+The simple form proposes only semantic changes from its initial displayed values; untouched
+defaults do not become new configuration literals. Restoring form values updates the draft
+guard after the browser reset, while edits in other forms remain protected.
+Structured review also checks public activity before review and immediately before save.
+Busy, stale, and invalid states refuse the edit. Unsaved forms survive ordinary
+inspection updates; users review or explicitly discard them before the view refreshes.
+The browser address and application readiness endpoint are independent reviewed fields.
+Changing the browser URL preserves the health-check URL. Change its origin or path only
+through an explicit structured proposal or manual configuration edit. The provider's
+Auth callback remains a separate core-derived endpoint, not an editable browser address.
+These checks do not claim to lock out ordinary manual filesystem edits by other tools.
 
 ## Trust, privacy, and storage
 

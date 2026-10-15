@@ -56,6 +56,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
     provider,
     actions,
     context.workspaceState,
+    String(context.extension.packageJSON.version),
   );
   const tree = vscode.window.createTreeView("rehearsal.projects", {
     treeDataProvider: provider,

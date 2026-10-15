@@ -1,3 +1,13 @@
+import { parseResourceCatalog } from "./resource_contract.js";
+import {
+  parseOperationKind,
+  parseOperationVersion,
+  parseOperationProgressSnapshot,
+  parseRecentOperationProgress,
+  type OperationProgressSnapshot,
+  type RecentOperationProgress,
+} from "./operation_progress.js";
+
 export const RESULT_SCHEMA_VERSION = 1 as const;
 
 export type RehearsalStatus = "success" | "not_ready" | "error";
@@ -72,12 +82,18 @@ export interface CandidatesData {
 export interface BaselineData {
   readonly formatVersion?: 1 | 2;
   readonly generationId: string;
-  readonly createdAt: string;
+  readonly createdAt: string | null;
   readonly migrationCutoff: string;
   readonly tableCount: number;
   readonly rowCount: number;
   readonly migrationCount: number;
   readonly verification: string;
+  readonly migrationHistorySha256?: string | null;
+  readonly sourceSchemaSha256?: string | null;
+  readonly sanitizationPolicySha256?: string;
+  readonly dataSha256?: string;
+  readonly review?: unknown;
+  readonly shape?: unknown;
   readonly generations?: readonly {
     readonly generationId: string;
     readonly createdAt: string | null;
@@ -94,6 +110,7 @@ export interface BaselineData {
 export interface ExplainData {
   readonly config: {
     readonly schemaVersion: number;
+    readonly sha256?: string;
     readonly path: string;
     readonly project: string;
   };
@@ -124,6 +141,13 @@ export interface ExplainData {
   readonly cleanup?: {
     readonly retainBaselineGenerations: number;
   };
+  readonly baselineReview?: unknown;
+  readonly authenticationReview?: unknown;
+  readonly baseline?: BaselineData;
+  readonly targets?: readonly {
+    readonly name: string;
+    readonly plan: Omit<ExplainData, "targets">;
+  }[];
 }
 
 export type RuntimeState = "running" | "stopped" | "unavailable" | "unhealthy";
@@ -179,7 +203,61 @@ export interface ActivityData {
     readonly kind: string;
     readonly startedAt: string;
     readonly rehearsalVersion: string | null;
+    readonly progress?: OperationProgressSnapshot | null;
   } | null;
+  readonly recent?: readonly RecentOperationProgress[] | null;
+}
+
+export interface ResourceInventoryData {
+  readonly catalog?:
+    import("./resource_contract.js").ResourceCatalogData | null;
+  readonly schemaVersion: 1;
+  readonly inspectedAt: string;
+  readonly engine: {
+    readonly state: "running" | "stopped";
+    readonly context: string | null;
+    readonly disk: {
+      readonly backend: "colima";
+      readonly totalBytes: number;
+      readonly usedBytes: number;
+      readonly availableBytes: number;
+      readonly usedPercent: number;
+    } | null;
+    readonly resources: readonly {
+      readonly type: string;
+      readonly totalCount: number | null;
+      readonly activeCount: number | null;
+      readonly size: string | null;
+      readonly reclaimable: string | null;
+    }[];
+  };
+  readonly environments: readonly {
+    readonly target: string;
+    readonly displayName?: string;
+    readonly protected?: boolean;
+    readonly projectId: string;
+    readonly provider: "supabase" | "postgresql";
+    readonly configPath: string;
+    readonly state: "running" | "stopped" | "absent" | "mixed" | "unavailable";
+    readonly containerCount: number;
+    readonly runningContainerCount: number;
+    readonly volumeCount: number;
+    readonly diskUsageBytes: number | null;
+    readonly cpuPercent: number | null;
+    readonly memoryUsageBytes: number | null;
+    readonly memoryLimitBytes: number | null;
+    readonly createdAt: string | null;
+    readonly lastActivityAt: string | null;
+    readonly retention: "persistent" | "disposable";
+    readonly cleanupEligibility:
+      "running" | "preview-required" | "not-present" | "inspection-unavailable";
+    readonly restartPolicies: readonly string[];
+  }[];
+  readonly stale: {
+    readonly stoppedCount: number;
+    readonly digest: string | null;
+    readonly targets: readonly string[];
+  };
 }
 
 export type DiscoveryValue = string | number | boolean | readonly string[];
@@ -750,36 +828,310 @@ export const parseActivityData = (value: unknown): ActivityData => {
     throw new ContractError("Activity state is unsupported.");
   }
   const state = value.state as ActivityState;
+  const recent =
+    value.recent === undefined
+      ? {}
+      : { recent: parseRecentOperationProgress(value.recent) };
   if (state === "idle" || state === "invalid") {
     if (value.operation !== null) {
       throw new ContractError(
         "Inactive activity must not include an operation.",
       );
     }
-    return { schemaVersion: 1, state, operation: null };
+    return { schemaVersion: 1, state, operation: null, ...recent };
   }
   if (!isRecord(value.operation)) {
     throw new ContractError("Active activity is missing its operation.");
   }
-  requireString(value.operation.kind, "activity.operation.kind");
+  const kind = parseOperationKind(value.operation.kind);
   requireString(value.operation.startedAt, "activity.operation.startedAt");
   if (!Number.isFinite(Date.parse(value.operation.startedAt))) {
     throw new ContractError("Activity start time is invalid.");
   }
-  if (
-    value.operation.rehearsalVersion !== null &&
-    (typeof value.operation.rehearsalVersion !== "string" ||
-      value.operation.rehearsalVersion.length === 0)
-  ) {
-    throw new ContractError("Activity Rehearsal version is invalid.");
-  }
+  const rehearsalVersion = parseOperationVersion(
+    value.operation.rehearsalVersion,
+  );
+  const progress =
+    value.operation.progress === undefined
+      ? undefined
+      : value.operation.progress === null
+        ? null
+        : parseOperationProgressSnapshot(value.operation.progress);
+  if (progress && progress.startedAt !== value.operation.startedAt)
+    throw new ContractError("Operation progress contradicts its active owner.");
   return {
     schemaVersion: 1,
     state,
     operation: {
-      kind: value.operation.kind,
+      kind,
       startedAt: value.operation.startedAt,
-      rehearsalVersion: value.operation.rehearsalVersion,
+      rehearsalVersion,
+      ...(progress !== undefined ? { progress } : {}),
+    },
+    ...recent,
+  };
+};
+
+export const parseResourceInventoryData = (
+  value: unknown,
+): ResourceInventoryData => {
+  if (!isRecord(value) || value.schemaVersion !== 1) {
+    throw new ContractError("Resource inventory schema is unsupported.");
+  }
+  const inspectedAt = requireBoundedString(
+    value.inspectedAt,
+    "inventory.inspectedAt",
+  );
+  if (!Number.isFinite(Date.parse(inspectedAt))) {
+    throw new ContractError("Resource inventory time is invalid.");
+  }
+  if (
+    !isRecord(value.engine) ||
+    !["running", "stopped"].includes(String(value.engine.state))
+  ) {
+    throw new ContractError("Resource inventory engine state is invalid.");
+  }
+  const disk = value.engine.disk;
+  let parsedDisk: ResourceInventoryData["engine"]["disk"] = null;
+  if (disk !== null) {
+    if (!isRecord(disk) || disk.backend !== "colima") {
+      throw new ContractError("Resource inventory disk is invalid.");
+    }
+    parsedDisk = {
+      backend: "colima",
+      totalBytes: requireFiniteNumber(
+        disk.totalBytes,
+        "inventory.disk.totalBytes",
+      ),
+      usedBytes: requireFiniteNumber(
+        disk.usedBytes,
+        "inventory.disk.usedBytes",
+      ),
+      availableBytes: requireFiniteNumber(
+        disk.availableBytes,
+        "inventory.disk.availableBytes",
+      ),
+      usedPercent: requireFiniteNumber(
+        disk.usedPercent,
+        "inventory.disk.usedPercent",
+      ),
+    };
+    if (parsedDisk.usedPercent < 0 || parsedDisk.usedPercent > 100) {
+      throw new ContractError("Resource inventory disk percentage is invalid.");
+    }
+  }
+  if (
+    !Array.isArray(value.engine.resources) ||
+    value.engine.resources.length > 20
+  ) {
+    throw new ContractError(
+      "Resource inventory resource totals are not bounded.",
+    );
+  }
+  const nullableNumber = (entry: unknown, field: string): number | null =>
+    entry === null ? null : requireFiniteNumber(entry, field);
+  const nullableNonnegativeNumber = (
+    entry: unknown,
+    field: string,
+  ): number | null => {
+    const parsed = nullableNumber(entry, field);
+    if (parsed !== null && parsed < 0)
+      throw new ContractError(`${field} cannot be negative.`);
+    return parsed;
+  };
+  const nullableString = (entry: unknown, field: string): string | null =>
+    entry === null ? null : requireBoundedString(entry, field);
+  const resources = value.engine.resources.map((entry, index) => {
+    if (!isRecord(entry))
+      throw new ContractError(`Resource inventory total ${index} is invalid.`);
+    return {
+      type: requireBoundedString(
+        entry.type,
+        `inventory.resources[${index}].type`,
+      ),
+      totalCount: nullableNumber(
+        entry.totalCount,
+        `inventory.resources[${index}].totalCount`,
+      ),
+      activeCount: nullableNumber(
+        entry.activeCount,
+        `inventory.resources[${index}].activeCount`,
+      ),
+      size: nullableString(entry.size, `inventory.resources[${index}].size`),
+      reclaimable: nullableString(
+        entry.reclaimable,
+        `inventory.resources[${index}].reclaimable`,
+      ),
+    };
+  });
+  if (!Array.isArray(value.environments) || value.environments.length > 25) {
+    throw new ContractError("Resource inventory environments are not bounded.");
+  }
+  const states = [
+    "running",
+    "stopped",
+    "absent",
+    "mixed",
+    "unavailable",
+  ] as const;
+  const cleanupStates = [
+    "running",
+    "preview-required",
+    "not-present",
+    "inspection-unavailable",
+  ] as const;
+  const environments = value.environments.map((entry, index) => {
+    if (!isRecord(entry))
+      throw new ContractError(`Resource environment ${index} is invalid.`);
+    if (!states.includes(entry.state as (typeof states)[number]))
+      throw new ContractError(
+        `Resource environment ${index} state is invalid.`,
+      );
+    if (entry.provider !== "supabase" && entry.provider !== "postgresql")
+      throw new ContractError(
+        `Resource environment ${index} provider is invalid.`,
+      );
+    if (entry.retention !== "persistent" && entry.retention !== "disposable")
+      throw new ContractError(
+        `Resource environment ${index} retention is invalid.`,
+      );
+    if (
+      !cleanupStates.includes(
+        entry.cleanupEligibility as (typeof cleanupStates)[number],
+      )
+    )
+      throw new ContractError(
+        `Resource environment ${index} cleanup state is invalid.`,
+      );
+    const createdAt =
+      entry.createdAt === null
+        ? null
+        : requireBoundedString(
+            entry.createdAt,
+            `inventory.environments[${index}].createdAt`,
+          );
+    const lastActivityAt =
+      entry.lastActivityAt === null
+        ? null
+        : requireBoundedString(
+            entry.lastActivityAt,
+            `inventory.environments[${index}].lastActivityAt`,
+          );
+    if (lastActivityAt !== null && !Number.isFinite(Date.parse(lastActivityAt)))
+      throw new ContractError(
+        `Resource environment ${index} activity time is invalid.`,
+      );
+    if (createdAt !== null && !Number.isFinite(Date.parse(createdAt)))
+      throw new ContractError(
+        `Resource environment ${index} creation time is invalid.`,
+      );
+    const restartPolicies = requireStringArray(
+      entry.restartPolicies,
+      `inventory.environments[${index}].restartPolicies`,
+    );
+    return {
+      target: requireBoundedString(
+        entry.target,
+        `inventory.environments[${index}].target`,
+      ),
+      ...(entry.displayName === undefined
+        ? {}
+        : {
+            displayName: requireBoundedString(
+              entry.displayName,
+              "inventory.environment.displayName",
+            ),
+          }),
+      ...(entry.protected === undefined
+        ? {}
+        : {
+            protected: (() => {
+              if (typeof entry.protected !== "boolean")
+                throw new ContractError("Environment protection is invalid.");
+              return entry.protected;
+            })(),
+          }),
+      projectId: requireBoundedString(
+        entry.projectId,
+        `inventory.environments[${index}].projectId`,
+      ),
+      provider: entry.provider as "supabase" | "postgresql",
+      configPath: requireBoundedString(
+        entry.configPath,
+        `inventory.environments[${index}].configPath`,
+      ),
+      state: entry.state as (typeof states)[number],
+      containerCount: requireFiniteNumber(
+        entry.containerCount,
+        `inventory.environments[${index}].containerCount`,
+      ),
+      runningContainerCount: requireFiniteNumber(
+        entry.runningContainerCount,
+        `inventory.environments[${index}].runningContainerCount`,
+      ),
+      volumeCount: requireFiniteNumber(
+        entry.volumeCount,
+        `inventory.environments[${index}].volumeCount`,
+      ),
+      diskUsageBytes:
+        entry.diskUsageBytes === null
+          ? null
+          : requireFiniteNumber(
+              entry.diskUsageBytes,
+              `inventory.environments[${index}].diskUsageBytes`,
+            ),
+      cpuPercent: nullableNonnegativeNumber(
+        entry.cpuPercent,
+        `inventory.environments[${index}].cpuPercent`,
+      ),
+      memoryUsageBytes: nullableNonnegativeNumber(
+        entry.memoryUsageBytes,
+        `inventory.environments[${index}].memoryUsageBytes`,
+      ),
+      memoryLimitBytes: nullableNonnegativeNumber(
+        entry.memoryLimitBytes,
+        `inventory.environments[${index}].memoryLimitBytes`,
+      ),
+      createdAt,
+      lastActivityAt,
+      retention: entry.retention as "persistent" | "disposable",
+      cleanupEligibility:
+        entry.cleanupEligibility as (typeof cleanupStates)[number],
+      restartPolicies,
+    };
+  });
+  if (!isRecord(value.stale) || !Array.isArray(value.stale.targets)) {
+    throw new ContractError("Resource inventory stale summary is invalid.");
+  }
+  const digest = value.stale.digest;
+  if (
+    digest !== null &&
+    (typeof digest !== "string" || !/^[a-f0-9]{64}$/u.test(digest))
+  ) {
+    throw new ContractError("Resource inventory stale digest is invalid.");
+  }
+  const catalog = parseResourceCatalog(value.catalog);
+  return {
+    schemaVersion: 1,
+    inspectedAt,
+    ...(catalog === undefined ? {} : { catalog }),
+    engine: {
+      state: value.engine.state as "running" | "stopped",
+      context: nullableString(value.engine.context, "inventory.engine.context"),
+      disk: parsedDisk,
+      resources,
+    },
+    environments,
+    stale: {
+      stoppedCount: requireFiniteNumber(
+        value.stale.stoppedCount,
+        "inventory.stale.stoppedCount",
+      ),
+      digest,
+      targets: requireStringArray(
+        value.stale.targets,
+        "inventory.stale.targets",
+      ),
     },
   };
 };

@@ -9,6 +9,7 @@ import type {
   DoctorData,
   ExplainData,
   ResultEnvelope,
+  ResourceInventoryData,
   StatusData,
   VersionResult,
 } from "../src/contracts.js";
@@ -180,6 +181,36 @@ describe("workspace package compatibility", () => {
 });
 
 describe("project overview", () => {
+  it("checks activity after every detailed query has completed, not concurrently with them", async () => {
+    const stable = client();
+    let activityCalls = 0;
+    let detailsCompleted = false;
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...stable,
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          if (options.expectedCommand === "inspect baseline") {
+            await new Promise<void>((resolve) => queueMicrotask(resolve));
+            detailsCompleted = true;
+          }
+          if (options.expectedCommand === "activity") {
+            activityCalls++;
+            if (activityCalls === 2) expect(detailsCompleted).toBe(true);
+          }
+          return stable.command<Data>(options);
+        },
+      },
+    });
+    expect(result.availability).toBe("ready");
+    expect(result.compatibility?.state).toBe("supported");
+    expect(activityCalls).toBe(2);
+    expect(result.inspectedAt).toMatch(/^\d{4}-/u);
+  });
   it("turns an old core package into an actionable update state without running it", async () => {
     let commandInvoked = false;
     const result = await inspectProject({
@@ -329,6 +360,7 @@ describe("project overview", () => {
     expect(result).toMatchObject({
       availability: "not_ready",
       version: "0.1.0-rc.4",
+      compatibility: { state: "supported" },
       packageLocation: "node_modules/@rehearsal-db/core",
       activity: { state: "idle", operation: null },
       readiness: { state: "NOT READY", failed: 1 },
@@ -373,6 +405,77 @@ describe("project overview", () => {
         cleanup: { retainBaselineGenerations: 4 },
       },
     });
+  });
+
+  it("loads resource inventory only through the declared core contract", async () => {
+    const base = client();
+    const inventory: ResourceInventoryData = {
+      schemaVersion: 1,
+      inspectedAt: "2026-10-12T00:00:00.000Z",
+      engine: {
+        state: "running",
+        context: "colima",
+        disk: {
+          backend: "colima",
+          totalBytes: 100,
+          usedBytes: 80,
+          availableBytes: 20,
+          usedPercent: 80,
+        },
+        resources: [],
+      },
+      environments: [
+        {
+          target: "primary",
+          projectId: "fixture-rehearsal",
+          provider: "postgresql",
+          configPath: "/workspace/rehearsal.config.mjs",
+          state: "stopped",
+          containerCount: 1,
+          runningContainerCount: 0,
+          volumeCount: 1,
+          diskUsageBytes: 1_500_000_000,
+          cpuPercent: null,
+          memoryUsageBytes: null,
+          memoryLimitBytes: null,
+          createdAt: "2026-10-11T00:00:00Z",
+          lastActivityAt: "2026-10-11T00:00:00Z",
+          retention: "persistent",
+          cleanupEligibility: "preview-required",
+          restartPolicies: ["no"],
+        },
+      ],
+      stale: { stoppedCount: 1, digest: "b".repeat(64), targets: ["primary"] },
+    };
+    const observed: string[] = [];
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        version: async () => ({
+          name: "@rehearsal-db/core",
+          version: "0.1.0-rc.4",
+          packageLocation: "node_modules/@rehearsal-db/core",
+          resourceInventorySchema: 1,
+        }),
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          observed.push(options.expectedCommand);
+          if (options.expectedCommand === "environments") {
+            return envelope("environments", inventory) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          }
+          return base.command<Data>(options);
+        },
+      },
+    });
+    expect(observed).toContain("environments");
+    expect(result.resources).toEqual(inventory);
   });
 
   it("shows only safe operation activity while a mutation is active", async () => {
@@ -557,17 +660,21 @@ describe("project overview", () => {
       },
     };
     const { AdapterError } = await import("../src/process_adapter.js");
+    const base = client();
     const result = await inspectProject({
       workspaceName: "fixture",
       workspaceRoot: "/workspace",
       trusted: true,
       bootstrapDiscovery: profile,
       client: {
-        ...client(),
-        command: async () => {
+        ...base,
+        command: async (options) => {
+          if (options.expectedCommand === "activity") {
+            return base.command(options);
+          }
           throw new AdapterError(
             "timeout",
-            "The Rehearsal status check took longer than 90 seconds.",
+            "The Rehearsal doctor check took longer than 90 seconds.",
           );
         },
       },
@@ -578,7 +685,15 @@ describe("project overview", () => {
       version: "0.1.0-rc.4",
       packageLocation: "node_modules/@rehearsal-db/core",
       discovery: { source: "bootstrap", profile },
-      error: { code: "timeout" },
+      activity: { state: "idle", operation: null },
+      error: {
+        code: "timeout",
+        suggestions: [
+          "Retry the read-only inspection.",
+          "Increase Rehearsal: Inspection Timeout Seconds for this workspace if the project needs longer.",
+          "Run Rehearsal Doctor for a focused readiness check.",
+        ],
+      },
     });
   });
 });

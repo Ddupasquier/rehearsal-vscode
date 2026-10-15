@@ -137,7 +137,7 @@ const main = async (): Promise<void> => {
         .map(({ id }) => id)
         .join(", ");
       throw new Error(
-        `Expected ready Test Lab project; received ${ready.availability}${failedChecks ? ` (${failedChecks})` : ""}.`,
+        `Expected ready Test Lab project; received ${ready.availability}${failedChecks ? ` (${failedChecks})` : ""}${ready.error ? ` (${ready.error.code}: ${ready.error.message})` : ""}.`,
       );
     }
     if (!ready.version || ready.baseline?.rowCount !== 10_003) {
@@ -161,19 +161,33 @@ const main = async (): Promise<void> => {
         `The Test Lab overview did not expose the project package location and configured target (package=${ready.packageLocation ?? "missing"}, targets=${String(ready.candidates?.targets.length ?? "missing")}).`,
       );
     }
+    const runtimeTarget = ready.runtime?.targets[0];
     if (
       ready.activity?.state !== "idle" ||
       ready.runtime?.targets.length !== 1 ||
-      ready.runtime.targets[0]?.runtimeTarget !== "postgresql" ||
-      ready.runtime.targets[0]?.verifiedRuntimeAvailable !== false
+      runtimeTarget?.runtimeTarget !== "postgresql" ||
+      typeof runtimeTarget.verifiedRuntimeAvailable !== "boolean" ||
+      ready.runtime.state !== runtimeTarget.state
     ) {
       throw new Error(
-        "The Test Lab overview did not consume the structured activity and runtime contracts.",
+        `The Test Lab overview did not consume the structured activity and runtime contracts (activity=${ready.activity?.state ?? "missing"}, targetCount=${String(ready.runtime?.targets.length ?? "missing")}, runtimeState=${ready.runtime?.state ?? "missing"}, targetState=${runtimeTarget?.state ?? "missing"}, runtimeTarget=${runtimeTarget?.runtimeTarget ?? "missing"}, verifiedRuntimeAvailable=${String(runtimeTarget?.verifiedRuntimeAvailable ?? "missing")}).`,
       );
     }
     if (ready.applicationUrl !== "http://localhost:5176") {
       throw new Error(
         "The Test Lab overview did not expose the configured loopback application URL.",
+      );
+    }
+    if (
+      ready.resources?.schemaVersion !== 1 ||
+      ready.resources.engine.state !== "running" ||
+      ready.resources.environments.length !== 1 ||
+      ready.resources.environments[0]?.provider !== "postgresql" ||
+      ready.resources.environments[0]?.projectId !==
+        "rehearsal-test-lab-postgresql-rehearsal"
+    ) {
+      throw new Error(
+        "The Test Lab overview did not consume the ownership-scoped resource inventory.",
       );
     }
     if (
@@ -243,6 +257,9 @@ const main = async (): Promise<void> => {
             runtimeTarget: ready.runtime.targets[0]?.runtimeTarget,
             verifiedRuntimeAvailable:
               ready.runtime.targets[0]?.verifiedRuntimeAvailable,
+            resourceEngine: ready.resources.engine.state,
+            resourceTarget: ready.resources.environments[0]?.projectId,
+            dockerDiskPercent: ready.resources.engine.disk?.usedPercent ?? null,
             discoverySource: ready.discovery.source,
             detected: ready.discovery.profile.detected.length,
             suggested: ready.discovery.profile.suggested.length,
