@@ -5,10 +5,30 @@
 :root {
   color-scheme: light dark;
   --rh-accent: var(--vscode-charts-green, #55d6a5);
-  --rh-accent-strong: color-mix(in srgb, var(--rh-accent) 78%, white 22%);
+  /* Chart colors remain vivid for signals; small text follows theme contrast. */
+  --rh-accent-strong: color-mix(
+    in srgb,
+    var(--rh-accent) 25%,
+    var(--vscode-editor-foreground, #e8eef1) 75%
+  );
   --rh-accent-soft: color-mix(in srgb, var(--rh-accent) 12%, transparent);
   --rh-blue: var(--vscode-charts-blue, #5aa9ff);
   --rh-yellow: var(--vscode-charts-yellow, #d9b24c);
+  --rh-blue-text: color-mix(
+    in srgb,
+    var(--rh-blue) 25%,
+    var(--vscode-editor-foreground, #e8eef1) 75%
+  );
+  --rh-yellow-text: color-mix(
+    in srgb,
+    var(--rh-yellow) 25%,
+    var(--vscode-editor-foreground, #e8eef1) 75%
+  );
+  --rh-error-text: color-mix(
+    in srgb,
+    var(--vscode-errorForeground, #f48771) 25%,
+    var(--vscode-editor-foreground, #e8eef1) 75%
+  );
   --rh-border: color-mix(
     in srgb,
     var(--vscode-panel-border, var(--vscode-widget-border, #2a3944)) 80%,
@@ -749,7 +769,7 @@ summary {
     var(--vscode-errorForeground, #f48771) 42%,
     var(--rh-border)
   );
-  color: var(--vscode-errorForeground, #f48771);
+  color: var(--rh-error-text);
   background: color-mix(
     in srgb,
     var(--vscode-errorForeground, #f48771) 8%,
@@ -871,7 +891,7 @@ summary {
 .readiness-row--fail .readiness-row__icon,
 .readiness-row--warn .readiness-row__icon {
   border-color: color-mix(in srgb, var(--rh-yellow) 48%, var(--rh-border));
-  color: var(--rh-yellow);
+  color: var(--rh-yellow-text);
   background: color-mix(in srgb, var(--rh-yellow) 9%, transparent);
 }
 
@@ -968,7 +988,7 @@ summary {
 
 .journey__step--current .journey__marker {
   border-color: var(--rh-blue);
-  color: var(--rh-blue);
+  color: var(--rh-blue-text);
 }
 
 .journey__step strong,
@@ -1019,7 +1039,7 @@ summary {
 }
 
 .source-banner--warning .source-banner__icon {
-  color: var(--rh-yellow);
+  color: var(--rh-yellow-text);
   background: color-mix(in srgb, var(--rh-yellow) 13%, transparent);
 }
 
@@ -1062,14 +1082,17 @@ summary {
 
 .profile-group--detected {
   --profile-color: var(--rh-accent);
+  --profile-text: var(--rh-accent-strong);
 }
 
 .profile-group--suggested {
   --profile-color: var(--rh-blue);
+  --profile-text: var(--rh-blue-text);
 }
 
 .profile-group--decision {
   --profile-color: var(--rh-yellow);
+  --profile-text: var(--rh-yellow-text);
 }
 
 .profile-group > header {
@@ -1096,7 +1119,7 @@ summary {
 .count-badge {
   min-width: 28px;
   border-color: color-mix(in srgb, var(--profile-color) 42%, var(--rh-border));
-  color: var(--profile-color);
+  color: var(--profile-text, var(--vscode-editor-foreground, #e8eef1));
   text-align: center;
 }
 
@@ -1159,7 +1182,7 @@ summary {
 
 .profile-row .pill {
   border-color: color-mix(in srgb, var(--profile-color) 34%, var(--rh-border));
-  color: var(--profile-color);
+  color: var(--profile-text, var(--vscode-editor-foreground, #e8eef1));
 }
 
 .profile-row__details {
@@ -1345,7 +1368,7 @@ summary {
 }
 
 .danger-zone small {
-  color: var(--vscode-errorForeground, #f48771);
+  color: var(--rh-error-text);
   font-size: 9px;
   font-weight: 800;
   letter-spacing: 0.08em;
@@ -1397,12 +1420,12 @@ summary {
 
 .field-state--suggested {
   border-color: color-mix(in srgb, var(--rh-blue) 38%, var(--rh-border));
-  color: var(--rh-blue);
+  color: var(--rh-blue-text);
 }
 
 .field-state--decision_required {
   border-color: color-mix(in srgb, var(--rh-yellow) 42%, var(--rh-border));
-  color: var(--rh-yellow);
+  color: var(--rh-yellow-text);
 }
 
 .field-state--present_unvalidated {

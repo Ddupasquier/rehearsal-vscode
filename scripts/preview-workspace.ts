@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { previewThemeOverrides as themeOverrides } from "./preview-themes.js";
 import type { ProjectDiscoveryData } from "../src/contracts.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 import {
@@ -1086,45 +1087,6 @@ const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
   },
 };
 
-const themeOverrides = (theme: string | null): string => {
-  if (theme === "light") {
-    return `
-:root {
-  --vscode-editor-background: #f7faf8;
-  --vscode-editor-foreground: #17231e;
-  --vscode-descriptionForeground: #607069;
-  --vscode-panel-border: #ccd9d3;
-  --vscode-widget-border: #ccd9d3;
-  --vscode-sideBar-background: #eef5f1;
-  --vscode-editorWidget-background: #ffffff;
-  --vscode-textCodeBlock-background: #eef4f1;
-  --vscode-button-background: #2baf7b;
-  --vscode-button-foreground: #06130d;
-  --vscode-button-hoverBackground: #239468;
-  --vscode-button-secondaryBackground: #e1ebe6;
-  --vscode-button-secondaryForeground: #17231e;
-  --vscode-button-secondaryHoverBackground: #d3e3db;
-  --vscode-focusBorder: #1476d4;
-}`;
-  }
-  if (theme === "contrast") {
-    return `
-:root {
-  --vscode-editor-background: #000000;
-  --vscode-editor-foreground: #ffffff;
-  --vscode-descriptionForeground: #ffffff;
-  --vscode-panel-border: #ffffff;
-  --vscode-widget-border: #ffffff;
-  --vscode-sideBar-background: #000000;
-  --vscode-editorWidget-background: #000000;
-  --vscode-button-background: #55d6a5;
-  --vscode-button-foreground: #000000;
-  --vscode-focusBorder: #ffff00;
-}`;
-  }
-  return "";
-};
-
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${host}:${requestedPort}`);
   if (url.pathname === "/workspace.css") {
@@ -1251,7 +1213,9 @@ server.listen(requestedPort, host, () => {
   console.log(
     "States: /, /auth, /progress, /progress-unavailable, /loading, /outdated, /missing, /not-ready, /timeout",
   );
-  console.log("Themes: add ?theme=light or ?theme=contrast");
+  console.log(
+    "Themes: add ?theme=light, ?theme=dark-modern, ?theme=contrast or ?theme=contrast-light",
+  );
   console.log("Press Ctrl+C to stop.");
 });
 

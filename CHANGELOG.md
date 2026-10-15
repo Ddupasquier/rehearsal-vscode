@@ -14,6 +14,8 @@
   reloading the page or resetting navigation, focus, scroll or expanded evidence.
 - Opens a newly selected workbench page at its top, without jumping on same-page
   selections or live progress updates.
+- Makes small colored labels readable in light themes using separate adaptive text
+  tokens; chart colors, status dots and focus indicators keep their original colors.
 - Keeps cancellation above live progress instead of burying it below receipt history.
 - Rechecks project trust, configuration identity and local-file ownership throughout
   configuration approval; changed or redirected files refuse without being saved.

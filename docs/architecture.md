@@ -66,6 +66,11 @@ their own reviewed release decision.
   view also owns a labeled dashboard action as its first row and a dashboard button in its
   title; automatic opening can be disabled with a resource-scoped setting.
 - Every icon has a plain-language label. Status is never communicated by color alone.
+- Small semantic text uses 25% accent and 75% editor foreground, separately from vivid
+  chart colors, status dots, fills and focus indicators. Numeric regression checks require
+  at least 4.5:1 on modeled surfaces in Light/Dark Modern, high-contrast and fallback
+  fixtures. Preview themes declare chart variables explicitly; native rendered checks and
+  custom-theme review remain separate from that bounded numeric evidence.
 - Activity places cancellation before progress and historical receipts, and offers it
   only for an operation started by this extension. The host still checks ownership and
   asks for confirmation before closing its terminal.

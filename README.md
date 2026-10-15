@@ -103,8 +103,9 @@ npm run preview
 
 Open `http://127.0.0.1:4178`. The preview is loopback-only and includes safe fixture
 states at `/loading`, `/outdated`, `/missing`, `/not-ready`, `/timeout`, `/auth`,
-`/progress`, and `/progress-unavailable`. Add `?theme=light` or
-`?theme=contrast` to inspect theme behavior. Browsing controls work with sample data;
+`/progress`, and `/progress-unavailable`. Add `?theme=light`, `?theme=dark-modern`,
+`?theme=contrast` or `?theme=contrast-light` to inspect explicit theme fixtures.
+Browsing controls work with sample data;
 `/progress?page=activity&live=1` adds a bounded six-update UI fixture to check that
 live progress preserves the document, evidence disclosures, focus and scrolling.
 resource review buttons explain their VS Code flow without applying anything. This
