@@ -13,10 +13,13 @@ export const verificationReportFilename = (
   return `${stem}-rehearsal-report.${format === "markdown" ? "md" : "json"}`;
 };
 import {
+  COMPARISON_LIMITS,
   comparisonSubjects,
   compareEnvironmentEvidence,
   type EnvironmentComparison,
 } from "./environment_comparison.js";
+
+const MAX_READINESS_CHECKS = 1000;
 
 const safeLabel = (value: unknown, fallback: string): string =>
   typeof value === "string" && /^[\p{L}\p{N} ._()—-]{1,120}$/u.test(value)
@@ -59,7 +62,7 @@ export const buildVerificationReport = (
   const comparison: EnvironmentComparison | null =
     left && right ? compareEnvironmentEvidence(left, right) : null;
   const checks = (snapshot.readiness?.checks ?? [])
-    .slice(0, 1000)
+    .slice(0, MAX_READINESS_CHECKS)
     .map((check) => ({
       id:
         typeof check.id === "string" &&
@@ -70,6 +73,31 @@ export const buildVerificationReport = (
         ? check.status
         : "warn",
     }));
+  const detailLimitations = [
+    {
+      label: "Readiness detail",
+      unit: "check",
+      length: snapshot.readiness?.checks.length ?? 0,
+      limit: MAX_READINESS_CHECKS,
+    },
+    {
+      label: "Runtime and comparison detail",
+      unit: "target",
+      length: snapshot.runtime?.targets.length ?? 0,
+      limit: COMPARISON_LIMITS.runtimeTargets,
+    },
+    {
+      label: "Baseline comparison detail",
+      unit: "generation",
+      length: snapshot.baseline?.generations?.length ?? 0,
+      limit: COMPARISON_LIMITS.baselineGenerations,
+    },
+  ]
+    .filter(({ length, limit }) => length > limit)
+    .map(({ label, unit, length, limit }) => {
+      const omitted = length - limit;
+      return `${label} is limited to the first ${limit.toLocaleString("en-US")} ${unit}s; ${omitted.toLocaleString("en-US")} additional ${unit}${omitted === 1 ? "" : "s"} omitted.`;
+    });
   const scope = snapshot.baseline?.review;
   return {
     schemaVersion: 1 as const,
@@ -166,17 +194,19 @@ export const buildVerificationReport = (
     runtime: snapshot.runtime
       ? {
           state: snapshot.runtime.state,
-          targets: snapshot.runtime.targets.slice(0, 32).map((target) => ({
-            name: safeLabel(target.name, "target"),
-            runtimeTarget: target.runtimeTarget,
-            state: target.state,
-            verifiedRuntimeAvailable: target.verifiedRuntimeAvailable,
-            baselineGenerationId: safeLabel(
-              target.baselineGenerationId,
-              "Unavailable",
-            ),
-            candidateSha256: hash(target.candidateSha256),
-          })),
+          targets: snapshot.runtime.targets
+            .slice(0, COMPARISON_LIMITS.runtimeTargets)
+            .map((target) => ({
+              name: safeLabel(target.name, "target"),
+              runtimeTarget: target.runtimeTarget,
+              state: target.state,
+              verifiedRuntimeAvailable: target.verifiedRuntimeAvailable,
+              baselineGenerationId: safeLabel(
+                target.baselineGenerationId,
+                "Unavailable",
+              ),
+              candidateSha256: hash(target.candidateSha256),
+            })),
         }
       : null,
     lifecycle: snapshot.lifecycle
@@ -229,6 +259,7 @@ export const buildVerificationReport = (
       "Readiness checks establish readiness only; declared relationships and authentication settings do not certify runtime enforcement.",
       "Unknown and legacy evidence is unavailable, not zero, equal or passed.",
       "Manual authentication and application checks are included only when separately observed and recorded.",
+      ...detailLimitations,
     ],
   };
 };

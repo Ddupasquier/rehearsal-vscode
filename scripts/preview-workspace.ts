@@ -10,6 +10,7 @@ import {
 } from "../src/review_contract.js";
 import { parseMigrationReviewPlan } from "../src/migration_review.js";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
+import { parseEnvironmentProvenance } from "../src/resource_contract.js";
 import {
   parseOperationProgressSnapshot,
   renderOperationProgress,
@@ -128,7 +129,7 @@ const profile: ProjectDiscoveryData = {
 };
 
 const readySnapshot: ProjectSnapshot = {
-  workspaceName: "Rehearsal Test Lab",
+  workspaceName: "Rehearsal Test Lab · synthetic preview",
   workspaceRoot: "/preview-only",
   availability: "ready",
   version: "0.1.0-rc.4",
@@ -442,6 +443,25 @@ const readySnapshot: ProjectSnapshot = {
         retention: "persistent",
         cleanupEligibility: "running",
         restartPolicies: ["no"],
+        // Synthetic UI evidence only: no real runtime or receipt is inspected here.
+        provenance: parseEnvironmentProvenance({
+          schemaVersion: 1,
+          inspectorVersion: "0.1.0-rc.4",
+          verification: "recorded-not-reverified",
+          configuredPorts: [
+            { service: "database", host: "127.0.0.1", port: 55432 },
+            { service: "application", host: "localhost", port: 5175 },
+          ],
+          runtime: {
+            rehearsalVersion: "0.1.0-rc.3",
+            versionReason: null,
+            baselineGenerationId: "20261011T000000Z-aaaaaaaaaaaa",
+            baselineDataSha256: "d".repeat(64),
+            candidateSha256: "a".repeat(64),
+            migrationReason: null,
+          },
+          runtimeReason: null,
+        })!,
       },
     ],
     catalog: {
@@ -751,6 +771,24 @@ const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
           cpuPercent: null,
           memoryUsageBytes: null,
           cleanupEligibility: "preview-required",
+          provenance: parseEnvironmentProvenance({
+            schemaVersion: 1,
+            inspectorVersion: "0.1.0-rc.4",
+            verification: "recorded-not-reverified",
+            configuredPorts: [
+              { service: "database", host: "127.0.0.1", port: 55433 },
+              { service: "application", host: "localhost", port: 5175 },
+            ],
+            runtime: {
+              rehearsalVersion: null,
+              versionReason: "not-recorded",
+              baselineGenerationId: "20261011T000000Z-bbbbbbbbbbbb",
+              baselineDataSha256: "b".repeat(64),
+              candidateSha256: null,
+              migrationReason: "receipt-unavailable",
+            },
+            runtimeReason: null,
+          })!,
         },
       ],
       catalog: {

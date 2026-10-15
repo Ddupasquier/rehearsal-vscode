@@ -11,6 +11,10 @@ installed in each workspace. Its native project navigator opens a Rehearsal Work
 persistent navigation for Overview, Project setup, Migrations, Environments, Data & auth,
 Configuration, and Activity & reports.
 
+The repository and [reviewed VSIX prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases)
+are public on GitHub. This is not a Marketplace listing or an announcement of a paid
+launch; those remain separate release decisions.
+
 The Environments page consumes Rehearsal core's versioned resource inventory. It shows
 only the current project's ownership-proven containers, running/stopped state, nullable
 live CPU and memory totals, restart policy, retention intent, Docker totals, and
@@ -24,6 +28,12 @@ disk review. Friendly names and protection policies are saved through reviewed c
 diffs; technical ownership IDs stay unchanged. Selected image cleanup shows exact IDs,
 tags, and a size estimate, revalidates through core, and never selects database volumes.
 Volume deletion is available only through the owning environment's reviewed discard.
+**Inspect environment** also shows optional, recorded runtime provenance: restore-writer
+version, baseline generation and data checksum, candidate migration digest, and configured
+loopback ports. The inspecting core version is separate from the version that restored
+the runtime. Older receipts may not record it. These facts are not fresh verification,
+and configured ports do not prove that a service is listening. Use **Verify** for fresh
+runtime evidence.
 Each destination presents one focused job instead of one long diagnostic report. The
 workspace includes readiness, the active configuration, baseline metadata, candidate
 migrations, structured local-runtime state, current Rehearsal activity, and local
@@ -50,7 +60,8 @@ Complex expression-based fields fail closed and remain available through **Open 
 Core releases advertising configuration review also expose the validated resource policies
 and named project profiles. A profile selects the targets shown and an optional local
 browser address; selecting it never changes the database, skips required migrations, or
-creates another runtime. Per-environment actions show their exact target before use.
+creates another runtime. Saved profiles are views of configured targets, not historical
+database copies. Per-environment actions show their exact target before use.
 Long-running environment review uses observable container start/stop times, not proof of
 user inactivity. Scheduled policy choices request a later review; they do not install a
 background cleanup daemon.
@@ -60,6 +71,11 @@ or unsafe evidence is shown as unavailable, not successful. Provider consent, sc
 acceptance, and application-specific security checks remain separate from these receipts.
 Live progress updates in place rather than reloading the dashboard, preserving navigation,
 focus, scroll position and expanded evidence while an operation runs.
+
+Markdown and JSON exports retain aggregate counts where supplied. Detailed lists are
+limited to the first **1,000 readiness checks**, **32 runtime targets**, and **1,000 baseline
+generations**; an omission notice reports any additional entries. A bounded detail list
+is not a claim that the omitted checks passed or that additional environments were tested.
 
 Projects on an older incompatible package get an **Update Rehearsal** button instead of a
 cryptic timeout. The extension detects npm, pnpm, Yarn, or Bun, shows the exact update
@@ -115,14 +131,14 @@ To try the packaged extension instead:
 
 ```bash
 npm run verify:vsix
-npm run package:vsix -- --out rehearsal-0.1.3.vsix
-code --install-extension rehearsal-0.1.3.vsix --force
+npm run package:vsix -- --out rehearsal.vsix
+code --install-extension rehearsal.vsix --force
 ```
 
 `verify:vsix` builds the production archive, checks that development-only files are absent,
 installs it under isolated temporary VS Code user-data and extension directories, confirms
 the exact manifest identity and version, and removes its temporary files. The
-second command creates the private handoff artifact only when you actually need one.
+second command creates a local handoff artifact only when you actually need one.
 
 The workspace repository must install `@rehearsal-db/core`. A nested project may use the
 repository's normal hoisted dependency, but resolution never crosses the Git repository
@@ -130,15 +146,17 @@ boundary or falls back to a global package or private source checkout.
 
 ## Evaluation and paid preview
 
-The VS Code extension has a 14-day evaluation. Paid-preview access is licensed per user
-through the receipt, invoice, or accepted order that accompanies the exact VSIX. Rehearsal
-core remains MIT-licensed and fully usable without the extension.
+The license defines a 14-day evaluation and per-user commercial-preview terms. An
+accepted receipt, invoice or order identifies a paid entitlement; public prerelease
+availability alone does not. A paid launch, pricing, billing and Marketplace publication
+remain separate approval gates. Rehearsal core remains MIT-licensed and fully usable
+without the extension.
 
-Private VSIX installations do not auto-update. Every delivery must identify the extension
+GitHub VSIX installations do not auto-update. Every delivery must identify the extension
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-0.1.3.vsix --force
+code --install-extension /absolute/path/to/rehearsal.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

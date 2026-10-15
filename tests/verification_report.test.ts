@@ -151,4 +151,149 @@ describe("verification reports", () => {
       "Baseline rows: Unavailable",
     );
   });
+
+  const largeSnapshot = (
+    checks: number,
+    targets: number,
+    generations: number,
+  ): ProjectSnapshot => ({
+    workspaceName: "Large reviewed project",
+    workspaceRoot: "/private/report-boundary",
+    availability: "ready",
+    version: "0.1.0-rc.5",
+    inspectedAt: "2026-10-15T12:00:00.000Z",
+    readiness: {
+      state: "READY",
+      passed: checks,
+      failed: 0,
+      checks: Array.from({ length: checks }, (_, index) => ({
+        id: `check-${index}`,
+        label: `private-row-canary-${index}@example.invalid`,
+        status: "pass" as const,
+        detail: "/private/report-boundary/credential-canary",
+      })),
+    },
+    runtime: {
+      state: "stopped",
+      targets: Array.from({ length: targets }, (_, index) => ({
+        name: `target-${index}`,
+        runtimeTarget: "postgresql" as const,
+        state: "stopped" as const,
+        reason: "runtime_not_running" as const,
+        verifiedRuntimeAvailable: false,
+        baselineGenerationId: "generation-0",
+        candidateSha256: "a".repeat(64),
+        endpoint: null,
+      })),
+    },
+    baseline: {
+      generationId: "generation-0",
+      createdAt: "2026-10-15T12:00:00.000Z",
+      verification: "checksums_verified",
+      formatVersion: 2,
+      rowCount: 1_000_000,
+      tableCount: 100,
+      migrationCount: 50_000,
+      generations: Array.from({ length: generations }, (_, index) => ({
+        generationId: `generation-${index}`,
+        createdAt: null,
+        active: index === 0,
+        formatVersion: 2 as const,
+        rowCount: 1_000_000,
+        tableCount: 100,
+        migrationCount: 50_000,
+        migrationCutoff: "20261015000000",
+        storageAssetCount: 100,
+      })),
+    },
+    candidates: {
+      count: 50_000,
+      digest: "b".repeat(64),
+      files: Array.from(
+        { length: 2048 },
+        (_, index) => `/private/raw-migration-canary-${index}.sql`,
+      ),
+      targets: [],
+    },
+  });
+
+  it("retains exact boundary details and large-plan aggregates without exporting migration text or private detail", () => {
+    const report = buildVerificationReport(
+      largeSnapshot(1000, 32, 1000),
+      new Date("2026-10-15T12:01:00.000Z"),
+    );
+    expect(report.readiness?.checks).toHaveLength(1000);
+    expect(report.checks.completed).toHaveLength(1000);
+    expect(report.readiness?.checks.at(-1)?.id).toBe("check-999");
+    expect(report.runtime?.targets).toHaveLength(32);
+    expect(report.subjects).toHaveLength(1032);
+    expect(report.subjects.at(-1)?.id).toBe("baseline:generation-999");
+    expect(report.candidates).toEqual({
+      count: 50_000,
+      digest: "b".repeat(64),
+    });
+    expect(report.limitations.join("\n")).not.toContain("omitted");
+    const content =
+      renderVerificationReportJson(report) +
+      renderVerificationReportMarkdown(report);
+    expect(content).not.toMatch(
+      /private-row-canary|credential-canary|raw-migration-canary|\/private/u,
+    );
+    expect(content).toContain("unsigned");
+    expect(content).toContain("50,000");
+    expect(Buffer.byteLength(content)).toBeLessThan(1_500_000);
+  });
+
+  it("bounds over-limit evidence, discloses omitted details and keeps JSON and Markdown deterministic", () => {
+    const snapshot = largeSnapshot(1001, 33, 1001);
+    const options = {
+      extensionVersion: "0.1.3",
+      comparison: {
+        leftId: "target:target-0",
+        rightId: "baseline:generation-0",
+      },
+    };
+    const now = new Date("2026-10-15T12:01:00.000Z");
+    const first = buildVerificationReport(snapshot, now, options);
+    const second = buildVerificationReport(snapshot, now, options);
+    expect(first.readiness?.checks).toHaveLength(1000);
+    expect(first.readiness?.passed).toBe(1001);
+    expect(first.runtime?.targets).toHaveLength(32);
+    expect(first.subjects).toHaveLength(1032);
+    expect(first.subjects.some(({ id }) => id === "target:target-32")).toBe(
+      false,
+    );
+    expect(
+      first.subjects.some(({ id }) => id === "baseline:generation-1000"),
+    ).toBe(false);
+    expect(first.limitations).toContain(
+      "Readiness detail is limited to the first 1,000 checks; 1 additional check omitted.",
+    );
+    expect(first.limitations).toContain(
+      "Runtime and comparison detail is limited to the first 32 targets; 1 additional target omitted.",
+    );
+    expect(first.limitations).toContain(
+      "Baseline comparison detail is limited to the first 1,000 generations; 1 additional generation omitted.",
+    );
+    expect(first.comparison?.facts).toHaveLength(14);
+    expect(
+      first.comparison?.facts.find(
+        ({ key }) => key === "migrationHistorySha256",
+      )?.state,
+    ).toBe("unavailable");
+    expect(renderVerificationReportJson(first)).toBe(
+      renderVerificationReportJson(second),
+    );
+    expect(renderVerificationReportMarkdown(first)).toBe(
+      renderVerificationReportMarkdown(second),
+    );
+    const content =
+      renderVerificationReportJson(first) +
+      renderVerificationReportMarkdown(first);
+    expect(content).not.toMatch(
+      /check-1000|target-32|generation-1000|private-row-canary|credential-canary|raw-migration-canary|\/private/u,
+    );
+    expect(content).toContain("1 additional check omitted");
+    expect(Buffer.byteLength(content)).toBeLessThan(1_500_000);
+  });
 });

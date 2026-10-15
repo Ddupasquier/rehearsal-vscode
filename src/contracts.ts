@@ -1,4 +1,7 @@
-import { parseResourceCatalog } from "./resource_contract.js";
+import {
+  parseEnvironmentProvenance,
+  parseResourceCatalog,
+} from "./resource_contract.js";
 import {
   parseOperationKind,
   parseOperationVersion,
@@ -252,6 +255,7 @@ export interface ResourceInventoryData {
     readonly cleanupEligibility:
       "running" | "preview-required" | "not-present" | "inspection-unavailable";
     readonly restartPolicies: readonly string[];
+    readonly provenance?: import("./resource_contract.js").EnvironmentProvenanceData;
   }[];
   readonly stale: {
     readonly stoppedCount: number;
@@ -1098,6 +1102,9 @@ export const parseResourceInventoryData = (
       cleanupEligibility:
         entry.cleanupEligibility as (typeof cleanupStates)[number],
       restartPolicies,
+      ...(entry.provenance === undefined
+        ? {}
+        : { provenance: parseEnvironmentProvenance(entry.provenance)! }),
     };
   });
   if (!isRecord(value.stale) || !Array.isArray(value.stale.targets)) {

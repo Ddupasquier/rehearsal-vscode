@@ -1,5 +1,26 @@
 import { ContractError } from "./contracts.js";
 
+export interface EnvironmentProvenanceData {
+  readonly schemaVersion: 1;
+  readonly inspectorVersion: string;
+  readonly verification: "recorded-not-reverified";
+  readonly configuredPorts: readonly {
+    readonly service: "application" | "api" | "database" | "studio";
+    readonly host: "localhost" | "127.0.0.1" | "[::1]";
+    readonly port: number;
+  }[];
+  readonly runtime: {
+    readonly rehearsalVersion: string | null;
+    readonly versionReason: "not-recorded" | null;
+    readonly baselineGenerationId: string;
+    readonly baselineDataSha256: string;
+    readonly candidateSha256: string | null;
+    readonly migrationReason:
+      "receipt-unavailable" | "receipt-does-not-match-baseline" | null;
+  } | null;
+  readonly runtimeReason: "receipt-unavailable" | "receipt-invalid" | null;
+}
+
 export interface ResourceCatalogData {
   readonly schemaVersion: 1;
   readonly images: readonly {
@@ -85,6 +106,150 @@ const imageId = (value: unknown): string => {
   if (!/^sha256:[a-f0-9]{64}$/u.test(id))
     throw new ContractError("Full image ID is required.");
   return id;
+};
+const exactKeys = (
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): void => {
+  if (Object.keys(value).some((key) => !allowed.includes(key)))
+    throw new ContractError(
+      "Environment provenance contains unsupported fields.",
+    );
+};
+const provenanceVersion = (value: unknown): string => {
+  const version = text(value);
+  if (
+    version.length > 100 ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)
+  )
+    throw new ContractError("Environment provenance version is invalid.");
+  return version;
+};
+const provenanceDigest = (value: unknown): string => {
+  const digest = text(value);
+  if (!/^[a-f0-9]{64}$/u.test(digest))
+    throw new ContractError("Environment provenance checksum is invalid.");
+  return digest;
+};
+export const parseEnvironmentProvenance = (
+  value: unknown,
+): EnvironmentProvenanceData | undefined => {
+  if (value === undefined) return undefined;
+  const data = record(value);
+  exactKeys(data, [
+    "schemaVersion",
+    "inspectorVersion",
+    "verification",
+    "configuredPorts",
+    "runtime",
+    "runtimeReason",
+  ]);
+  if (
+    data.schemaVersion !== 1 ||
+    data.verification !== "recorded-not-reverified"
+  )
+    throw new ContractError("Environment provenance schema is unsupported.");
+  const configuredPorts = array(data.configuredPorts, 4).map((entry) => {
+    const endpoint = record(entry);
+    exactKeys(endpoint, ["service", "host", "port"]);
+    const service = choice(endpoint.service, [
+      "application",
+      "api",
+      "database",
+      "studio",
+    ] as const);
+    const host = choice(endpoint.host, [
+      "localhost",
+      "127.0.0.1",
+      "[::1]",
+    ] as const);
+    const port = number(endpoint.port);
+    if (
+      port < 1024 ||
+      port > 65535 ||
+      (service !== "application" && host !== "127.0.0.1")
+    )
+      throw new ContractError("Environment provenance endpoint is invalid.");
+    return { service, host, port };
+  });
+  if (
+    new Set(configuredPorts.map((entry) => entry.service)).size !==
+      configuredPorts.length ||
+    new Set(configuredPorts.map((entry) => entry.port)).size !==
+      configuredPorts.length
+  )
+    throw new ContractError(
+      "Environment provenance service or port is duplicated.",
+    );
+  let runtime: EnvironmentProvenanceData["runtime"] = null;
+  if (data.runtime !== null) {
+    const receipt = record(data.runtime);
+    exactKeys(receipt, [
+      "rehearsalVersion",
+      "versionReason",
+      "baselineGenerationId",
+      "baselineDataSha256",
+      "candidateSha256",
+      "migrationReason",
+    ]);
+    const rehearsalVersion =
+      receipt.rehearsalVersion === null
+        ? null
+        : provenanceVersion(receipt.rehearsalVersion);
+    const versionReason =
+      receipt.versionReason === null
+        ? null
+        : choice(receipt.versionReason, ["not-recorded"] as const);
+    const baselineGenerationId = text(receipt.baselineGenerationId);
+    if (!/^\d{8}T\d{6}Z-[a-f0-9]{12}$/u.test(baselineGenerationId))
+      throw new ContractError("Environment provenance generation is invalid.");
+    const candidateSha256 =
+      receipt.candidateSha256 === null
+        ? null
+        : provenanceDigest(receipt.candidateSha256);
+    const migrationReason =
+      receipt.migrationReason === null
+        ? null
+        : choice(receipt.migrationReason, [
+            "receipt-unavailable",
+            "receipt-does-not-match-baseline",
+          ] as const);
+    if (
+      (rehearsalVersion === null) !== (versionReason !== null) ||
+      (candidateSha256 === null) !== (migrationReason !== null) ||
+      data.runtimeReason !== null
+    )
+      throw new ContractError(
+        "Environment provenance contradicts its availability.",
+      );
+    runtime = {
+      rehearsalVersion,
+      versionReason,
+      baselineGenerationId,
+      baselineDataSha256: provenanceDigest(receipt.baselineDataSha256),
+      candidateSha256,
+      migrationReason,
+    };
+  }
+  const runtimeReason =
+    data.runtimeReason === null
+      ? null
+      : choice(data.runtimeReason, [
+          "receipt-unavailable",
+          "receipt-invalid",
+        ] as const);
+  if ((runtime === null) !== (runtimeReason !== null))
+    throw new ContractError(
+      "Environment provenance contradicts its availability.",
+    );
+  return {
+    schemaVersion: 1,
+    inspectorVersion: provenanceVersion(data.inspectorVersion),
+    verification: "recorded-not-reverified",
+    configuredPorts,
+    runtime,
+    runtimeReason,
+  };
 };
 export const parseResourceCatalog = (
   value: unknown,

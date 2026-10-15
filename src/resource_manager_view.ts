@@ -15,6 +15,24 @@ const size = (bytes: number | null): string =>
       ? `${(bytes / 1024 ** 2).toFixed(1)} MiB`
       : `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
 const time = (value: string | null): string => value ?? "Not observable";
+const environmentProvenanceMarkup = (
+  provenance: ResourceInventoryData["environments"][number]["provenance"],
+): string => {
+  if (!provenance)
+    return "<div><dt>Runtime provenance</dt><dd>Not supplied by this core version. Refresh after updating Rehearsal; do not infer it from the environment name.</dd></div>";
+  const runtime = provenance.runtime;
+  const unavailable =
+    provenance.runtimeReason === "receipt-invalid"
+      ? "The local runtime receipt is incompatible or invalid. Use Verify to inspect the prepared runtime before relying on it."
+      : "A readable local runtime receipt is unavailable. This does not prove the database is absent.";
+  return `<div><dt>Inspecting Rehearsal version</dt><dd><code>${html(provenance.inspectorVersion)}</code></dd></div>
+    <div><dt>Recorded runtime Rehearsal version</dt><dd>${runtime?.rehearsalVersion ? `<code>${html(runtime.rehearsalVersion)}</code>` : runtime ? "Not recorded by this older runtime. The inspecting version is not its creator version." : html(unavailable)}</dd></div>
+    <div><dt>Recorded baseline generation</dt><dd>${runtime ? `<code>${html(runtime.baselineGenerationId)}</code>` : "Unavailable without a valid local receipt"}</dd></div>
+    <div><dt>Recorded baseline data SHA-256</dt><dd>${runtime ? `<code>${html(runtime.baselineDataSha256)}</code>` : "Unavailable without a valid local receipt"}</dd></div>
+    <div><dt>Recorded candidate migration digest</dt><dd>${runtime?.candidateSha256 ? `<code>${html(runtime.candidateSha256)}</code>` : runtime?.migrationReason === "receipt-does-not-match-baseline" ? "Unavailable: migration receipt does not match this runtime's baseline and provider." : "Unavailable: no matching migration receipt was recorded."}</dd></div>
+    <div><dt>Configured loopback ports</dt><dd>${provenance.configuredPorts.map((endpoint) => `<span><code>${html(endpoint.service)} · ${html(endpoint.host)}:${endpoint.port}</code></span>`).join("<br />") || "Not supplied"}<small>Configuration facts, not a probe that these addresses are listening.</small></dd></div>
+    <div><dt>Provenance scope</dt><dd>Recorded local receipts only. This inspection did not reverify database contents, migration history, or baseline checksums; use Verify for fresh evidence.</dd></div>`;
+};
 const attributes = (
   kind: string,
   name: string,
@@ -122,15 +140,15 @@ export const resourceManagerMarkup = (
         ) => `<article class="resource-card" ${attributes("environment", `${entry.displayName ?? entry.target} ${entry.projectId}`, `${entry.state}${entry.protected ? " protected" : ""}`, "project", entry.diskUsageBytes, entry.createdAt, entry.lastActivityAt, entry.target)}>
       <div class="resource-card__heading"><strong>${html(entry.displayName ?? entry.target)}</strong><span class="state-chip">${html(entry.state)}${entry.protected ? " · protected" : ""}</span></div>
       <p>${html(entry.provider)} · ${entry.containerCount} containers · ${entry.volumeCount} data volumes · ${size(entry.diskUsageBytes)}</p>
-      <p>Last activity: ${html(time(entry.lastActivityAt))}</p>
-      <details><summary>Inspect environment</summary><dl class="resource-facts"><div><dt>Immutable ID</dt><dd><code>${html(entry.projectId)}</code></dd></div><div><dt>Target</dt><dd>${html(entry.target)}</dd></div><div><dt>CPU / memory</dt><dd>${entry.cpuPercent === null ? "Unknown" : `${entry.cpuPercent.toFixed(2)}%`} / ${size(entry.memoryUsageBytes)}</dd></div><div><dt>Created</dt><dd>${html(time(entry.createdAt))}</dd></div><div><dt>Restart policy</dt><dd>${html(entry.restartPolicies.join(", ") || "Not present")}</dd></div><div><dt>Images used across this project</dt><dd>${html(
+      <p>Last observable resource activity: ${html(time(entry.lastActivityAt))}</p>
+      <details><summary>Inspect environment</summary><dl class="resource-facts"><div><dt>Immutable ID</dt><dd><code>${html(entry.projectId)}</code></dd></div><div><dt>Target</dt><dd>${html(entry.target)}</dd></div><div><dt>CPU / memory</dt><dd>${entry.cpuPercent === null ? "Unknown" : `${entry.cpuPercent.toFixed(2)}%`} / ${size(entry.memoryUsageBytes)}</dd></div><div><dt>Oldest owned resource created</dt><dd>${html(time(entry.createdAt))}</dd></div><div><dt>Last inspected</dt><dd>${html(inventory.inspectedAt)}</dd></div>${environmentProvenanceMarkup(entry.provenance)}<div><dt>Restart policy</dt><dd>${html(entry.restartPolicies.join(", ") || "Not present")}</dd></div><div><dt>Images used across this project</dt><dd>${html(
         catalog.images
           .filter((image) =>
             image.references.some((ref) => ref.ownership === "project"),
           )
           .flatMap((image) => image.tags)
           .join(", ") || "Not observed",
-      )}</dd></div></dl></details>
+      )}</dd></div></dl><p class="control-note">This is one configured target, not a historical database copy. Named profiles select views of configured targets. Created and last observable activity come from owned container/volume metadata, not database access or user inactivity.</p></details>
       <form class="resource-environment-form" data-resource-target="${html(entry.target)}"><label><span>Friendly name</span><input name="environmentName" maxlength="100" required value="${html(entry.displayName ?? entry.target)}" /></label><label class="resource-protection"><input name="protectEnvironment" type="checkbox"${entry.protected ? " checked" : ""} /><span>Protect this environment’s data</span></label><button class="button button--secondary" type="submit">Review name & protection</button></form>
       <p class="control-note">${entry.protected ? "Protected: reset, rehearsal run, discard, and runtime cleanup are blocked until you explicitly unprotect it." : "Stopping preserves data. Discard removes this environment’s database and Storage volumes after review."}</p>
       <div class="action-group">${action(entry.target, "startRuntime", "Start", !["stopped"].includes(entry.state))}${action(entry.target, "stopRuntime", "Stop", !["running", "mixed"].includes(entry.state))}${action(entry.target, "discardRuntime", "Review discard", entry.protected || ["absent", "unavailable"].includes(entry.state))}</div>

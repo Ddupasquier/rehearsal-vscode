@@ -1,5 +1,10 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
 
+export const COMPARISON_LIMITS = {
+  runtimeTargets: 32,
+  baselineGenerations: 1000,
+} as const;
+
 export interface ComparisonSubject {
   readonly id: string;
   readonly label: string;
@@ -34,7 +39,11 @@ export const comparisonSubjects = (
   snapshot: ProjectSnapshot,
 ): readonly ComparisonSubject[] => {
   const subjects: ComparisonSubject[] = [];
-  for (const target of snapshot.runtime?.targets ?? []) {
+  const targets = (snapshot.runtime?.targets ?? []).slice(
+    0,
+    COMPARISON_LIMITS.runtimeTargets,
+  );
+  for (const target of targets) {
     const evidence = snapshot.reviewTargets?.find(
       (item) => item.name === target.name,
     );
@@ -69,11 +78,10 @@ export const comparisonSubjects = (
     });
   }
   const primaryProvider =
-    snapshot.runtime?.targets.find((target) => target.name === "primary")
-      ?.runtimeTarget ?? null;
+    targets.find((target) => target.name === "primary")?.runtimeTarget ?? null;
   for (const baseline of (snapshot.baseline?.generations ?? []).slice(
     0,
-    1000,
+    COMPARISON_LIMITS.baselineGenerations,
   )) {
     const generationId = text(baseline.generationId);
     if (generationId === null) continue;
