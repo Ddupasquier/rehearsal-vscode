@@ -152,6 +152,11 @@ const editor = vi.hoisted(() => {
       workspace: {
         workspaceFolders: [folder],
         isTrusted: true,
+        fs: {
+          writeFile: vi.fn(
+            async (_uri: ReturnType<typeof uri>, _bytes: Uint8Array) => {},
+          ),
+        },
         openTextDocument: vi.fn(),
         applyEdit: vi.fn(),
         onDidChangeWorkspaceFolders: (listener: () => void) => {
@@ -179,6 +184,7 @@ const editor = vi.hoisted(() => {
         showWarningMessage: vi.fn(),
         showErrorMessage: vi.fn(),
         showTextDocument: vi.fn(),
+        showSaveDialog: vi.fn(),
       },
       env: { openExternal: vi.fn() },
     },
@@ -332,6 +338,7 @@ afterEach(async () => {
   editor.module.workspace.applyEdit.mockReset();
   editor.module.window.showWarningMessage.mockReset();
   editor.module.window.showTextDocument.mockReset();
+  editor.module.window.showSaveDialog.mockReset();
   editor.read.mockReset();
   editor.resolvePackage.mockReset();
   editor.canonical.mockReset().mockImplementation(async (path: string) => path);
@@ -349,6 +356,78 @@ afterEach(async () => {
     );
   for (const directory of ownedDirectories.splice(0))
     await fs.rm(directory, { recursive: true, force: true });
+});
+
+describe("explicit verification-report export", () => {
+  it.each(["json", "markdown"] as const)(
+    "does not write or announce an export when the %s save dialog is cancelled",
+    async (format) => {
+      const fixture = harness();
+      editor.module.window.showSaveDialog.mockResolvedValue(undefined);
+      await fixture.owner.open(key);
+      const panel = editor.panels[0]!;
+
+      panel.receive({ type: "exportReport", format });
+      await vi.waitFor(() =>
+        expect(editor.module.window.showSaveDialog).toHaveBeenCalledOnce(),
+      );
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(editor.module.workspace.fs.writeFile).not.toHaveBeenCalled();
+      expect(editor.write).not.toHaveBeenCalled();
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalled();
+      expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+      expect(editor.read).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["json", "markdown"] as const)(
+    "writes the %s report only to its explicitly selected destination",
+    async (format) => {
+      const fixture = harness({
+        ...ready(),
+        workspaceName: "../private-path",
+        packageLocation: "/private/package-location",
+        applicationUrl: "http://localhost:5175/private-app-path",
+      });
+      const destination = editor.uri("/chosen/report-output");
+      editor.module.window.showSaveDialog.mockResolvedValue(destination);
+      await fixture.owner.open(key);
+
+      editor.panels[0]!.receive({ type: "exportReport", format });
+      await vi.waitFor(() =>
+        expect(editor.module.workspace.fs.writeFile).toHaveBeenCalledOnce(),
+      );
+      const [selected, bytes] =
+        editor.module.workspace.fs.writeFile.mock.calls[0]!;
+      expect(selected).toBe(destination);
+      const content = new TextDecoder().decode(bytes);
+      expect(content).not.toMatch(
+        /\/private|private-app-path|package-location/u,
+      );
+      if (format === "json") {
+        const report = JSON.parse(content);
+        expect(report.schemaVersion).toBe(1);
+        expect(report.versions.extension).toBe("0.1.2");
+      } else {
+        expect(content).toContain("# Rehearsal verification report");
+      }
+      expect(content).toContain("unsigned");
+      expect(editor.write).not.toHaveBeenCalled();
+      expect(editor.read).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not ask for a destination or write for an unsupported export format", async () => {
+    const fixture = harness();
+    await fixture.owner.open(key);
+    editor.panels[0]!.receive({ type: "exportReport", format: "shell" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(editor.module.window.showSaveDialog).not.toHaveBeenCalled();
+    expect(editor.module.workspace.fs.writeFile).not.toHaveBeenCalled();
+  });
 });
 
 const reviewHarness = (

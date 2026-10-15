@@ -143,4 +143,27 @@ describe("reviewed environment comparison", () => {
     expect(subjects[1]?.migrationHistorySha256).toBeNull();
     expect(JSON.stringify(subjects)).not.toMatch(/private|localhost/u);
   });
+
+  it("caps runtime comparison subjects at the same thirty-two-target report boundary", () => {
+    const snapshot: ProjectSnapshot = {
+      workspaceName: "Many targets",
+      workspaceRoot: "/private/many-targets",
+      availability: "ready",
+      runtime: {
+        state: "stopped",
+        targets: Array.from({ length: 33 }, (_, index) => ({
+          name: `target-${index}`,
+          state: "stopped" as const,
+          reason: "runtime_not_running" as const,
+          runtimeTarget: "postgresql" as const,
+          verifiedRuntimeAvailable: false,
+          endpoint: null,
+        })),
+      },
+    };
+    const subjects = comparisonSubjects(snapshot);
+    expect(subjects).toHaveLength(32);
+    expect(subjects.at(-1)?.id).toBe("target:target-31");
+    expect(subjects.some(({ id }) => id === "target:target-32")).toBe(false);
+  });
 });

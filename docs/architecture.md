@@ -5,17 +5,20 @@
 | Decision      | Product-candidate contract                                                |
 | ------------- | ------------------------------------------------------------------------- |
 | Repository    | Separate sibling repository: `rehearsal-vscode`                           |
-| Visibility    | Private commercial preview until publication receives separate approval   |
+| Visibility    | Public repository and reviewed GitHub VSIX prereleases                    |
 | Display name  | Rehearsal                                                                 |
 | Extension ID  | `rehearsal-db.rehearsal`                                                  |
 | Publisher     | `rehearsal-db` is reserved in metadata; no Marketplace account is assumed |
 | Product owner | Rehearsal project, administered by Ddupasquier                            |
 | License       | Commercial preview per user; Rehearsal core remains MIT                   |
-| Version       | `0.1.3` commercial preview candidate                                      |
+| Version       | Owned by `package.json`; each released VSIX identifies its exact version  |
 
-Packaging a reviewed commercial-preview candidate is authorized. Marketplace publication,
-publisher/account creation, public pricing, payment setup, and distribution still require
-their own reviewed release decision.
+Public GitHub source and VSIX prereleases do not establish a Marketplace listing or paid
+launch. Each artifact still follows its reviewed release decision. Marketplace publication,
+publisher/account creation, public pricing, payment setup and a paid launch require their
+own approval; repository visibility is not that approval.
+The manifest's `private: true` prevents npm publication; it does not describe GitHub
+repository visibility or prevent reviewed VSIX packaging.
 
 ## Technical foundation
 
@@ -84,8 +87,8 @@ their own reviewed release decision.
   integrated terminal.
 - English is the only reviewed prototype language. User-facing strings must remain easy
   to extract before a public localization commitment.
-- Development checkouts update through Git only. Automatic updates begin only after a
-  separately approved Marketplace or private-distribution decision.
+- Development checkouts update through Git; packaged GitHub prereleases update through
+  explicit VSIX installation. No automatic extension-update channel is installed.
 
 ## Runtime boundary
 
@@ -103,6 +106,20 @@ search/sort/filter state is harmless editor preference data; environment labels 
 protection remain core-owned configuration fields. The configuration editor can insert or
 replace only those two literal fields in one plain runtime object and refuses ambiguous
 or expression-based forms.
+
+Each inventory environment may supply optional provenance schema 1. It projects only
+bounded, target-local runtime receipt fields: the recorded restore-writer Rehearsal version,
+baseline generation/data checksum and candidate migration digest. The inspector version is
+separate. New restores record their writer version; missing legacy metadata stays unknown.
+Receipt provenance is explicitly `recorded-not-reverified`: it does not verify current
+database contents, baseline files or migration history. Configured loopback service and
+application ports come from reviewed configuration, not a listening-port probe. Missing,
+malformed, incompatible or foreign receipt paths cannot lend facts to another target.
+Created times describe the oldest observed owned resource; last observable activity is
+container start/stop or volume metadata, not database access or user inactivity. Inspection
+time is separately labeled. No new environment registry or historical-copy inference exists.
+Named profiles are reviewed display views of configured targets and optional local browser
+addresses; selecting one never creates a copy or changes operation scope.
 
 Resource messages contain only a configured target, an allowlisted action, or selected
 full image IDs. The host maps targets back to the current core snapshot. Image cleanup
@@ -262,10 +279,22 @@ These checks do not claim to lock out ordinary manual filesystem edits by other 
 - Telemetry is absent. Settings Sync may carry only the optional relative config path and
   bounded inspection timeout.
 
+## Evidence export bounds
+
+Markdown and JSON exports use an explicit metadata allowlist, never a serialized raw
+snapshot. Aggregate counts remain aggregate evidence where supplied. Readiness detail is
+limited to the first 1,000 checks, runtime/comparison detail to 32 targets, and retained
+baseline comparison detail to 1,000 generations. When any list exceeds its limit, the
+export includes an omission notice with the number omitted. Capped detail never implies
+that omitted checks passed or additional targets were exercised. Export requires an
+explicit save destination; it does not upload or share the report automatically.
+
 ## Commercial boundary
 
 The extension supports a manually fulfilled 14-day evaluation and per-user commercial
 preview without telemetry, an account, or a hosted license service. The accepted order is
 the entitlement record. License failure or expiration never changes Rehearsal core and
-cannot block CLI recovery. Automated checkout, entitlement enforcement, Marketplace
-publication, pricing, and refunds remain separately reviewed operational decisions.
+cannot block CLI recovery. Public GitHub prereleases are a technical distribution channel,
+not proof that commercial launch gates passed. A paid launch, automated checkout,
+entitlement enforcement, Marketplace publication, pricing and refunds remain separately
+reviewed operational decisions.

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.4 — Environment provenance and evidence bounds
+
+- Adds optional per-target runtime provenance to **Inspect environment**: recorded
+  restore-writer version, baseline generation and data checksum, candidate migration
+  digest, and configured loopback ports. The inspecting package version is separate;
+  legacy receipts remain unknown rather than borrowing current values.
+- Labels receipt facts as recorded, not freshly verified. Configured ports are not
+  listening-port checks, and container/volume timestamps do not prove user inactivity.
+  Named profiles remain views of configured targets, not additional database copies.
+- Preserves aggregate evidence while bounding export detail to 1,000 readiness checks,
+  32 runtime targets and 1,000 baseline generations. Exports identify omitted detail
+  instead of silently truncating it.
+- Clarifies public GitHub source and VSIX prerelease availability. Marketplace
+  publication, billing and a paid launch remain separate approval gates.
+
 ## 0.1.3 — Resource and evidence workbench candidate
 
 - Adds browsable environments, persistent volumes, shared images and other projects,
