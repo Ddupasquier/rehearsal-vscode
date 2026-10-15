@@ -18,10 +18,18 @@ describe("workspace preferences", () => {
         profile: "primary",
       }),
     ).toEqual({
+      resourceQuery: "",
+      resourceKind: "all",
+      resourceState: "all",
+      resourceOwnership: "all",
+      resourceSort: "name",
       migrationQuery: "accounts",
       migrationSort: "target",
       selectedTarget: "publication",
       migrationStatus: "candidate",
+      migrationFrom: "",
+      migrationTo: "",
+      migrationWarning: "all",
       applicationUrl: "http://localhost:5175",
       profile: "primary",
     });

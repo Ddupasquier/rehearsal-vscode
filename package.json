@@ -2,7 +2,7 @@
   "name": "rehearsal",
   "displayName": "Rehearsal",
   "description": "See whether database changes are ready for a safe local rehearsal without memorizing CLI commands.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "publisher": "rehearsal-db",
   "license": "SEE LICENSE IN LICENSE",
@@ -22,7 +22,7 @@
   "homepage": "https://ddupasquier.github.io/rehearsal-db/",
   "icon": "media/rehearsal-readme.png",
   "engines": {
-    "vscode": "^1.96.0",
+    "vscode": "^1.101.0",
     "node": ">=22 <27"
   },
   "extensionKind": [

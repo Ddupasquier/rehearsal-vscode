@@ -22,6 +22,7 @@ export type WorkspaceActionId =
   | "openApplication"
   | "documentation"
   | "showOutput"
+  | "inspectionSettings"
   | "cancelOwnedOperation"
   | "manageTrust";
 
@@ -47,6 +48,7 @@ export const WORKSPACE_ACTION_IDS: readonly WorkspaceActionId[] = [
   "openApplication",
   "documentation",
   "showOutput",
+  "inspectionSettings",
   "cancelOwnedOperation",
   "manageTrust",
 ];
@@ -58,6 +60,7 @@ export type WorkspaceActionKind =
   | "open_application"
   | "documentation"
   | "show_output"
+  | "inspection_settings"
   | "cancel_owned_operation"
   | "manage_trust";
 
@@ -139,6 +142,13 @@ export const workspaceActionPlan = (
   snapshot: ProjectSnapshot,
   id: WorkspaceActionId,
 ): WorkspaceActionPlan | null => {
+  if (
+    ["runRehearsal", "migrate", "reset", "discardRuntime"].includes(id) &&
+    snapshot.resources?.environments.some(
+      (environment) => environment.protected,
+    )
+  )
+    return null;
   switch (id) {
     case "refresh":
       return {
@@ -146,6 +156,15 @@ export const workspaceActionPlan = (
         kind: "refresh",
         label: "Refresh project",
         detail: "Read the latest safe project state.",
+      };
+    case "inspectionSettings":
+      if (snapshot.error?.code !== "timeout") return null;
+      return {
+        id,
+        kind: "inspection_settings",
+        label: "Adjust inspection timeout",
+        detail:
+          "Open this workspace's bounded Rehearsal inspection timeout setting.",
       };
     case "installPackage":
       if (snapshot.availability !== "package_missing") return null;
@@ -256,7 +275,11 @@ export const workspaceActionPlan = (
         },
       );
     case "openSandbox":
-      if (snapshot.availability !== "ready" || !hasVerifiedRuntime(snapshot))
+      if (
+        snapshot.availability !== "ready" ||
+        !hasVerifiedRuntime(snapshot) ||
+        !snapshot.configuration?.application.readinessUrl
+      )
         return null;
       return terminalPlan(
         snapshot,

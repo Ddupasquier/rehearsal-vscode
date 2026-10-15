@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
-import { readFile, realpath, stat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   ContractError,
   parseEnvelope,
@@ -15,6 +17,7 @@ import type {
 
 const PACKAGE_NAME = "@rehearsal-db/core";
 const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
+const MAXIMUM_MANIFEST_BYTES = 1024 * 1024;
 
 export type AdapterFailureCode =
   | "package_missing"
@@ -60,6 +63,10 @@ export interface ResolvedRehearsal {
   readonly binPath: string;
   readonly version: string;
   readonly projectDiscoverySchema: 1 | null;
+  readonly resourceInventorySchema: 1 | null;
+  readonly resourceManagerSchema: 1 | null;
+  readonly migrationReviewSchema: 1 | null;
+  readonly configurationReviewSchema: 1 | null;
 }
 
 export interface RunOptions {
@@ -84,10 +91,17 @@ const inside = (parent: string, child: string): boolean => {
 };
 
 const binFromManifest = (bin: unknown): string | undefined => {
-  if (typeof bin === "string") return bin;
+  const bounded = (value: unknown): string | undefined =>
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 1000 &&
+    !/[\x00-\x1f\x7f]/u.test(value)
+      ? value
+      : undefined;
+  if (typeof bin === "string") return bounded(bin);
   if (bin && typeof bin === "object" && !Array.isArray(bin)) {
     const entry = (bin as Record<string, unknown>).rehearsal;
-    return typeof entry === "string" ? entry : undefined;
+    return bounded(entry);
   }
   return undefined;
 };
@@ -98,6 +112,47 @@ const pathExists = async (path: string): Promise<boolean> => {
     return true;
   } catch {
     return false;
+  }
+};
+
+/** Read through a bounded handle and reject final or ancestor link escapes. */
+const readPackageManifest = async (
+  packageRoot: string,
+  manifestPath: string,
+): Promise<PackageManifest> => {
+  const canonical = await realpath(manifestPath);
+  if (!inside(packageRoot, canonical))
+    throw new Error("manifest outside package");
+  const handle = await open(
+    canonical,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const details = await handle.stat();
+    if (!details.isFile() || details.size > MAXIMUM_MANIFEST_BYTES)
+      throw new Error("manifest exceeds bounded regular-file contract");
+    const bytes = Buffer.alloc(MAXIMUM_MANIFEST_BYTES + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const result = await handle.read(
+        bytes,
+        offset,
+        bytes.length - offset,
+        null,
+      );
+      if (!result.bytesRead) break;
+      offset += result.bytesRead;
+    }
+    if (offset > MAXIMUM_MANIFEST_BYTES)
+      throw new Error("manifest grew beyond bounded contract");
+    const parsed: unknown = JSON.parse(
+      bytes.subarray(0, offset).toString("utf8"),
+    );
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("manifest must be an object");
+    return parsed as PackageManifest;
+  } finally {
+    await handle.close();
   }
 };
 
@@ -159,9 +214,7 @@ export const resolveWorkspaceRehearsal = async (
   const manifestPath = join(packageRoot, "package.json");
   let manifest: PackageManifest;
   try {
-    manifest = JSON.parse(
-      await readFile(manifestPath, "utf8"),
-    ) as PackageManifest;
+    manifest = await readPackageManifest(packageRoot, manifestPath);
   } catch {
     throw new AdapterError(
       "package_invalid",
@@ -181,20 +234,24 @@ export const resolveWorkspaceRehearsal = async (
       "The workspace Rehearsal package does not declare its public CLI.",
     );
   }
-  const binPath = resolve(packageRoot, declaredBin);
-  if (!inside(packageRoot, binPath)) {
+  const declaredBinPath = resolve(packageRoot, declaredBin);
+  if (!inside(packageRoot, declaredBinPath)) {
     throw new AdapterError(
       "package_invalid",
       "The workspace Rehearsal package declares a CLI outside its package.",
     );
   }
+  let binPath: string;
   try {
+    binPath = await realpath(declaredBinPath);
+    if (!inside(packageRoot, binPath))
+      throw new Error("bin link outside package");
     const metadata = await stat(binPath);
     if (!metadata.isFile()) throw new Error("not a file");
   } catch {
     throw new AdapterError(
       "package_invalid",
-      "The workspace Rehearsal CLI file is missing.",
+      "The workspace Rehearsal CLI must resolve to a regular file inside its package.",
     );
   }
   const contracts =
@@ -209,6 +266,10 @@ export const resolveWorkspaceRehearsal = async (
     binPath,
     version: manifest.version,
     projectDiscoverySchema: contracts.projectDiscovery === 1 ? 1 : null,
+    resourceInventorySchema: contracts.resourceInventory === 1 ? 1 : null,
+    resourceManagerSchema: contracts.resourceManager === 1 ? 1 : null,
+    migrationReviewSchema: contracts.migrationReview === 1 ? 1 : null,
+    configurationReviewSchema: contracts.configurationReview === 1 ? 1 : null,
   };
 };
 
@@ -244,16 +305,93 @@ const stopOwnedProcess = (
   child: ReturnType<typeof spawn>,
   signal: NodeJS.Signals,
 ) => {
-  if (!child.pid || child.exitCode !== null) return;
+  if (!child.pid) return;
   if (process.platform !== "win32") {
     try {
       process.kill(-child.pid, signal);
       return;
-    } catch {
-      // Fall back to the direct process below.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
+      // Fall back only to the still-running direct process we started.
     }
   }
-  child.kill(signal);
+  if (child.exitCode === null && child.signalCode === null) {
+    try {
+      child.kill(signal);
+    } catch {
+      // Bounded group revalidation below reports any workload that remains.
+    }
+  }
+};
+
+type OwnedProcessState = "present" | "absent" | "unknown";
+
+export const ownedProcessState = (
+  child: Pick<ReturnType<typeof spawn>, "pid" | "exitCode" | "signalCode">,
+  killImplementation: typeof process.kill = process.kill,
+): OwnedProcessState => {
+  if (!child.pid) return "absent";
+  if (process.platform === "win32")
+    return child.exitCode === null && child.signalCode === null
+      ? "present"
+      : "absent";
+  try {
+    // The detached group's identity does not expire when its launcher exits.
+    killImplementation(-child.pid, 0);
+    return "present";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH"
+      ? "absent"
+      : "unknown";
+  }
+};
+
+/** Unknown probes permit bounded read-only convergence, never another signal. */
+export const retireOwnedProcessGroup = async ({
+  probe,
+  send,
+  now = () => performance.now(),
+  pause = (milliseconds) =>
+    new Promise<void>((resolvePromise) =>
+      setTimeout(resolvePromise, milliseconds),
+    ),
+}: {
+  readonly probe: () => OwnedProcessState;
+  readonly send: (signal: "SIGTERM" | "SIGKILL") => void;
+  readonly now?: () => number;
+  readonly pause?: (milliseconds: number) => Promise<void>;
+}): Promise<void> => {
+  const waitUntilGone = async (): Promise<OwnedProcessState> => {
+    const deadline = now() + 500;
+    let state = probe();
+    while (state !== "absent" && now() < deadline) {
+      await pause(10);
+      state = probe();
+    }
+    return state;
+  };
+  let state = probe();
+  if (state === "absent") return;
+  if (state === "present") {
+    send("SIGTERM");
+    state = await waitUntilGone();
+    if (state === "present") {
+      send("SIGKILL");
+      state = await waitUntilGone();
+    }
+  } else state = await waitUntilGone();
+  if (state !== "absent")
+    throw new AdapterError(
+      "process_failed",
+      "Owned Rehearsal inspection process-group cleanup is unverified; no further signals were sent. Review before retrying. No unrelated process was signalled.",
+    );
+};
+
+const retireOwnedProcess = (child: ReturnType<typeof spawn>): Promise<void> => {
+  return retireOwnedProcessGroup({
+    probe: () => ownedProcessState(child),
+    send: (signal) => stopOwnedProcess(child, signal),
+  });
 };
 
 const runProcess = async ({
@@ -298,10 +436,40 @@ const runProcess = async ({
     let stderrBytes = 0;
     let settled = false;
     let reason: AdapterError | undefined;
+    let retirement: Promise<void> | undefined;
+    const retire = () => (retirement ??= retireOwnedProcess(child));
+    const complete = async (code: number | null, failedToStart = false) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      try {
+        await retire();
+        if (reason) reject(reason);
+        else if (failedToStart)
+          reject(
+            new AdapterError(
+              "process_failed",
+              "The Rehearsal process could not start.",
+            ),
+          );
+        else
+          resolvePromise({
+            stdout: Buffer.concat(stdout).toString("utf8"),
+            stderrBytes,
+            exitCode: code ?? 10,
+          });
+      } catch (error) {
+        reject(reason ?? error);
+      } finally {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }
+    };
     const stop = (error: AdapterError) => {
+      if (settled) return;
       reason ??= error;
-      stopOwnedProcess(child, "SIGTERM");
-      setTimeout(() => stopOwnedProcess(child, "SIGKILL"), 500).unref();
+      void complete(null);
     };
     const timeout = setTimeout(
       () => stop(new AdapterError("timeout", timeoutMessage)),
@@ -334,34 +502,13 @@ const runProcess = async ({
         );
       }
     });
-    child.once("error", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      reject(
-        reason ??
-          new AdapterError(
-            "process_failed",
-            "The Rehearsal process could not start.",
-          ),
-      );
+    child.once("error", () => void complete(null, true));
+    child.once("exit", () => {
+      // `close` may be held open by descendants that inherited a stdio pipe.
+      // Retire this exact owned group even after its launcher has exited.
+      void retire().catch(() => undefined);
     });
-    child.once("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      if (reason) {
-        reject(reason);
-        return;
-      }
-      resolvePromise({
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderrBytes,
-        exitCode: code ?? 10,
-      });
-    });
+    child.once("close", (code) => void complete(code));
   });
 
 const validatedConfigArgument = async (
@@ -388,8 +535,14 @@ const validatedConfigArgument = async (
 
 export const runVersion = async (
   workspaceRoot: string,
-  options: Pick<RunOptions, "signal" | "environment"> = {},
+  options: Pick<RunOptions, "signal" | "environment" | "timeoutMs"> = {},
 ): Promise<VersionResult> => {
+  const timeoutMs = options.timeoutMs ?? 90_000;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000)
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "Version inspection needs a bounded timeout of at most 300 seconds.",
+    );
   const resolved = await resolveWorkspaceRehearsal(workspaceRoot);
   const execution = await runProcess({
     binPath: resolved.binPath,
@@ -397,9 +550,9 @@ export const runVersion = async (
     cwd: workspaceRoot,
     environment: editorEnvironment(options.environment),
     ...(options.signal ? { signal: options.signal } : {}),
-    timeoutMs: 5_000,
+    timeoutMs,
     outputLimitBytes: DEFAULT_OUTPUT_LIMIT,
-    timeoutMessage: "The Rehearsal version check took longer than 5 seconds.",
+    timeoutMessage: `The Rehearsal version check took longer than ${Math.ceil(timeoutMs / 1000)} seconds.`,
   });
   if (execution.exitCode !== 0) {
     throw new AdapterError(

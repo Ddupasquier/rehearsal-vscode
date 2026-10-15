@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   applyConfigurationProposal,
+  configurationDiff,
+  configurationProposalChanges,
   parseConfigurationProposal,
+  parseStructuredConfigurationValues,
 } from "../src/configuration_editor.js";
+import { editLiteralConfiguration } from "../src/literal_configuration.js";
 
 const source = `export default {
   application: {
@@ -17,6 +21,385 @@ const source = `export default {
 `;
 
 describe("configuration proposals", () => {
+  it("shows a profile insertion without mislabeling subsequent settings as changes", () => {
+    const before =
+      'export default {\n  schemaVersion: 1,\n  application: { startCommand: "npm run dev" },\n};\n';
+    const after = before.replace(
+      "  schemaVersion",
+      '  profiles: [{ name: "Manual test", targets: ["primary"] }],\n  schemaVersion',
+    );
+    const diff = configurationDiff({
+      path: "rehearsal.config.mjs",
+      before,
+      after,
+    });
+    expect(diff).toContain(
+      '+  profiles: [{ name: "Manual test", targets: ["primary"] }],',
+    );
+    expect(
+      diff
+        .split("\n")
+        .filter((line) => line.startsWith("-") && !line.startsWith("---")),
+    ).toEqual([]);
+    expect(diff).toContain('   application: { startCommand: "npm run dev" },');
+    expect(
+      configurationDiff({ path: "config.mjs", before: after, after: before }),
+    ).toContain(
+      '-  profiles: [{ name: "Manual test", targets: ["primary"] }],',
+    );
+  });
+  it("bounds replacement context and keeps unchanged input free of invented changes", () => {
+    const before = Array.from(
+      { length: 100 },
+      (_, index) => `setting-${index}`,
+    ).join("\n");
+    const after = before.replace("setting-50", "replacement");
+    const diff = configurationDiff({ path: "config.mjs", before, after });
+    expect(diff).toContain("-setting-50\n+replacement");
+    expect(diff).toContain("@@ -48,7 +48,7 @@");
+    expect(diff).not.toContain("setting-46");
+    expect(diff).not.toContain("setting-54");
+    expect(
+      configurationDiff({ path: "config.mjs", before, after: before }),
+    ).toBe("--- a/config.mjs\n+++ b/config.mjs\n");
+  });
+  it("proposes activity and foreground idle settings independently without guessing application instrumentation", () => {
+    const metadata = {
+      schemaVersion: 1 as const,
+      path: "rehearsal.config.mjs",
+      sourceSha256: "a".repeat(64),
+      profiles: [],
+      pathResolution: "Project root",
+      manualFields: "Manual review",
+      fields: [
+        { path: "application.activity.url", kind: "local-url", value: null },
+        {
+          path: "lifecycle.openIdleTimeoutSeconds",
+          kind: "nullable-integer",
+          value: null,
+        },
+      ].map((field) => ({
+        ...field,
+        provenance: "validated-active-configuration" as const,
+        confidence: "certain" as const,
+        reviewRequired: true as const,
+      })),
+    };
+    expect(
+      parseStructuredConfigurationValues(
+        {
+          fields: {
+            "application.activity.url": "http://localhost:5175/activity",
+            "lifecycle.openIdleTimeoutSeconds": "60",
+          },
+        },
+        metadata,
+      ),
+    ).toEqual([
+      {
+        path: "application.activity.url",
+        value: "http://localhost:5175/activity",
+      },
+      { path: "lifecycle.openIdleTimeoutSeconds", value: 60 },
+    ]);
+    expect(
+      parseStructuredConfigurationValues(
+        {
+          fields: {
+            "application.activity.url": "",
+            "lifecycle.openIdleTimeoutSeconds": "",
+          },
+        },
+        metadata,
+      ),
+    ).toEqual([]);
+    const configured = {
+      ...metadata,
+      fields: metadata.fields.map((field) => ({
+        ...field,
+        value:
+          field.kind === "local-url" ? "http://localhost:5175/activity" : 60,
+      })),
+    };
+    expect(
+      parseStructuredConfigurationValues(
+        {
+          fields: {
+            "application.activity.url": "",
+            "lifecycle.openIdleTimeoutSeconds": "",
+          },
+        },
+        configured,
+      ),
+    ).toEqual([
+      { path: "application.activity.url", value: null },
+      { path: "lifecycle.openIdleTimeoutSeconds", value: null },
+    ]);
+    for (const value of ["29", "86401", "30.5", "0", "NaN"])
+      expect(() =>
+        parseStructuredConfigurationValues(
+          { fields: { "lifecycle.openIdleTimeoutSeconds": value } },
+          metadata,
+        ),
+      ).toThrow();
+    for (const value of [
+      "http://localhost/activity",
+      "http://localhost:1000/activity",
+      "http://localhost:5175/activity?secret=1",
+      "http://PRIVATE_CANARY@localhost:5175/activity",
+    ]) {
+      let failure: unknown;
+      try {
+        parseStructuredConfigurationValues(
+          { fields: { "application.activity.url": value } },
+          metadata,
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(String(failure)).not.toContain("PRIVATE_CANARY");
+      expect(String(failure)).not.toContain(value);
+    }
+  });
+  it("maps the exact proposed browser field for core review without inventing a readiness change", () => {
+    const proposal = parseConfigurationProposal({
+      applicationUrl: "http://127.0.0.1:6000/app",
+    });
+    expect(configurationProposalChanges(proposal)).toEqual([
+      { path: "runtime.applicationUrl", value: "http://127.0.0.1:6000/app" },
+    ]);
+    expect(
+      applyConfigurationProposal({ source, proposal }).changedFields,
+    ).toEqual(
+      configurationProposalChanges(proposal).map((change) => change.path),
+    );
+    expect(configurationProposalChanges({ protectEnvironment: false })).toEqual(
+      [{ path: "runtime.protected", value: false }],
+    );
+    expect(configurationProposalChanges({})).toEqual([]);
+    expect(() =>
+      configurationProposalChanges({
+        applicationUrl: "http://localhost:5175",
+        surprise: "do-not-copy",
+      } as Parameters<typeof configurationProposalChanges>[0]),
+    ).toThrow("Unknown configuration proposal field");
+  });
+  it("skips absent readiness on full-form submissions and hides malformed profile contents", () => {
+    const metadata = {
+      schemaVersion: 1 as const,
+      path: "rehearsal.config.mjs",
+      sourceSha256: "a".repeat(64),
+      profiles: [],
+      pathResolution: "project root",
+      manualFields: "manual",
+      fields: [
+        {
+          path: "application.readiness.url",
+          kind: "local-url",
+          value: null,
+          provenance: "validated-active-configuration" as const,
+          confidence: "certain" as const,
+          reviewRequired: true as const,
+        },
+        {
+          path: "resources.maximumBytes",
+          kind: "nullable-integer",
+          value: null,
+          provenance: "validated-active-configuration" as const,
+          confidence: "certain" as const,
+          reviewRequired: true as const,
+        },
+        {
+          path: "runtime.displayName",
+          kind: "text",
+          value: "Old",
+          provenance: "validated-active-configuration" as const,
+          confidence: "certain" as const,
+          reviewRequired: true as const,
+        },
+        {
+          path: "profiles",
+          kind: "profiles",
+          value: [],
+          provenance: "validated-active-configuration" as const,
+          confidence: "certain" as const,
+          reviewRequired: true as const,
+        },
+      ],
+    };
+    expect(
+      parseStructuredConfigurationValues(
+        {
+          fields: {
+            "application.readiness.url": "",
+            "resources.maximumBytes": "",
+            "runtime.displayName": "New",
+          },
+        },
+        metadata,
+      ),
+    ).toEqual([{ path: "runtime.displayName", value: "New" }]);
+    try {
+      parseStructuredConfigurationValues(
+        { fields: { profiles: "PRIVATE_CANARY_NOT_JSON" } },
+        metadata,
+      );
+      throw new Error("Expected failure");
+    } catch (error) {
+      expect(String(error)).not.toContain("PRIVATE_CANARY");
+    }
+  });
+  it("does not create a partial readiness owner when changing a non-web project's address", () => {
+    const original = `export default { application: { startCommand: 'node app.mjs', proofCommand: 'npm test' }, runtime: { applicationUrl: 'http://localhost:5175', databasePort: 5432 } };`;
+    const result = applyConfigurationProposal({
+      source: original,
+      proposal: { applicationUrl: "http://localhost:5176" },
+    });
+    expect(result.source).not.toContain("readiness");
+    expect(result.changedFields).toEqual(["runtime.applicationUrl"]);
+  });
+  it("preserves a separately reviewed health endpoint when changing the browser address", () => {
+    const original = source.replace(
+      'url: "http://localhost:5175"',
+      'url: "http://localhost:5175/health"',
+    );
+    const result = applyConfigurationProposal({
+      source: original,
+      proposal: parseConfigurationProposal({
+        applicationUrl: "http://127.0.0.1:6000/app",
+      }),
+    });
+    expect(result.source).toContain(
+      'applicationUrl: "http://127.0.0.1:6000/app"',
+    );
+    expect(result.source).toContain(
+      'readiness: { url: "http://localhost:5175/health", expectedStatus: 200 }',
+    );
+    expect(result.changedFields).toEqual(["runtime.applicationUrl"]);
+    expect(original).toContain('applicationUrl: "http://localhost:5175"');
+  });
+  it.each([
+    "readiness: null",
+    "readiness: { url: null }",
+    "readiness: { url: localReadinessUrl() }",
+    "readiness: makeReadinessConfiguration()",
+  ])("does not interpret or overwrite unrelated %s", (readiness) => {
+    const original = `export default { application: { startCommand: "npm run dev", ${readiness} }, runtime: { applicationUrl: "http://localhost:5175" } };`;
+    const result = applyConfigurationProposal({
+      source: original,
+      proposal: { applicationUrl: "http://[::1]:5176/app" },
+    });
+    expect(result.source).toContain(readiness);
+    expect(result.source).toContain('applicationUrl: "http://[::1]:5176/app"');
+    expect(result.changedFields).toEqual(["runtime.applicationUrl"]);
+  });
+  it("leaves both URLs unchanged for a blank or already-matching browser-address proposal", () => {
+    for (const raw of [
+      { applicationUrl: "" },
+      { applicationUrl: "http://localhost:5175" },
+    ]) {
+      const result = applyConfigurationProposal({
+        source,
+        proposal: parseConfigurationProposal(raw),
+      });
+      expect(result.source).toBe(source);
+      expect(result.changedFields).toEqual([]);
+    }
+  });
+  it("keeps an explicitly reviewed readiness edit distinct from the browser address", () => {
+    const metadata = {
+      schemaVersion: 1 as const,
+      path: "rehearsal.config.mjs",
+      sourceSha256: "a".repeat(64),
+      profiles: [],
+      pathResolution: "Project root",
+      manualFields: "Manual review",
+      fields: ["runtime.applicationUrl", "application.readiness.url"].map(
+        (path) => ({
+          path,
+          kind: "local-url",
+          value: "http://localhost:5175",
+          provenance: "validated-active-configuration" as const,
+          confidence: "certain" as const,
+          reviewRequired: true as const,
+        }),
+      ),
+    };
+    const changes = parseStructuredConfigurationValues(
+      {
+        fields: {
+          "runtime.applicationUrl": "http://127.0.0.1:6000/app",
+          "application.readiness.url": "http://127.0.0.1:6000/health",
+        },
+      },
+      metadata,
+    );
+    expect(changes).toEqual([
+      { path: "runtime.applicationUrl", value: "http://127.0.0.1:6000/app" },
+      {
+        path: "application.readiness.url",
+        value: "http://127.0.0.1:6000/health",
+      },
+    ]);
+    const edited = editLiteralConfiguration(source, changes);
+    expect(edited).toContain('applicationUrl: "http://127.0.0.1:6000/app"');
+    expect(edited).toContain(
+      'readiness: { url: "http://127.0.0.1:6000/health", expectedStatus: 200 }',
+    );
+  });
+  it("adds friendly-name and protection literals without changing technical identity", () => {
+    const result = applyConfigurationProposal({
+      source: source.replace(
+        "databasePort: 5432",
+        "projectId: 'immutable-rehearsal', databasePort: 5432",
+      ),
+      proposal: parseConfigurationProposal({
+        environmentName: "Migration experiment",
+        protectEnvironment: true,
+      }),
+    });
+    expect(result.source).toContain('displayName: "Migration experiment"');
+    expect(result.source).toContain("protected: true");
+    expect(result.source).toContain("projectId: 'immutable-rehearsal'");
+    expect(result.changedFields).toEqual([
+      "runtime.displayName",
+      "runtime.protected",
+    ]);
+  });
+  it("updates both resource fields regardless of order and preserves comments", () => {
+    const original = `export default { runtime: { protected: true, displayName: "A", projectId: "stable" } }; // runtime: { protected: false }`;
+    const result = applyConfigurationProposal({
+      source: original,
+      proposal: { environmentName: "A longer name", protectEnvironment: false },
+    });
+    expect(result.source).toContain(
+      'protected: false, displayName: "A longer name"',
+    );
+    expect(result.source).toContain("// runtime: { protected: false }");
+  });
+  it("refuses complex or duplicate resource fields instead of guessing a config edit", () => {
+    for (const runtime of [
+      "{ ...settings, projectId: 'stable' }",
+      "{ protected: true, protected: false }",
+      "{ ['protected']: false }",
+      "{ 'protected': false }",
+      "{ protected: getProtection() }",
+    ]) {
+      expect(() =>
+        applyConfigurationProposal({
+          source: `export default { runtime: ${runtime} };`,
+          proposal: { environmentName: "Name", protectEnvironment: true },
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      parseConfigurationProposal({ protectEnvironment: "true" }),
+    ).toThrow();
+    expect(() =>
+      parseConfigurationProposal({ environmentName: "X".repeat(101) }),
+    ).toThrow();
+  });
   it("validates and applies supported literals as one reviewed patch", () => {
     const proposal = parseConfigurationProposal({
       applicationUrl: "http://127.0.0.1:6000/app",
@@ -34,12 +417,11 @@ describe("configuration proposals", () => {
       "lifecycle.run",
       "lifecycle.open",
       "cleanup.retainBaselineGenerations",
-      "application.readiness.url",
     ]);
     expect(result.source).toContain(
       'applicationUrl: "http://127.0.0.1:6000/app"',
     );
-    expect(result.source).toContain('url: "http://127.0.0.1:6000/app"');
+    expect(result.source).toContain('url: "http://localhost:5175"');
     expect(result.source).toContain("retainBaselineGenerations: 4");
   });
 

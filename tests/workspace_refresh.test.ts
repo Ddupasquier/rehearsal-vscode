@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PROJECT_REFRESH_PATHS,
+  projectRefreshPatterns,
   WorkspaceRefreshScheduler,
 } from "../src/workspace_refresh.js";
 
@@ -21,6 +22,66 @@ describe("project refresh inputs", () => {
         "rehearsal.config.mjs",
         "infrastructure/rehearsal/rehearsal.config.mjs",
       ]),
+    );
+  });
+
+  it("adds one normalized explicit configuration without duplicating known files", () => {
+    expect(
+      projectRefreshPatterns(" ./infrastructure/../rehearsal.host.config.mjs "),
+    ).toEqual([...PROJECT_REFRESH_PATHS, "rehearsal.host.config.mjs"]);
+    expect(projectRefreshPatterns("./rehearsal.config.mjs")).toEqual(
+      PROJECT_REFRESH_PATHS,
+    );
+    expect(
+      projectRefreshPatterns(
+        "infrastructure//rehearsal/./rehearsal.config.mjs",
+      ),
+    ).toEqual(PROJECT_REFRESH_PATHS);
+  });
+
+  it("escapes glob syntax instead of watching other filenames or directories", () => {
+    expect(
+      projectRefreshPatterns("configs/[team]/{local,qa}*?.config.mjs"),
+    ).toEqual([
+      ...PROJECT_REFRESH_PATHS,
+      "configs/[[]team[]]/[{]local,qa[}][*][?].config.mjs",
+    ]);
+  });
+
+  it.each([
+    undefined,
+    null,
+    12,
+    {},
+    "",
+    "   ",
+    ".",
+    "folder/..",
+    "../another-project/rehearsal.config.mjs",
+    "folder/../../another-project/rehearsal.config.mjs",
+    "/another-project/rehearsal.config.mjs",
+    "C:/another-project/rehearsal.config.mjs",
+    "C:rehearsal.config.mjs",
+    "file:///another-project/rehearsal.config.mjs",
+    "\\\\server\\share\\rehearsal.config.mjs",
+    "folder\\rehearsal.config.mjs",
+    "folder/rehearsal.config.mjs/",
+    "rehearsal\u0000.config.mjs",
+    "rehearsal\n.config.mjs",
+    "rehearsal\u007f.config.mjs",
+    "a".repeat(501),
+  ])("keeps only known files for an unsafe explicit path: %j", (path) => {
+    expect(projectRefreshPatterns(path)).toEqual(PROJECT_REFRESH_PATHS);
+  });
+
+  it("accepts a bounded path at the 500-character limit", () => {
+    const path = `${"folder/".repeat(68)}rehearsal.config.mjs`;
+    expect(path.length).toBeLessThan(500);
+    const bounded = `${"x".repeat(500 - path.length)}${path}`;
+    expect(bounded.length).toBe(500);
+    expect(projectRefreshPatterns(bounded)).toContain(bounded);
+    expect(projectRefreshPatterns(`x${bounded}`)).toEqual(
+      PROJECT_REFRESH_PATHS,
     );
   });
 });

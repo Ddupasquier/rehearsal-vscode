@@ -1,4 +1,11 @@
 import { createHash } from "node:crypto";
+import {
+  validateConfigurationFieldValue,
+  type ConfigurationMetadata,
+} from "./configuration_contract.js";
+import { editEnvironmentConfiguration } from "./environment_configuration.js";
+import { parseLocalEndpoint } from "./local_endpoint.js";
+import { editLiteralConfiguration } from "./literal_configuration.js";
 
 export interface ConfigurationProposal {
   readonly applicationUrl?: string;
@@ -7,7 +14,91 @@ export interface ConfigurationProposal {
   readonly runPersistence?: "keep-until-stop" | "stop-after-run";
   readonly openPersistence?: "keep-until-stop" | "stop-on-application-exit";
   readonly retainBaselineGenerations?: number;
+  readonly environmentName?: string;
+  readonly protectEnvironment?: boolean;
 }
+
+/** Map only explicitly proposed fields; a browser URL never implies a health URL. */
+export const configurationProposalChanges = (
+  proposal: ConfigurationProposal,
+): readonly { readonly path: string; readonly value: unknown }[] => {
+  const mappings = {
+    applicationUrl: "runtime.applicationUrl",
+    startCommand: "application.startCommand",
+    proofCommand: "application.proofCommand",
+    runPersistence: "lifecycle.run",
+    openPersistence: "lifecycle.open",
+    retainBaselineGenerations: "cleanup.retainBaselineGenerations",
+    environmentName: "runtime.displayName",
+    protectEnvironment: "runtime.protected",
+  } as const satisfies Readonly<Record<keyof ConfigurationProposal, string>>;
+  return Object.entries(proposal)
+    .filter(([, value]) => value !== undefined)
+    .map(([field, value]) => {
+      if (!Object.hasOwn(mappings, field))
+        throw new Error("Unknown configuration proposal field.");
+      return { path: mappings[field as keyof typeof mappings], value };
+    });
+};
+
+export const parseStructuredConfigurationValues = (
+  raw: unknown,
+  metadata: ConfigurationMetadata | undefined,
+): readonly { path: string; value: unknown }[] => {
+  if (!metadata)
+    throw new Error(
+      "Update Rehearsal core for structured field review, or edit the active configuration manually.",
+    );
+  const fields = (raw as { fields: unknown }).fields;
+  if (!fields || typeof fields !== "object" || Array.isArray(fields))
+    throw new Error("Invalid configuration fields.");
+  const changes: { path: string; value: unknown }[] = [];
+  for (const [path, input] of Object.entries(fields)) {
+    const field = metadata.fields.find((field) => field.path === path);
+    if (!field || typeof input !== "string" || input.length > 65536)
+      throw new Error("Unknown or unbounded configuration field.");
+    let value: unknown = input;
+    if (
+      field.value === null &&
+      input === "" &&
+      field.kind !== "nullable-integer"
+    )
+      continue;
+    if (field.kind === "local-url" && path === "application.activity.url") {
+      value = input === "" ? null : input;
+      value = validateConfigurationFieldValue(path, field.kind, value);
+    } else if (field.kind === "boolean") {
+      if (!["true", "false"].includes(input))
+        throw new Error("Choose true or false.");
+      value = input === "true";
+    } else if (["integer", "nullable-integer"].includes(field.kind)) {
+      value =
+        input === "" && field.kind === "nullable-integer"
+          ? null
+          : Number(input);
+      if (
+        value !== null &&
+        (!/^\d+$/u.test(input) || !Number.isSafeInteger(value))
+      )
+        throw new Error(
+          "Enter a whole-number value or leave an optional value empty.",
+        );
+      if (path === "lifecycle.openIdleTimeoutSeconds")
+        value = validateConfigurationFieldValue(path, field.kind, value);
+    } else if (field.kind === "profiles") {
+      try {
+        value = JSON.parse(input);
+      } catch {
+        throw new Error(
+          "Profiles must be a valid JSON list with names, configured targets, and optional local URLs.",
+        );
+      }
+    }
+    if (JSON.stringify(value) !== JSON.stringify(field.value))
+      changes.push({ path, value });
+  }
+  return changes;
+};
 
 const singleLine = (
   value: unknown,
@@ -28,15 +119,7 @@ const singleLine = (
 const loopbackUrl = (value: unknown): string | undefined => {
   const source = singleLine(value, "Application URL");
   if (!source) return undefined;
-  const url = new URL(source);
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    !["localhost", "127.0.0.1", "::1"].includes(url.hostname) ||
-    url.username ||
-    url.password
-  ) {
-    throw new Error("Application URL must be an HTTP(S) loopback URL.");
-  }
+  const url = parseLocalEndpoint(source);
   return url.toString().replace(/\/$/u, "");
 };
 
@@ -77,7 +160,21 @@ export const parseConfigurationProposal = (
   const applicationUrl = loopbackUrl(record.applicationUrl);
   const startCommand = singleLine(record.startCommand, "Start command", 1_000);
   const proofCommand = singleLine(record.proofCommand, "Proof command", 1_000);
+  const environmentName = singleLine(
+    record.environmentName,
+    "Environment name",
+    100,
+  )?.trim();
+  if (
+    record.protectEnvironment !== undefined &&
+    typeof record.protectEnvironment !== "boolean"
+  )
+    throw new Error("Environment protection must be true or false.");
   return {
+    ...(environmentName ? { environmentName } : {}),
+    ...(record.protectEnvironment === undefined
+      ? {}
+      : { protectEnvironment: record.protectEnvironment as boolean }),
     ...(applicationUrl ? { applicationUrl } : {}),
     ...(startCommand ? { startCommand } : {}),
     ...(proofCommand ? { proofCommand } : {}),
@@ -107,33 +204,16 @@ const replaceInBlock = ({
   block: string;
   property: string;
   replacement: string;
-}): string => {
-  const blockPattern = new RegExp(
-    `(\\b${block}\\s*:\\s*\\{[\\s\\S]{0,5000}?)(\\b${property}\\s*:\\s*)([^,\\n}]+)`,
-    "u",
-  );
-  const matches = [...source.matchAll(new RegExp(blockPattern.source, "gu"))];
-  if (matches.length !== 1) {
-    throw new Error(
-      `The active configuration does not contain one editable ${block}.${property} literal.`,
-    );
-  }
-  const current = matches[0]?.[3]?.trim() ?? "";
-  const expectsString = replacement.startsWith('"');
-  if (
-    (expectsString && !/^(?:"[^"\r\n]*"|'[^'\r\n]*')$/u.test(current)) ||
-    (!expectsString && !/^\d+$/u.test(current))
-  ) {
-    throw new Error(
-      `The active configuration does not contain one editable ${block}.${property} literal.`,
-    );
-  }
-  return source.replace(
-    blockPattern,
-    (_match, prefix: string, propertyPrefix: string) =>
-      `${prefix}${propertyPrefix}${replacement}`,
-  );
-};
+}): string =>
+  editLiteralConfiguration(source, [
+    {
+      path:
+        block === "readiness"
+          ? `application.readiness.${property}`
+          : `${block}.${property}`,
+      value: JSON.parse(replacement),
+    },
+  ]);
 
 export const applyConfigurationProposal = ({
   source,
@@ -144,6 +224,25 @@ export const applyConfigurationProposal = ({
 }): { readonly source: string; readonly changedFields: readonly string[] } => {
   let result = source;
   const changedFields: string[] = [];
+  if (
+    proposal.environmentName !== undefined ||
+    proposal.protectEnvironment !== undefined
+  ) {
+    result = editEnvironmentConfiguration(result, {
+      ...(proposal.environmentName === undefined
+        ? {}
+        : { displayName: proposal.environmentName }),
+      ...(proposal.protectEnvironment === undefined
+        ? {}
+        : { protected: proposal.protectEnvironment }),
+    });
+    if (result !== source) {
+      if (proposal.environmentName !== undefined)
+        changedFields.push("runtime.displayName");
+      if (proposal.protectEnvironment !== undefined)
+        changedFields.push("runtime.protected");
+    }
+  }
   const update = (
     block: string,
     property: string,
@@ -187,15 +286,8 @@ export const applyConfigurationProposal = ({
     proposal.retainBaselineGenerations,
     "cleanup.retainBaselineGenerations",
   );
-  if (proposal.applicationUrl !== undefined) {
-    result = replaceInBlock({
-      source: result,
-      block: "readiness",
-      property: "url",
-      replacement: JSON.stringify(proposal.applicationUrl),
-    });
-    changedFields.push("application.readiness.url");
-  }
+  // The browser address and application health check are separate reviewed fields.
+  // Readiness changes belong to an explicit structured proposal or manual edit.
   return { source: result, changedFields };
 };
 
@@ -214,11 +306,41 @@ export const configurationDiff = ({
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
   const lines = [`--- a/${path}`, `+++ b/${path}`];
-  const maximum = Math.max(beforeLines.length, afterLines.length);
-  for (let index = 0; index < maximum; index += 1) {
-    if (beforeLines[index] === afterLines[index]) continue;
-    if (beforeLines[index] !== undefined) lines.push(`-${beforeLines[index]}`);
-    if (afterLines[index] !== undefined) lines.push(`+${afterLines[index]}`);
+  let prefix = 0;
+  while (
+    prefix < beforeLines.length &&
+    prefix < afterLines.length &&
+    beforeLines[prefix] === afterLines[prefix]
+  )
+    prefix += 1;
+  if (prefix === beforeLines.length && prefix === afterLines.length)
+    return `${lines.join("\n")}\n`;
+  let beforeEnd = beforeLines.length;
+  let afterEnd = afterLines.length;
+  while (
+    beforeEnd > prefix &&
+    afterEnd > prefix &&
+    beforeLines[beforeEnd - 1] === afterLines[afterEnd - 1]
+  ) {
+    beforeEnd -= 1;
+    afterEnd -= 1;
   }
+  // Align unchanged suffixes before comparing: a one-line insertion must not make
+  // every following setting look removed and re-added. Work stays linear and bounded.
+  const start = Math.max(0, prefix - 3);
+  const contextAfter = Math.min(3, beforeLines.length - beforeEnd);
+  const oldCount = beforeEnd + contextAfter - start;
+  const newCount = afterEnd + contextAfter - start;
+  lines.push(
+    `@@ -${oldCount ? start + 1 : start},${oldCount} +${newCount ? start + 1 : start},${newCount} @@`,
+  );
+  lines.push(...beforeLines.slice(start, prefix).map((line) => ` ${line}`));
+  lines.push(...beforeLines.slice(prefix, beforeEnd).map((line) => `-${line}`));
+  lines.push(...afterLines.slice(prefix, afterEnd).map((line) => `+${line}`));
+  lines.push(
+    ...beforeLines
+      .slice(beforeEnd, beforeEnd + contextAfter)
+      .map((line) => ` ${line}`),
+  );
   return `${lines.join("\n")}\n`;
 };
