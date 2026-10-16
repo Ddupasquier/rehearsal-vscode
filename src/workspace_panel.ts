@@ -7,7 +7,7 @@ import {
   unlink,
   rmdir,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   runRehearsalJson,
   resolveWorkspaceRehearsal,
@@ -62,6 +62,9 @@ const actionUri = (workspaceToken: string, action: WorkspaceActionId): string =>
 
 const PAGE_IDS = new Set<WorkspacePage>(WORKSPACE_PAGES);
 
+/** Only locally controlled review guidance may be shown verbatim. */
+class ConfigurationReviewError extends Error {}
+
 const isWorkspacePage = (value: unknown): value is WorkspacePage =>
   typeof value === "string" && PAGE_IDS.has(value as WorkspacePage);
 
@@ -71,6 +74,8 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
   private readonly activePages = new Map<string, WorkspacePage>();
   private readonly preferences = new Map<string, WorkspacePreferences>();
   private readonly editing = new Set<string>();
+  private readonly pendingExports = new Set<string>();
+  private readonly pendingConfigurationReviews = new Set<string>();
   private readonly liveDocuments = new Map<
     string,
     { readonly key: string; delivery: number }
@@ -237,6 +242,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     workspaceKey: string,
     rawMessage: unknown,
   ): Promise<void> {
+    if (this.panels.get(workspaceKey) !== panel) return;
     const message = parseWorkspaceMessage(rawMessage);
     if (!message) return;
     if (message.type === "editing") {
@@ -335,6 +341,8 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
     if (message.type === "exportReport") {
       await this.exportReport(
+        panel,
+        workspaceKey,
         snapshot,
         message.format,
         typeof message.leftId === "string" &&
@@ -371,37 +379,70 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
   }
 
   private async exportReport(
+    panel: vscode.WebviewPanel,
+    workspaceKey: string,
     snapshot: Parameters<typeof renderWorkspaceDocument>[0],
     format: unknown,
     comparison?: { readonly leftId: string; readonly rightId: string },
   ): Promise<void> {
     if (format !== "markdown" && format !== "json") return;
-    const extension = format === "markdown" ? "md" : "json";
-    const destination = await vscode.window.showSaveDialog({
-      title: "Export privacy-safe Rehearsal report",
-      defaultUri: vscode.Uri.joinPath(
-        vscode.Uri.file(snapshot.workspaceRoot),
-        verificationReportFilename(snapshot.workspaceName, format),
-      ),
-      filters:
-        format === "markdown" ? { Markdown: ["md"] } : { JSON: ["json"] },
-    });
-    if (!destination) return;
-    const report = buildVerificationReport(snapshot, new Date(), {
-      extensionVersion: this.extensionVersion,
-      ...(comparison ? { comparison } : {}),
-    });
-    const content =
-      format === "markdown"
-        ? renderVerificationReportMarkdown(report)
-        : renderVerificationReportJson(report);
-    await vscode.workspace.fs.writeFile(
-      destination,
-      new TextEncoder().encode(content),
+    if (this.pendingExports.has(workspaceKey)) return;
+    const folder = vscode.workspace.workspaceFolders?.find(
+      ({ uri }) => uri.toString() === workspaceKey,
     );
-    void vscode.window.showInformationMessage(
-      `Saved Rehearsal report as ${destination.path.split("/").at(-1) ?? `report.${extension}`}.`,
-    );
+    if (!folder) return;
+    const allowed = () =>
+      vscode.workspace.isTrusted &&
+      this.panels.get(workspaceKey) === panel &&
+      vscode.workspace.workspaceFolders?.includes(folder) === true &&
+      folder.uri.fsPath === snapshot.workspaceRoot &&
+      this.projects.snapshotFor(workspaceKey) === snapshot;
+    if (!allowed()) return;
+    this.pendingExports.add(workspaceKey);
+    try {
+      const destination = await vscode.window.showSaveDialog({
+        title: "Export privacy-safe Rehearsal report",
+        defaultUri: vscode.Uri.joinPath(
+          folder.uri,
+          verificationReportFilename(snapshot.workspaceName, format),
+        ),
+        filters:
+          format === "markdown" ? { Markdown: ["md"] } : { JSON: ["json"] },
+      });
+      if (!destination) return;
+      if (
+        !allowed() ||
+        destination.scheme !== "file" ||
+        destination.authority !== "" ||
+        destination.query !== "" ||
+        destination.fragment !== "" ||
+        !isAbsolute(destination.fsPath)
+      )
+        throw new Error("Report export context or local destination changed.");
+      const report = buildVerificationReport(snapshot, new Date(), {
+        extensionVersion: this.extensionVersion,
+        ...(comparison ? { comparison } : {}),
+      });
+      const content =
+        format === "markdown"
+          ? renderVerificationReportMarkdown(report)
+          : renderVerificationReportJson(report);
+      if (!allowed()) throw new Error("Report export context changed.");
+      await vscode.workspace.fs.writeFile(
+        destination,
+        new TextEncoder().encode(content),
+      );
+      if (allowed())
+        void vscode.window.showInformationMessage(
+          "Saved the Rehearsal verification report.",
+        );
+    } catch {
+      void vscode.window.showErrorMessage(
+        "Rehearsal could not export the report. Refresh the project, check trust and local file permissions, then choose a local destination and try again.",
+      );
+    } finally {
+      this.pendingExports.delete(workspaceKey);
+    }
   }
 
   private async reviewConfiguration(
@@ -411,6 +452,12 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     topologyConfigPath: string | undefined = snapshot.configPath,
   ): Promise<void> {
     if (!vscode.workspace.isTrusted) return;
+    if (this.pendingConfigurationReviews.has(workspaceKey)) {
+      void vscode.window.showInformationMessage(
+        "Another configuration review is already in progress for this project. Finish or dismiss it before starting another.",
+      );
+      return;
+    }
     if (snapshot.activity && snapshot.activity.state !== "idle") {
       void vscode.window.showWarningMessage(
         "Finish or diagnose the current Rehearsal operation before editing its configuration.",
@@ -477,7 +524,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           "untrusted",
         ].includes(current.availability)
       )
-        throw new Error(
+        throw new ConfigurationReviewError(
           "Configuration review stopped because project trust, identity or availability changed. No further review action was performed. Refresh and review again.",
         );
     };
@@ -499,7 +546,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
             ? !entry.isFile()
             : !entry.isDirectory())
         )
-          throw new Error(
+          throw new ConfigurationReviewError(
             "Configuration review requires a regular project-local file with no symbolic-link redirects. Open and review linked configuration manually instead.",
           );
         device = entry.dev;
@@ -512,17 +559,18 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         file !== candidate ||
         relative(root, file).startsWith(`..${sep}`)
       )
-        throw new Error(
+        throw new ConfigurationReviewError(
           "Configuration review refused a path outside its original project.",
         );
       return { file, identity: JSON.stringify([root, file, device, inode]) };
     };
+    this.pendingConfigurationReviews.add(workspaceKey);
     try {
       requireReview();
       const boundary = await inspectBoundary();
       const requireBoundary = async () => {
         if ((await inspectBoundary()).identity !== boundary.identity)
-          throw new Error(
+          throw new ConfigurationReviewError(
             "Configuration file identity changed during review. Refresh and review the current regular file before applying changes.",
           );
       };
@@ -531,13 +579,13 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       );
       requireReview();
       if (document.isDirty) {
-        throw new Error(
+        throw new ConfigurationReviewError(
           "Save or discard the current configuration edits before reviewing another proposal.",
         );
       }
       const before = document.getText();
       if (Buffer.byteLength(before) > 1024 * 1024) {
-        throw new Error(
+        throw new ConfigurationReviewError(
           "The active configuration is too large for safe editing.",
         );
       }
@@ -549,7 +597,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           document.isDirty ||
           configurationFingerprint(document.getText()) !== fingerprint
         )
-          throw new Error(
+          throw new ConfigurationReviewError(
             "The configuration changed during review. Refresh Rehearsal and review the current source.",
           );
       };
@@ -563,7 +611,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         });
         requireUnchanged();
         if (parseActivityData(result.result.data).state !== "idle")
-          throw new Error(
+          throw new ConfigurationReviewError(
             "Rehearsal is not idle. Finish or diagnose the owning operation before changing its configuration.",
           );
       };
@@ -591,7 +639,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           metadata.path.replaceAll("\\", "/") !==
             snapshot.configPath.replaceAll("\\", "/")
         )
-          throw new Error(
+          throw new ConfigurationReviewError(
             "Configuration changed before review. Refresh and try again.",
           );
       }
@@ -685,7 +733,9 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
             validation.result.data.writesConfiguration !== false ||
             validation.result.data.executesProposedCommands !== false
           )
-            throw new Error("Core refused the exact configuration proposal.");
+            throw new ConfigurationReviewError(
+              "Core refused the exact configuration proposal.",
+            );
         } finally {
           await unlink(input).catch(() => undefined);
           await rmdir(temporary).catch(() => undefined);
@@ -703,7 +753,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         result.source,
       );
       if (!(await vscode.workspace.applyEdit(edit))) {
-        throw new Error(
+        throw new ConfigurationReviewError(
           "VS Code could not save the reviewed configuration changes.",
         );
       }
@@ -715,22 +765,35 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         configurationFingerprint(document.getText()) !==
           configurationFingerprint(result.source)
       )
-        throw new Error(
+        throw new ConfigurationReviewError(
           "Configuration changed before saving. Review the unsaved document; it was not saved by this review.",
         );
       if (!(await document.save()))
-        throw new Error(
+        throw new ConfigurationReviewError(
           "VS Code could not save the reviewed configuration changes.",
         );
       requireReview(configurationFingerprint(result.source));
+      if (
+        document.isClosed ||
+        document.isDirty ||
+        configurationFingerprint(document.getText()) !==
+          configurationFingerprint(result.source)
+      )
+        throw new ConfigurationReviewError(
+          "Configuration changed while saving. Review the current file and any unsaved edits before trying again. This review did not overwrite or revert those changes.",
+        );
       void vscode.window.showInformationMessage(
         "Applied the reviewed Rehearsal configuration changes.",
       );
       await this.projects.refreshWorkspace(workspaceKey);
     } catch (error) {
       void vscode.window.showErrorMessage(
-        error instanceof Error ? error.message : "Configuration review failed.",
+        error instanceof ConfigurationReviewError
+          ? error.message
+          : "Rehearsal could not complete this configuration review. Refresh the project, check trust and local file permissions, then review the current configuration and try again.",
       );
+    } finally {
+      this.pendingConfigurationReviews.delete(workspaceKey);
     }
   }
 

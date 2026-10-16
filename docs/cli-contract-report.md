@@ -82,6 +82,40 @@ two-field contract.
 - exact-candidate PostgreSQL Test Lab state plus the clean-room library's missing-config
   state, both in isolated temporary copies.
 
+## Installed operation-history companion
+
+For a focused activity-contract check, run Test Lab's
+`scripts/verify-operation-activity.mts` with the exact core tarball. It installs a fresh
+consumer, records successful baseline creation and an unconfirmed-candidate refusal,
+and verifies private history isolation with infrastructure calls denied.
+
+Then run this from the extension checkout, using its report path and the exact artifact
+SHA-256 printed by Test Lab:
+
+```bash
+node --import tsx scripts/verify-operation-activity.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+```
+
+The extension's production parser and HTML generator must accept all four safe samples
+without inventing successful runtime stages. Failed, mismatched or incompletely cleaned
+evidence is refused. This is not native terminal cancellation, rendered layout,
+keyboard, screen-reader or provider acceptance. Terminal execution ownership and reload
+recovery have separate action-owner regression tests.
+
+Add `--editor-review` to the Lab command to exercise read-only configuration proposals
+and actual retained baseline generations in the same isolated consumer. Then run:
+
+```bash
+node --import tsx scripts/verify-editor-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+```
+
+This companion uses production configuration/baseline parsing, comparison and JSON/Markdown
+report generation. Unknown runtime/provider evidence stays unavailable; retained counts
+do not become proof of row or schema equality. Root and nested configurations, stale and
+invalid proposals, unchanged reviewed files and the original immutable generation are
+checked independently by Lab. It does not certify native save dialogs, editor writes,
+keyboard/focus behavior or assistive technology; those need separate direct observations.
+
 ## Direct Extension Development Host observation
 
 On 2026-10-10, the prototype was exercised in an isolated macOS Extension Development

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.6 — 2026-10-16
+
+- Keep terminal outcomes tied to the exact Rehearsal shell execution, not another
+  command in the same terminal. Missing exit evidence remains visibly unverified
+  across reloads instead of disappearing from activity history, including older receipts.
+- Coalesce repeated cancellation requests and recheck terminal ownership and
+  workspace trust after approval, before closing anything.
+- Label the CLI's confirmed cancellation exit code `130` as cancelled rather than failed.
+- Abort pending cleanup-observation reads when workspace trust or presence is lost.
+- Recheck the project, dashboard, trust and inspection before exporting a report.
+  Exports require a chosen local file, coalesce repeated requests, and show safe
+  recovery guidance if the destination cannot be written.
+- Keep one configuration review active per project and verify the exact document
+  again after saving. Changes made by another editor action are never silently
+  reverted or announced as the approved result.
+- Refuse expression-based default exports, including operators, property access
+  and extra wrapper arguments, instead of editing the wrong literal object.
+
 ## 0.1.5 — 2026-10-15
 
 - Complete environment selection with core-owned presence, receipt-compatibility and

@@ -36,6 +36,11 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly terminalWorkspaces = new Map<vscode.Terminal, string>();
   private readonly terminalActivities = new Map<vscode.Terminal, string>();
+  private readonly terminalExecutions = new Map<
+    vscode.Terminal,
+    vscode.TerminalShellExecution
+  >();
+  private readonly pendingCancellations = new Set<string>();
   private readonly workspaceTokens = new Map<string, string>();
   private readonly completionObservers = new Map<
     string,
@@ -76,7 +81,12 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       }),
       vscode.window.onDidEndTerminalShellExecution((event) => {
         const workspaceKey = this.terminalWorkspaces.get(event.terminal);
-        if (!workspaceKey) return;
+        if (
+          !workspaceKey ||
+          !this.terminalExecutions.has(event.terminal) ||
+          this.terminalExecutions.get(event.terminal) !== event.execution
+        )
+          return;
         this.output.info(
           `Rehearsal terminal action ended${event.exitCode === undefined ? "" : ` with exit ${event.exitCode}`}.`,
         );
@@ -269,6 +279,8 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     this.terminalWorkspaces.clear();
     this.workspaceTokens.clear();
     this.terminalActivities.clear();
+    this.terminalExecutions.clear();
+    this.pendingCancellations.clear();
     for (const observer of this.completionObservers.values())
       observer.dispose();
     this.completionObservers.clear();
@@ -506,9 +518,12 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     this.output.info(`Started ${label} for ${folder.name}.`);
 
     if (terminal.shellIntegration) {
-      terminal.shellIntegration.executeCommand(arguments_[0]!, [
-        ...arguments_.slice(1),
-      ]);
+      this.terminalExecutions.set(
+        terminal,
+        terminal.shellIntegration.executeCommand(arguments_[0]!, [
+          ...arguments_.slice(1),
+        ]),
+      );
       this.monitorTerminalActivity(folder, workspaceKey, terminal, activity.id);
       return;
     }
@@ -537,7 +552,10 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       );
     if (integration) {
       if (!canLaunch()) return;
-      integration.executeCommand(arguments_[0]!, [...arguments_.slice(1)]);
+      this.terminalExecutions.set(
+        terminal,
+        integration.executeCommand(arguments_[0]!, [...arguments_.slice(1)]),
+      );
     } else {
       if (!canLaunch()) return;
       terminal.sendText(shellCommand(arguments_), true);
@@ -670,24 +688,37 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     const id = this.terminalActivities.get(terminal);
     if (!id) return;
     this.terminalActivities.delete(terminal);
+    this.terminalExecutions.delete(terminal);
     const record = this.activityFor(workspaceKey).find(
       (entry) => entry.id === id,
     );
     if (!record) return;
     await this.writeActivity(workspaceKey, {
       ...record,
-      finishedAt: new Date().toISOString(),
+      finishedAt: exitCode === null ? null : new Date().toISOString(),
       outcome:
         exitCode === null
           ? "unverified"
           : exitCode === 0
             ? "completed"
-            : "failed",
+            : exitCode === 130
+              ? "cancelled"
+              : "failed",
       exitCode,
     });
   }
 
   private async cancelOwnedOperation(workspaceKey: string): Promise<void> {
+    if (this.pendingCancellations.has(workspaceKey) || this.disposed) return;
+    this.pendingCancellations.add(workspaceKey);
+    try {
+      await this.cancelWorkspaceTerminals(workspaceKey);
+    } finally {
+      this.pendingCancellations.delete(workspaceKey);
+    }
+  }
+
+  private async cancelWorkspaceTerminals(workspaceKey: string): Promise<void> {
     const terminals = [...this.terminalWorkspaces.entries()]
       .filter(
         ([terminal, key]) =>
@@ -710,16 +741,31 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       "Cancel Operation",
     );
     if (selected !== "Cancel Operation") return;
-    for (const terminal of terminals) {
+    const folder = vscode.workspace.workspaceFolders?.find(
+      (folder) => folder.uri.toString() === workspaceKey,
+    );
+    if (this.disposed || !vscode.workspace.isTrusted || !folder) return;
+    const stillOwned = terminals.filter(
+      (terminal) =>
+        this.terminalWorkspaces.get(terminal) === workspaceKey &&
+        this.terminalActivities.has(terminal),
+    );
+    if (!stillOwned.length) return;
+    for (const terminal of stillOwned) {
       this.stopTerminalMonitor(terminal, workspaceKey);
       terminal.dispose();
     }
     if (this.completionObservers.has(workspaceKey)) return;
-    const folder = vscode.workspace.workspaceFolders?.find(
-      (folder) => folder.uri.toString() === workspaceKey,
-    );
-    if (!folder) return;
-    const observer = createOperationCompletionObserver();
+    const observer = createOperationCompletionObserver({
+      allowed: () =>
+        !this.disposed &&
+        vscode.workspace.isTrusted &&
+        Boolean(
+          vscode.workspace.workspaceFolders?.some(
+            ({ uri }) => uri.toString() === workspaceKey,
+          ),
+        ),
+    });
     this.completionObservers.set(workspaceKey, observer);
     try {
       const configPath = this.projects.snapshotFor(workspaceKey)?.configPath;

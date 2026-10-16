@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
+import { activityStorageKey } from "../src/workspace_activity.js";
 const mocks = vi.hoisted(() => ({
   trusted: true,
   confirm: vi.fn(),
@@ -12,9 +13,17 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
   closeListener: undefined as ((terminal: unknown) => void) | undefined,
   endListener: undefined as
-    ((event: { terminal: unknown; exitCode?: number }) => void) | undefined,
+    | ((event: {
+        terminal: unknown;
+        execution: unknown;
+        exitCode?: number;
+      }) => void)
+    | undefined,
   folderListener: undefined as
     ((event: { removed: readonly unknown[] }) => void) | undefined,
+  integrationListener: undefined as
+    | ((event: { terminal: unknown; shellIntegration: unknown }) => void)
+    | undefined,
 }));
 vi.mock("vscode", () => ({
   workspace: {
@@ -39,6 +48,12 @@ vi.mock("vscode", () => ({
     },
     onDidEndTerminalShellExecution: (listener: typeof mocks.endListener) => {
       mocks.endListener = listener;
+      return { dispose() {} };
+    },
+    onDidChangeTerminalShellIntegration: (
+      listener: typeof mocks.integrationListener,
+    ) => {
+      mocks.integrationListener = listener;
       return { dispose() {} };
     },
     showWarningMessage: mocks.confirm,
@@ -137,8 +152,7 @@ const preview = {
 };
 let current = snapshot;
 const runners: RehearsalWorkspaceActions[] = [];
-const actions = () => {
-  const storage = new Map<string, unknown>();
+const actions = (storage = new Map<string, unknown>()) => {
   const runner = new RehearsalWorkspaceActions(
     {
       snapshotFor: () => current,
@@ -167,6 +181,8 @@ beforeEach(() => {
   mocks.closeListener = undefined;
   mocks.endListener = undefined;
   mocks.folderListener = undefined;
+  mocks.integrationListener = undefined;
+  mocks.execute.mockReturnValue({});
   mocks.confirm.mockImplementation(async (_title, _options, label) => label);
   mocks.terminal.mockReturnValue({
     show: vi.fn(),
@@ -309,7 +325,11 @@ describe("reviewed resource actions", () => {
     expect(mocks.publish).toHaveBeenCalledWith("file:///workspace", busy);
     expect(mocks.refresh).toHaveBeenCalledOnce();
     const terminal = mocks.terminal.mock.results[0]!.value;
-    mocks.endListener?.({ terminal, exitCode: 0 });
+    mocks.endListener?.({
+      terminal,
+      execution: mocks.execute.mock.results[0]!.value,
+      exitCode: 0,
+    });
     await vi.advanceTimersByTimeAsync(0);
     mocks.closeListener?.(terminal);
     await vi.advanceTimersByTimeAsync(300_000);
@@ -345,4 +365,334 @@ describe("reviewed resource actions", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it.each(["close", "shell"])(
+    "preserves an unknown %s exit as an unverified receipt across reload",
+    async (event) => {
+      vi.useFakeTimers();
+      const storage = new Map<string, unknown>();
+      const runner = actions(storage);
+      await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+      const terminal = mocks.terminal.mock.results[0]!.value;
+      const id = runner.activityFor("file:///workspace")[0]!.id;
+      if (event === "close") mocks.closeListener?.(terminal);
+      else
+        mocks.endListener?.({
+          terminal,
+          execution: mocks.execute.mock.results[0]!.value,
+        });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.activityFor("file:///workspace")).toMatchObject([
+        { id, outcome: "unverified", finishedAt: null, exitCode: null },
+      ]);
+      runner.dispose();
+      expect(actions(storage).activityFor("file:///workspace")).toMatchObject([
+        { id, outcome: "unverified", finishedAt: null, exitCode: null },
+      ]);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("retains a pre-fix stored unknown-exit receipt across owner recreation without granting ownership", async () => {
+    const legacy = {
+      id: "previous-writer-unknown",
+      label: "Run rehearsal",
+      startedAt: "2026-10-13T12:00:00Z",
+      finishedAt: "2026-10-13T12:01:00Z",
+      outcome: "unverified",
+      exitCode: null,
+    };
+    const storage = new Map<string, unknown>([
+      [activityStorageKey("file:///workspace"), [legacy]],
+    ]);
+    const runner = actions(storage);
+    expect(runner.activityFor("file:///workspace")).toEqual([
+      { ...legacy, finishedAt: null },
+    ]);
+    runner.dispose();
+    const reloaded = actions(storage);
+    expect(reloaded.activityFor("file:///workspace")).toEqual([
+      { ...legacy, finishedAt: null },
+    ]);
+    await reloaded.runWorkspace("file:///workspace", "cancelOwnedOperation");
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      "No editor-started Rehearsal operation is running for this project.",
+    );
+  });
+
+  it("binds a shell integration that becomes available during startup to its exact execution", async () => {
+    vi.useFakeTimers();
+    const terminal = { show: vi.fn(), sendText: vi.fn(), dispose: vi.fn() };
+    mocks.terminal.mockReturnValue(terminal);
+    const runner = actions();
+    const launch = runner.runWorkspace(
+      "file:///workspace",
+      "startRuntime",
+      "primary",
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    mocks.integrationListener?.({
+      terminal,
+      shellIntegration: { executeCommand: mocks.execute },
+    });
+    await launch;
+    expect(mocks.execute).toHaveBeenCalledOnce();
+    expect(terminal.sendText).not.toHaveBeenCalled();
+    mocks.endListener?.({ terminal, execution: {}, exitCode: 0 });
+    expect(runner.activityFor("file:///workspace")[0]?.outcome).toBe("running");
+    mocks.endListener?.({
+      terminal,
+      execution: mocks.execute.mock.results[0]!.value,
+      exitCode: 9,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.activityFor("file:///workspace")[0]).toMatchObject({
+      outcome: "failed",
+      exitCode: 9,
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([0, 9, 130])(
+    "records only the exact owned execution's known exit %i",
+    async (exitCode) => {
+      vi.useFakeTimers();
+      const runner = actions();
+      await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+      const terminal = mocks.terminal.mock.results[0]!.value;
+      const execution = mocks.execute.mock.results[0]!.value;
+      mocks.endListener?.({ terminal, execution: {}, exitCode: 0 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.activityFor("file:///workspace")).toMatchObject([
+        { outcome: "running", exitCode: null, finishedAt: null },
+      ]);
+      expect(mocks.refresh).not.toHaveBeenCalled();
+      mocks.endListener?.({ terminal, execution, exitCode });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.activityFor("file:///workspace")).toMatchObject([
+        {
+          outcome:
+            exitCode === 0
+              ? "completed"
+              : exitCode === 130
+                ? "cancelled"
+                : "failed",
+          exitCode,
+          finishedAt: expect.any(String),
+        },
+      ]);
+      mocks.endListener?.({ terminal, execution, exitCode: 4 });
+      mocks.closeListener?.(terminal);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runner.activityFor("file:///workspace")[0]?.exitCode).toBe(
+        exitCode,
+      );
+      expect(mocks.refresh).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("keeps sendText fallback unverified rather than borrowing a late shell execution", async () => {
+    vi.useFakeTimers();
+    const terminal = { show: vi.fn(), sendText: vi.fn(), dispose: vi.fn() };
+    mocks.terminal.mockReturnValue(terminal);
+    const runner = actions();
+    const launch = runner.runWorkspace(
+      "file:///workspace",
+      "startRuntime",
+      "primary",
+    );
+    await vi.advanceTimersByTimeAsync(1500);
+    await launch;
+    expect(terminal.sendText).toHaveBeenCalledOnce();
+    mocks.endListener?.({ terminal, execution: {}, exitCode: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.activityFor("file:///workspace")[0]?.outcome).toBe("running");
+    mocks.closeListener?.(terminal);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runner.activityFor("file:///workspace")).toMatchObject([
+      { outcome: "unverified", exitCode: null, finishedAt: null },
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("never cancels a discovered operation without a live editor-owned terminal", async () => {
+    current = {
+      ...snapshot,
+      activity: {
+        schemaVersion: 1,
+        state: "busy",
+        operation: {
+          kind: "run",
+          startedAt: "2026-10-13T12:00:00Z",
+          rehearsalVersion: "0.1.0-rc.7",
+        },
+      },
+    };
+    await actions().runWorkspace("file:///workspace", "cancelOwnedOperation");
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      "No editor-started Rehearsal operation is running for this project.",
+    );
+  });
+
+  it("does not recover cancellation ownership from a previous session's running receipt", async () => {
+    vi.useFakeTimers();
+    const storage = new Map<string, unknown>();
+    const previous = actions(storage);
+    await previous.runWorkspace("file:///workspace", "startRuntime", "primary");
+    const terminal = mocks.terminal.mock.results[0]!.value;
+    previous.dispose();
+    const reloaded = actions(storage);
+    expect(reloaded.activityFor("file:///workspace")).toMatchObject([
+      { outcome: "unverified", finishedAt: null, exitCode: null },
+    ]);
+    await reloaded.runWorkspace("file:///workspace", "cancelOwnedOperation");
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    expect(mocks.confirm).toHaveBeenLastCalledWith(
+      "No editor-started Rehearsal operation is running for this project.",
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["completed", "trust", "disposed"])(
+    "rechecks %s ownership after cancellation approval",
+    async (change) => {
+      vi.useFakeTimers();
+      const runner = actions();
+      await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+      const terminal = mocks.terminal.mock.results[0]!.value;
+      const execution = mocks.execute.mock.results[0]!.value;
+      let approve: ((value: string) => void) | undefined;
+      mocks.confirm.mockImplementation(
+        () =>
+          new Promise<string>((resolve) => {
+            approve = resolve;
+          }),
+      );
+      const pending = runner.runWorkspace(
+        "file:///workspace",
+        "cancelOwnedOperation",
+      );
+      if (change === "completed")
+        mocks.endListener?.({ terminal, execution, exitCode: 0 });
+      else if (change === "trust") mocks.trusted = false;
+      else runner.dispose();
+      approve?.("Cancel Operation");
+      await vi.advanceTimersByTimeAsync(1000);
+      await pending;
+      expect(terminal.dispose).not.toHaveBeenCalled();
+      if (change === "completed")
+        expect(runner.activityFor("file:///workspace")[0]?.outcome).toBe(
+          "completed",
+        );
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("coalesces repeated cancellation across the approval modal and verifies actual idle", async () => {
+    vi.useFakeTimers();
+    const runner = actions();
+    await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+    const terminal = mocks.terminal.mock.results[0]!.value;
+    let approve: ((value: string) => void) | undefined;
+    mocks.confirm.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          approve = resolve;
+        }),
+    );
+    terminal.dispose.mockImplementation(() => mocks.closeListener?.(terminal));
+    const first = runner.runWorkspace(
+      "file:///workspace",
+      "cancelOwnedOperation",
+    );
+    const second = runner.runWorkspace(
+      "file:///workspace",
+      "cancelOwnedOperation",
+    );
+    expect(
+      mocks.confirm.mock.calls.filter(
+        ([title]) =>
+          title === "Cancel the Rehearsal operation started by this extension?",
+      ),
+    ).toHaveLength(1);
+    approve?.("Cancel Operation");
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all([first, second]);
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(runner.activityFor("file:///workspace")[0]?.outcome).toBe(
+      "unverified",
+    );
+    expect(mocks.warn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps timed-out cancellation unverified, aborts its owned read and guides recovery", async () => {
+    vi.useFakeTimers();
+    const runner = actions();
+    await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+    const terminal = mocks.terminal.mock.results[0]!.value;
+    terminal.dispose.mockImplementation(() => mocks.closeListener?.(terminal));
+    const signals: AbortSignal[] = [];
+    mocks.read.mockImplementation(async ({ signal }) => {
+      signals.push(signal);
+      return new Promise(() => {});
+    });
+    const pending = runner.runWorkspace(
+      "file:///workspace",
+      "cancelOwnedOperation",
+    );
+    await vi.advanceTimersByTimeAsync(30_000);
+    await pending;
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(runner.activityFor("file:///workspace")[0]?.outcome).toBe(
+      "unverified",
+    );
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Cleanup outcome is not yet verified"),
+    );
+    expect(mocks.refresh).toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("aborts cancellation's unresolved activity read after trust revocation and refreshes without success", async () => {
+    vi.useFakeTimers();
+    const runner = actions();
+    await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+    const terminal = mocks.terminal.mock.results[0]!.value;
+    terminal.dispose.mockImplementation(() => mocks.closeListener?.(terminal));
+    const signals: AbortSignal[] = [];
+    mocks.read.mockImplementation(async ({ signal }) => {
+      signals.push(signal);
+      return new Promise(() => {});
+    });
+    const pending = runner.runWorkspace(
+      "file:///workspace",
+      "cancelOwnedOperation",
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(signals).toHaveLength(1);
+    mocks.trusted = false;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(signals[0]?.aborted).toBe(true);
+    await pending;
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(signals).toHaveLength(1);
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(runner.activityFor("file:///workspace")[0]?.outcome).toBe(
+      "unverified",
+    );
+    expect(mocks.refresh).toHaveBeenCalled();
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("Cleanup outcome is not yet verified"),
+    );
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

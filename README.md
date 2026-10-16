@@ -62,6 +62,8 @@ The structured configuration editor accepts custom local URLs, application/proof
 lifecycle choices, and baseline retention. It validates bounded values, shows an exact diff,
 rechecks the source for concurrent edits, and writes only after an explicit modal approval.
 Complex expression-based fields fail closed and remain available through **Open configuration**.
+Finish or dismiss a configuration review before starting another. If the source changes
+while saving, Rehearsal asks you to review the current file instead of claiming success.
 
 Core releases advertising configuration review also expose the validated resource policies
 and named project profiles. A profile selects the targets shown and an optional local
@@ -77,11 +79,15 @@ or unsafe evidence is shown as unavailable, not successful. Provider consent, sc
 acceptance, and application-specific security checks remain separate from these receipts.
 Live progress updates in place rather than reloading the dashboard, preserving navigation,
 focus, scroll position and expanded evidence while an operation runs.
+If VS Code cannot confirm a terminal's exit, its activity stays **Unverified**, even
+after reloading. A different command in that terminal cannot mark Rehearsal complete.
 
 Markdown and JSON exports retain aggregate counts where supplied. Detailed lists are
 limited to the first **1,000 readiness checks**, **32 runtime targets**, and **1,000 baseline
 generations**; an omission notice reports any additional entries. A bounded detail list
 is not a claim that the omitted checks passed or that additional environments were tested.
+Export asks you to choose a local file. If project trust, the open dashboard or inspected
+state changes while that dialog is open, refresh and export again. No report is uploaded.
 
 Projects on an older incompatible package get an **Update Rehearsal** button instead of a
 cryptic timeout. The extension detects npm, pnpm, Yarn, or Bun, shows the exact update
