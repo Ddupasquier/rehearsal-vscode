@@ -57,6 +57,12 @@ export const normalizeActivityHistory = (
         entry.exitCode <= 255
           ? entry.exitCode
           : null;
+      // Earlier writers recorded terminal-close time without an observed exit.
+      // Preserve only that exact legacy shape; the timestamp is not completion proof.
+      const legacyUnverified =
+        outcome === "unverified" &&
+        entry.exitCode === null &&
+        finishedAt !== null;
       if (
         (finishedAt && Date.parse(finishedAt) < Date.parse(entry.startedAt)) ||
         (outcome === "running" && (finishedAt !== null || exitCode !== null)) ||
@@ -64,7 +70,9 @@ export const normalizeActivityHistory = (
         (outcome === "failed" &&
           (finishedAt === null || exitCode === null || exitCode === 0)) ||
         (outcome === "cancelled" && finishedAt === null) ||
-        (outcome === "unverified" && (finishedAt !== null || exitCode !== null))
+        (outcome === "unverified" &&
+          (entry.exitCode !== null ||
+            (entry.finishedAt !== null && !legacyUnverified)))
       )
         return [];
       seen.add(entry.id);
@@ -73,7 +81,7 @@ export const normalizeActivityHistory = (
           id: entry.id,
           label: entry.label,
           startedAt: entry.startedAt,
-          finishedAt,
+          finishedAt: legacyUnverified ? null : finishedAt,
           outcome: outcome as WorkspaceActivityRecord["outcome"],
           exitCode,
         },

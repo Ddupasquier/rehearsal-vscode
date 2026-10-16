@@ -4,6 +4,10 @@ import { join } from "node:path";
 
 const editor = vi.hoisted(() => {
   const uri = (path: string) => ({
+    scheme: "file",
+    authority: "",
+    query: "",
+    fragment: "",
     fsPath: path,
     path,
     toString: () => `file://${path}`,
@@ -339,6 +343,7 @@ afterEach(async () => {
   editor.module.window.showWarningMessage.mockReset();
   editor.module.window.showTextDocument.mockReset();
   editor.module.window.showSaveDialog.mockReset();
+  editor.module.workspace.fs.writeFile.mockReset().mockResolvedValue(undefined);
   editor.read.mockReset();
   editor.resolvePackage.mockReset();
   editor.canonical.mockReset().mockImplementation(async (path: string) => path);
@@ -359,6 +364,158 @@ afterEach(async () => {
 });
 
 describe("explicit verification-report export", () => {
+  it.each(["trust", "folder", "panel", "replaced"] as const)(
+    "refuses a stale export message after the %s boundary changes before the dialog",
+    async (change) => {
+      const fixture = harness();
+      await fixture.owner.open(key);
+      const panel = editor.panels[0]!;
+      if (change === "trust") editor.module.workspace.isTrusted = false;
+      else if (change === "folder")
+        editor.module.workspace.workspaceFolders = [];
+      else {
+        panel.dispose();
+        if (change === "replaced") await fixture.owner.open(key);
+      }
+      panel.receive({ type: "exportReport", format: "json" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(editor.module.window.showSaveDialog).not.toHaveBeenCalled();
+      expect(editor.module.workspace.fs.writeFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    "trust",
+    "folder",
+    "folder-replaced",
+    "panel",
+    "owner",
+    "replaced",
+    "snapshot",
+  ] as const)(
+    "refuses writing after the %s boundary changes while the save dialog is open",
+    async (change) => {
+      const fixture = harness();
+      let choose:
+        ((destination: ReturnType<typeof editor.uri>) => void) | undefined;
+      editor.module.window.showSaveDialog.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            choose = resolve;
+          }),
+      );
+      await fixture.owner.open(key);
+      const panel = editor.panels[0]!;
+      panel.receive({ type: "exportReport", format: "json" });
+      await vi.waitFor(() => expect(choose).toBeTypeOf("function"));
+      if (change === "trust") editor.module.workspace.isTrusted = false;
+      else if (change === "folder")
+        editor.module.workspace.workspaceFolders = [];
+      else if (change === "folder-replaced")
+        editor.module.workspace.workspaceFolders = [
+          { ...editor.folder, uri: editor.uri(editor.folder.uri.fsPath) },
+        ];
+      else if (change === "owner") fixture.owner.dispose();
+      else if (change === "snapshot")
+        fixture.update({ ...ready(), version: "0.1.0-rc.7" });
+      else {
+        panel.dispose();
+        if (change === "replaced") await fixture.owner.open(key);
+      }
+      choose!(editor.uri("/chosen/report.json"));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(editor.module.workspace.fs.writeFile).not.toHaveBeenCalled();
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["remote", "authority", "query", "fragment", "relative"] as const)(
+    "refuses a %s save destination without writing or exposing it",
+    async (kind) => {
+      const fixture = harness();
+      const destination = {
+        ...editor.uri("/chosen/private-destination-canary.json"),
+        ...(kind === "remote" ? { scheme: "vscode-remote" } : {}),
+        ...(kind === "authority" ? { authority: "private-host-canary" } : {}),
+        ...(kind === "query" ? { query: "private-query-canary" } : {}),
+        ...(kind === "fragment" ? { fragment: "private-fragment-canary" } : {}),
+        ...(kind === "relative"
+          ? { fsPath: "private-relative-canary.json" }
+          : {}),
+      };
+      editor.module.window.showSaveDialog.mockResolvedValue(destination);
+      await fixture.owner.open(key);
+      editor.panels[0]!.receive({ type: "exportReport", format: "json" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(editor.module.workspace.fs.writeFile).not.toHaveBeenCalled();
+      expect(editor.module.window.showErrorMessage).toHaveBeenCalledOnce();
+      expect(
+        JSON.stringify(editor.module.window.showErrorMessage.mock.calls),
+      ).not.toContain("canary");
+    },
+  );
+
+  it.each(["dialog", "write"] as const)(
+    "handles %s failure with bounded recovery guidance and no raw private error",
+    async (failure) => {
+      const fixture = harness();
+      const error = new Error(
+        "PRIVATE_CANARY /private/destination postgres://private-host",
+      );
+      editor.module.window.showSaveDialog.mockResolvedValue(
+        editor.uri("/chosen/report.json"),
+      );
+      if (failure === "dialog")
+        editor.module.window.showSaveDialog.mockRejectedValueOnce(error);
+      else editor.module.workspace.fs.writeFile.mockRejectedValueOnce(error);
+      await fixture.owner.open(key);
+      editor.panels[0]!.receive({ type: "exportReport", format: "markdown" });
+      await vi.waitFor(() =>
+        expect(editor.module.window.showErrorMessage).toHaveBeenCalledOnce(),
+      );
+      const output = JSON.stringify(
+        editor.module.window.showErrorMessage.mock.calls,
+      );
+      expect(output).not.toMatch(/PRIVATE_CANARY|\/private|postgres:/u);
+      expect(output.length).toBeLessThan(300);
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalled();
+      expect(editor.module.workspace.fs.writeFile).toHaveBeenCalledTimes(
+        failure === "write" ? 1 : 0,
+      );
+    },
+  );
+
+  it("coalesces duplicate pending exports and permits a deliberate later export", async () => {
+    const fixture = harness();
+    let cancel: ((value: undefined) => void) | undefined;
+    editor.module.window.showSaveDialog.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          cancel = resolve;
+        }),
+    );
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    panel.receive({ type: "exportReport", format: "json" });
+    panel.receive({ type: "exportReport", format: "markdown" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(editor.module.window.showSaveDialog).toHaveBeenCalledOnce();
+    cancel!(undefined);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    editor.module.window.showSaveDialog.mockResolvedValue(
+      editor.uri("/chosen/report.json"),
+    );
+    panel.receive({ type: "exportReport", format: "json" });
+    await vi.waitFor(() =>
+      expect(editor.module.workspace.fs.writeFile).toHaveBeenCalledOnce(),
+    );
+    expect(editor.module.window.showSaveDialog).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["json", "markdown"] as const)(
     "does not write or announce an export when the %s save dialog is cancelled",
     async (format) => {
@@ -825,6 +982,165 @@ describe("configuration review filesystem boundary", () => {
 });
 
 describe("asynchronous configuration review authority", () => {
+  it("ignores a queued review message from a disposed panel after its project panel is replaced", async () => {
+    const fixture = reviewHarness(true);
+    await fixture.owner.open(key);
+    const previous = editor.panels[0]!;
+    previous.dispose();
+    await fixture.owner.open(key);
+    expect(editor.panels[1]).not.toBe(previous);
+    previous.receive({
+      type: "reviewConfiguration",
+      values: { applicationUrl: "http://localhost:5176" },
+    });
+    await new Promise<void>((done) => setImmediate(done));
+    expect(editor.module.workspace.openTextDocument).not.toHaveBeenCalled();
+    expect(editor.read).not.toHaveBeenCalled();
+    expect(editor.resolvePackage).not.toHaveBeenCalled();
+    expect(editor.module.window.showWarningMessage).not.toHaveBeenCalled();
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+    expect(editor.write).not.toHaveBeenCalled();
+  });
+
+  it.each(["realpath", "lstat", "save", "cli"] as const)(
+    "redacts an unexpected %s failure without exposing private error text",
+    async (operation) => {
+      const fixture = reviewHarness();
+      await fixture.owner.open(key);
+      const failure = new Error(
+        "PRIVATE_CANARY /private/project/rehearsal.config.mjs postgres://private-host raw-provider-output",
+      );
+      if (operation === "realpath")
+        editor.canonical.mockRejectedValueOnce(failure);
+      else if (operation === "lstat")
+        editor.fileStat.mockRejectedValueOnce(failure);
+      else if (operation === "save")
+        fixture.document.save.mockRejectedValueOnce(failure);
+      else editor.read.mockRejectedValueOnce(failure);
+      await fixture.review();
+      expect(editor.module.window.showErrorMessage).toHaveBeenCalledOnce();
+      const output = String(
+        editor.module.window.showErrorMessage.mock.calls[0]![0],
+      );
+      expect(output).toContain("could not complete this configuration review");
+      expect(output).not.toMatch(
+        /PRIVATE_CANARY|\/private|postgres:|raw-provider-output/u,
+      );
+      expect(output.length).toBeLessThan(300);
+      expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["cancel", "failure", "success"] as const)(
+    "refuses a duplicate review during approval and releases its guard after %s",
+    async (outcome) => {
+      const fixture = reviewHarness();
+      await fixture.owner.open(key);
+      let approve: ((value: string | undefined) => void) | undefined;
+      editor.module.window.showWarningMessage.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            approve = done;
+          }),
+      );
+      const first = fixture.review();
+      await vi.waitFor(() => expect(approve).toBeTypeOf("function"));
+      const reads = editor.read.mock.calls.length;
+      await fixture.review();
+      expect(editor.read).toHaveBeenCalledTimes(reads);
+      expect(editor.module.window.showWarningMessage).toHaveBeenCalledOnce();
+      expect(editor.module.window.showInformationMessage).toHaveBeenCalledWith(
+        "Another configuration review is already in progress for this project. Finish or dismiss it before starting another.",
+      );
+      if (outcome === "failure")
+        editor.module.workspace.applyEdit.mockResolvedValueOnce(false);
+      approve!(outcome === "cancel" ? undefined : "Apply Changes");
+      await first;
+      const laterReads = editor.read.mock.calls.length;
+      editor.module.window.showInformationMessage.mockClear();
+      await fixture.review();
+      expect(editor.read.mock.calls.length).toBeGreaterThan(laterReads);
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalledWith(
+        expect.stringContaining("already in progress"),
+      );
+      expect(fixture.document.save).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["apply", "save"] as const)(
+    "keeps its duplicate-review guard until the asynchronous %s completes",
+    async (phase) => {
+      const fixture = reviewHarness();
+      await fixture.owner.open(key);
+      let release: (() => void) | undefined;
+      const barrier = new Promise<void>((done) => {
+        release = done;
+      });
+      const action =
+        phase === "apply"
+          ? editor.module.workspace.applyEdit
+          : fixture.document.save;
+      const original = action.getMockImplementation()!;
+      action.mockImplementationOnce(async () => {
+        await barrier;
+        return await original();
+      });
+      const first = fixture.review();
+      await vi.waitFor(() => expect(action).toHaveBeenCalledOnce());
+      const reads = editor.read.mock.calls.length;
+      await fixture.review();
+      expect(editor.read).toHaveBeenCalledTimes(reads);
+      expect(editor.module.window.showWarningMessage).toHaveBeenCalledOnce();
+      release!();
+      await first;
+      expect(editor.module.workspace.applyEdit).toHaveBeenCalledOnce();
+      expect(fixture.document.save).toHaveBeenCalledOnce();
+      expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["source", "dirty", "closed"] as const)(
+    "refuses success without overwriting when the document becomes %s during save",
+    async (change) => {
+      const fixture = reviewHarness();
+      await fixture.owner.open(key);
+      let finishSave: (() => void) | undefined;
+      fixture.document.save.mockImplementationOnce(async () => {
+        await new Promise<void>((done) => {
+          finishSave = done;
+        });
+        fixture.document.isDirty = change === "dirty";
+        if (change === "closed") fixture.document.isClosed = true;
+        if (change === "source")
+          fixture.document.text += "// Concurrent manual change.\n";
+        return true;
+      });
+      const reviewing = fixture.review();
+      await vi.waitFor(() => expect(finishSave).toBeTypeOf("function"));
+      finishSave!();
+      await reviewing;
+      expect(editor.module.workspace.applyEdit).toHaveBeenCalledOnce();
+      expect(fixture.document.save).toHaveBeenCalledOnce();
+      expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalled();
+      expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("changed while saving"),
+      );
+      if (change === "source")
+        expect(fixture.document.text).toContain("// Concurrent manual change.");
+      if (change === "dirty") expect(fixture.document.isDirty).toBe(true);
+      if (change === "closed") expect(fixture.document.isClosed).toBe(true);
+    },
+  );
+
   it("applies an unchanged explicitly approved proposal and saves once", async () => {
     const fixture = reviewHarness(true);
     await fixture.owner.open(key);

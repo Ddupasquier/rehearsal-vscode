@@ -105,6 +105,31 @@ describe("bounded owned-cancellation completion observation", () => {
     });
     expect(neverRead).not.toHaveBeenCalled();
   });
+  it("aborts an unresolved owned read when its workspace guard is lost and never reads again", async () => {
+    vi.useFakeTimers();
+    let allowed = true;
+    let signal: AbortSignal | undefined;
+    const read = vi.fn(async (owned: AbortSignal) => {
+      signal = owned;
+      return new Promise(() => {});
+    });
+    const observer = createOperationCompletionObserver({
+      intervalMs: 100,
+      allowed: () => allowed,
+    });
+    const pending = observer.observe(read);
+    await vi.advanceTimersByTimeAsync(0);
+    allowed = false;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(signal?.aborted).toBe(true);
+    expect(await pending).toMatchObject({ state: "aborted" });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(read).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await observer.observe(read)).toMatchObject({ state: "aborted" });
+    expect(read).toHaveBeenCalledOnce();
+    observer.dispose();
+  });
   it("refuses observation settings beyond the fixed 30-second budget", () => {
     for (const settings of [
       { timeoutMs: 30001 },

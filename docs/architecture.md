@@ -241,6 +241,15 @@ then refreshes actual project state. This is a bounded completion check, not idl
 polling or a daemon. Removed workspaces and extension disposal abort the owned read.
 An idle lock does not prove verification passed. Missing terminal exit evidence is
 marked unverified, never silently recorded as successful cancellation.
+Completion events must match the exact shell execution returned when the action
+was launched. Another command in the same terminal cannot finish its receipt.
+Without shell integration, later execution events supply no exit evidence; closing
+the terminal retains an unverified receipt, including after a reload. Repeated
+cancellation requests share one approval/cleanup observation, and approval is
+followed by a fresh ownership, workspace-presence and trust check.
+Legacy unknown-exit receipts retain their unverified outcome; their old terminal-close
+timestamp is not completion evidence. While cleanup observation is pending, guard
+rechecks abort the owned read on trust/workspace loss and prevent further CLI reads.
 
 An explicitly editor-started terminal action also receives an activity-only monitor:
 one serial public `activity --json` read every two seconds for at most five minutes.
@@ -281,6 +290,13 @@ Changing the browser URL preserves the health-check URL. Change its origin or pa
 through an explicit structured proposal or manual configuration edit. The provider's
 Auth callback remains a separate core-derived endpoint, not an editable browser address.
 These checks do not claim to lock out ordinary manual filesystem edits by other tools.
+Only one configuration review may remain active per workspace, including its approval,
+apply and save phases. Cancellation, refusal and failure release that guard. The source,
+closed and dirty states are checked again after save before success is announced. Drift
+requires another review; the extension does not overwrite or roll back another editor's
+changes. This detects concurrent changes, not an atomic filesystem lock. The editable
+object must also be the complete supported default-export expression: bare literals and
+one-argument `defineRehearsalConfig` calls are allowed; expression suffixes are manual-only.
 
 ## Trust, privacy, and storage
 
@@ -307,6 +323,12 @@ baseline comparison detail to 1,000 generations. When any list exceeds its limit
 export includes an omission notice with the number omitted. Capped detail never implies
 that omitted checks passed or additional targets were exercised. Export requires an
 explicit save destination; it does not upload or share the report automatically.
+The destination must be a local `file:` URI without an authority, query or fragment.
+Users may explicitly choose a file outside the workspace. One pending export per workspace
+owns its save dialog. Original workspace identity, panel, trust and exact inspection are
+checked before the dialog and immediately before writing; a changed context refuses.
+Dialog/write failures show fixed recovery guidance rather than raw paths or errors.
+These guards do not make the asynchronous OS write atomic against later external changes.
 
 ## Commercial boundary
 

@@ -348,7 +348,9 @@ const fixture = () => {
         };
       if (command[1] === "review") {
         if (scope.refuse)
-          throw new Error("Core refused the custom profile values.");
+          throw new Error(
+            "PRIVATE_CORE_REFUSAL /private/profile-review raw-provider-error",
+          );
         return {
           result: {
             data: {
@@ -593,9 +595,12 @@ describe("named profiles through the workspace host", () => {
       submit(host.panels[0]!, profiles);
       await vi.waitFor(() =>
         expect(host.vscode.window.showErrorMessage).toHaveBeenCalledWith(
-          "Core refused the custom profile values.",
+          "Rehearsal could not complete this configuration review. Refresh the project, check trust and local file permissions, then review the current configuration and try again.",
         ),
       );
+      expect(
+        JSON.stringify(host.vscode.window.showErrorMessage.mock.calls),
+      ).not.toMatch(/PRIVATE_CORE_REFUSAL|\/private|raw-provider-error/u);
       expect(scope.document.text).toBe(before);
       expect(scope.document.save).not.toHaveBeenCalled();
       expect(host.vscode.workspace.applyEdit).not.toHaveBeenCalled();

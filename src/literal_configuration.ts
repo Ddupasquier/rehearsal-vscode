@@ -16,8 +16,8 @@ const tokensFor = (source: string): Token[] => {
       continue;
     }
     if (source.startsWith("//", i)) {
-      const end = source.indexOf("\n", i + 2);
-      i = end < 0 ? source.length : end + 1;
+      i += 2;
+      while (i < source.length && !/[\r\n\u2028\u2029]/u.test(source[i]!)) i++;
       continue;
     }
     if (source.startsWith("/*", i)) {
@@ -28,6 +28,10 @@ const tokensFor = (source: string): Token[] => {
     }
     const start = i;
     const char = source[i]!;
+    if (char === "/")
+      throw new Error(
+        "Regular-expression or division-based configuration requires manual review.",
+      );
     if (char === "`")
       throw new Error("Template-based configuration requires manual review.");
     if (char === '"' || char === "'") {
@@ -148,23 +152,59 @@ const literalValue = (
   return false;
 };
 
+/** The editable object must be the complete supported default-export expression. */
+const exportedLiteralStart = (
+  source: string,
+  tokens: readonly Token[],
+): number => {
+  const exports = tokens.flatMap((token, index) =>
+    token.value === "export" && tokens[index + 1]?.value === "default"
+      ? [index + 2]
+      : [],
+  );
+  if (exports.length !== 1)
+    throw new Error(
+      "One exported literal configuration is required; use manual source editing.",
+    );
+  let start = exports[0]!;
+  const wrapped =
+    tokens[start]?.value === "defineRehearsalConfig" &&
+    tokens[start + 1]?.value === "(";
+  if (wrapped) start += 2;
+  let end = propertiesFor(tokens, start).end;
+  if (wrapped) {
+    end += 1;
+    // A trailing comma still declares one argument; any additional argument is manual.
+    if (tokens[end]?.value === "," && tokens[end + 1]?.value === ")") end += 1;
+    if (tokens[end]?.value !== ")")
+      throw new Error(
+        "The exported configuration wrapper requires one literal argument; use manual source editing.",
+      );
+  }
+  const next = tokens[end + 1];
+  if (next && next.value !== ";") {
+    const lineBreak = /[\r\n\u2028\u2029]/u.test(
+      source.slice(tokens[end]!.end, next.start),
+    );
+    const declaration =
+      ["const", "let", "var", "function", "class", "export", "import"].includes(
+        next.value,
+      ) ||
+      (next.value === "async" && tokens[end + 2]?.value === "function");
+    if (!lineBreak || !declaration)
+      throw new Error(
+        "The exported configuration expression requires manual source editing.",
+      );
+  }
+  return start;
+};
+
 export const hasLiteralConfigurationPath = (
   source: string,
   path: string,
 ): boolean => {
   const tokens = tokensFor(source);
-  const exported = tokens.findIndex(
-    (token, index) =>
-      token.value === "export" && tokens[index + 1]?.value === "default",
-  );
-  if (exported < 0)
-    throw new Error("One exported literal configuration is required.");
-  let start = exported + 2;
-  if (
-    tokens[start]?.value === "defineRehearsalConfig" &&
-    tokens[start + 1]?.value === "("
-  )
-    start += 2;
+  let start = exportedLiteralStart(source, tokens);
   const keys = path.split(".");
   for (let i = 0; i < keys.length; i++) {
     const object = propertiesFor(tokens, start);
@@ -215,21 +255,7 @@ export const editLiteralConfiguration = (
   let result = source;
   for (const change of changes) {
     const tokens = tokensFor(result);
-    const exports = tokens.flatMap((token, index) =>
-      token.value === "export" && tokens[index + 1]?.value === "default"
-        ? [index + 2]
-        : [],
-    );
-    if (exports.length !== 1)
-      throw new Error(
-        "One exported literal configuration is required; use manual source editing.",
-      );
-    let start = exports[0]!;
-    if (
-      tokens[start]?.value === "defineRehearsalConfig" &&
-      tokens[start + 1]?.value === "("
-    )
-      start += 2;
+    let start = exportedLiteralStart(result, tokens);
     const keys = change.path.split(".");
     if (
       !keys.length ||

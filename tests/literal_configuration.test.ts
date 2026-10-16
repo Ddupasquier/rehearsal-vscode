@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { editLiteralConfiguration } from "../src/literal_configuration.js";
+import {
+  editLiteralConfiguration,
+  hasLiteralConfigurationPath,
+} from "../src/literal_configuration.js";
 describe("literal configuration editing", () => {
   it("edits only the exported owner, ignores comments and strings, and preserves unrelated fields", () => {
     const source = `import { defineRehearsalConfig } from '@rehearsal-db/core';\n// runtime: { applicationUrl: 'wrong' }\nexport default defineRehearsalConfig({ application: { startCommand: 'npm run dev', readiness: { url: 'http://localhost:5175' } }, runtime: { applicationUrl: 'http://localhost:5175', projectId: 'stable' } });`;
@@ -43,4 +46,103 @@ describe("literal configuration editing", () => {
         ]),
       ).toThrow();
   });
+  it("refuses exported expression suffixes and additional wrapper arguments", () => {
+    const object = "{ runtime: { applicationUrl: 'http://localhost:5175' } }";
+    for (const expression of [
+      `${object}.runtime`,
+      `${object}['runtime']`,
+      `${object}()`,
+      `${object} && otherConfig`,
+      `${object} || otherConfig`,
+      `${object} ?? otherConfig`,
+      `${object} ? otherConfig : anotherConfig`,
+      `${object}, otherConfig`,
+      `${object}\n(otherConfig)`,
+      `defineRehearsalConfig(${object}).runtime`,
+      `defineRehearsalConfig(${object})(otherConfig)`,
+      `defineRehearsalConfig(${object}) || otherConfig`,
+      `defineRehearsalConfig(${object}, otherConfig)`,
+      `defineRehearsalConfig(${object}, ...otherConfigs)`,
+      `defineRehearsalConfig(${object}`,
+    ]) {
+      const source = `export default ${expression};`;
+      expect(() =>
+        editLiteralConfiguration(source, [
+          { path: "runtime.applicationUrl", value: "http://localhost:5176" },
+        ]),
+      ).toThrow();
+      expect(() =>
+        hasLiteralConfigurationPath(source, "runtime.applicationUrl"),
+      ).toThrow();
+    }
+  });
+  it("preserves supported expression endings, comments and trailing declarations", () => {
+    const object = "{ runtime: { applicationUrl: 'http://localhost:5175' } }";
+    for (const source of [
+      `export default ${object}`,
+      `export default ${object} /* reviewed owner */; // kept\n`,
+      `export default ${object}; const later = 'unchanged';`,
+      `export default ${object}\nconst later = 'unchanged';`,
+      `export default defineRehearsalConfig(/* kept */ ${object} /* kept */);`,
+      `export default defineRehearsalConfig(${object},);\nconst later = 'unchanged';`,
+      `export default defineRehearsalConfig(${object})\nexport const later = 'unchanged';`,
+    ]) {
+      expect(
+        hasLiteralConfigurationPath(source, "runtime.applicationUrl"),
+      ).toBe(true);
+      const result = editLiteralConfiguration(source, [
+        { path: "runtime.applicationUrl", value: "http://localhost:5176" },
+      ]);
+      expect(result).toBe(
+        source.replace("'http://localhost:5175'", '"http://localhost:5176"'),
+      );
+    }
+  });
+  it("refuses regular-expression token bait and other unsupported standalone slash tokens", () => {
+    const object = "{ runtime: { applicationUrl: 'http://localhost:5175' } }";
+    for (const source of [
+      "const bait=/export default {runtime:{applicationUrl:'old'}};/;const config={runtime:{applicationUrl:'http://localhost:5175'}};export {config as default};",
+      `const ratio = 10 / 2; export default ${object};`,
+      `const expression = /not-a-config/; export default ${object};`,
+    ]) {
+      expect(() =>
+        editLiteralConfiguration(source, [
+          { path: "runtime.applicationUrl", value: "http://localhost:5176" },
+        ]),
+      ).toThrow();
+      expect(() =>
+        hasLiteralConfigurationPath(source, "runtime.applicationUrl"),
+      ).toThrow();
+    }
+  });
+  it.each(["\n", "\r", "\r\n", "\u2028", "\u2029"])(
+    "ends line comments at JavaScript terminator %j without hiding an export suffix",
+    (lineEnding) => {
+      const object = "{ runtime: { applicationUrl: 'http://localhost:5175' } }";
+      const invalid = `export default ${object} // comment${lineEnding} || otherConfig;`;
+      expect(() =>
+        editLiteralConfiguration(invalid, [
+          { path: "runtime.applicationUrl", value: "http://localhost:5176" },
+        ]),
+      ).toThrow();
+      expect(() =>
+        hasLiteralConfigurationPath(invalid, "runtime.applicationUrl"),
+      ).toThrow();
+      for (const source of [
+        `// kept prefix${lineEnding}export default ${object};`,
+        `export default ${object} // kept suffix${lineEnding}const later = 'kept';`,
+      ]) {
+        expect(
+          hasLiteralConfigurationPath(source, "runtime.applicationUrl"),
+        ).toBe(true);
+        expect(
+          editLiteralConfiguration(source, [
+            { path: "runtime.applicationUrl", value: "http://localhost:5176" },
+          ]),
+        ).toBe(
+          source.replace("'http://localhost:5175'", '"http://localhost:5176"'),
+        );
+      }
+    },
+  );
 });

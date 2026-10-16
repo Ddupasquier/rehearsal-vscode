@@ -14,10 +14,12 @@ export const createOperationCompletionObserver = ({
   timeoutMs = 30_000,
   intervalMs = 500,
   now = () => Date.now(),
+  allowed = () => true,
 }: {
   readonly timeoutMs?: number;
   readonly intervalMs?: number;
   readonly now?: () => number;
+  readonly allowed?: () => boolean;
 } = {}) => {
   if (
     !Number.isSafeInteger(timeoutMs) ||
@@ -39,7 +41,7 @@ export const createOperationCompletionObserver = ({
     signal?: AbortSignal,
   ): Promise<OperationCompletionResult> => {
     if (pending) return pending;
-    if (disposed || signal?.aborted)
+    if (disposed || signal?.aborted || !allowed())
       return Promise.resolve({ state: "aborted", elapsedMs: 0 });
     const owned = new AbortController();
     controller = owned;
@@ -51,6 +53,9 @@ export const createOperationCompletionObserver = ({
     }, timeoutMs);
     const onAbort = () => owned.abort();
     signal?.addEventListener("abort", onAbort, { once: true });
+    const guard = setInterval(() => {
+      if (!allowed()) owned.abort();
+    }, intervalMs);
     const result = (
       state: OperationCompletionResult["state"],
       activity?: ActivityData,
@@ -92,7 +97,7 @@ export const createOperationCompletionObserver = ({
       });
     pending = (async (): Promise<OperationCompletionResult> => {
       try {
-        while (!owned.signal.aborted) {
+        while (!owned.signal.aborted && allowed()) {
           if (now() - startedAt >= timeoutMs) {
             timedOut = true;
             owned.abort();
@@ -102,19 +107,22 @@ export const createOperationCompletionObserver = ({
           try {
             raw = await untilAbort(
               Promise.resolve().then(() => {
-                if (owned.signal.aborted) throw new Error("Observation ended.");
+                if (owned.signal.aborted || !allowed())
+                  throw new Error("Observation ended.");
                 return readActivity(owned.signal);
               }),
             );
           } catch {
             return result(
-              owned.signal.aborted
+              owned.signal.aborted || !allowed()
                 ? timedOut
                   ? "timeout"
                   : "aborted"
                 : "unavailable",
             );
           }
+          if (owned.signal.aborted || !allowed())
+            return result(timedOut ? "timeout" : "aborted");
           let activity: ActivityData;
           try {
             activity = parseActivityData(raw);
@@ -140,7 +148,7 @@ export const createOperationCompletionObserver = ({
         return result(timedOut ? "timeout" : "aborted");
       } catch {
         return result(
-          owned.signal.aborted
+          owned.signal.aborted || !allowed()
             ? timedOut
               ? "timeout"
               : "aborted"
@@ -148,6 +156,7 @@ export const createOperationCompletionObserver = ({
         );
       } finally {
         clearTimeout(deadline);
+        clearInterval(guard);
         signal?.removeEventListener("abort", onAbort);
         if (controller === owned) controller = undefined;
         pending = undefined;

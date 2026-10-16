@@ -6,6 +6,34 @@ import {
 } from "../src/workspace_activity.js";
 
 describe("workspace activity", () => {
+  it("canonicalizes only the legacy unknown-exit receipt without claiming completion", () => {
+    const legacy = {
+      id: "legacy-unknown",
+      label: "Run rehearsal",
+      startedAt: "2026-10-13T12:00:00Z",
+      finishedAt: "2026-10-13T12:01:00Z",
+      outcome: "unverified",
+      exitCode: null,
+    };
+    const canonical = { ...legacy, finishedAt: null };
+    expect(normalizeActivityHistory([legacy])).toEqual([canonical]);
+    expect(normalizeActivityHistory([canonical])).toEqual([canonical]);
+    expect(reconcileActivityHistory([legacy], new Set([legacy.id]))).toEqual([
+      canonical,
+    ]);
+    for (const invalid of [
+      { ...legacy, finishedAt: "2026-10-13T11:59:00Z" },
+      { ...legacy, finishedAt: "invalid" },
+      { ...legacy, startedAt: "invalid" },
+      { ...legacy, exitCode: 0 },
+      { ...legacy, exitCode: 9 },
+      { ...legacy, exitCode: 130 },
+      { ...legacy, exitCode: "unknown" },
+      { ...legacy, exitCode: undefined },
+    ])
+      expect(normalizeActivityHistory([invalid])).toEqual([]);
+  });
+
   it("keeps only bounded, structurally valid activity records", () => {
     const valid = Array.from({ length: 25 }, (_, index) => ({
       id: `run-${index}`,
