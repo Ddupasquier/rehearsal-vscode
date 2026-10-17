@@ -3,7 +3,7 @@ export const parseLocalEndpoint = (value: unknown): URL => {
   if (
     typeof value !== "string" ||
     value.length > 500 ||
-    /[\u0000-\u0020]/u.test(value)
+    /[\u0000-\u0020\u007f-\u009f\u2028\u2029]/u.test(value)
   )
     throw new Error("Use a bounded HTTP(S) localhost or loopback address.");
   if (
@@ -27,6 +27,9 @@ export const parseLocalEndpoint = (value: unknown): URL => {
     !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
     url.username ||
     url.password ||
+    // Empty delimiters survive serialization even though search/hash are empty.
+    value.includes("?") ||
+    value.includes("#") ||
     url.search ||
     url.hash
   )

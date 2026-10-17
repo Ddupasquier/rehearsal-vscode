@@ -116,6 +116,64 @@ invalid proposals, unchanged reviewed files and the original immutable generatio
 checked independently by Lab. It does not certify native save dialogs, editor writes,
 keyboard/focus behavior or assistive technology; those need separate direct observations.
 
+## Installed migration and endpoint companion
+
+Add `--workbench-review` to the Lab activity command for a separate synthetic consumer
+of `inspect plan`, `candidates` and read-only endpoint proposals. Require a passing main
+report, passing `workbenchReview` and removed workspace. Then run:
+
+```bash
+node --import tsx scripts/verify-workbench-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+```
+
+This companion uses the production migration parser, cross-snapshot guard, shared display
+filters/sorts and configuration/URL validators. Lab independently proves ordered file
+identities, stale-confirmation refusal and topology conflicts. Editor checks prove its
+stricter URL rules; neither layer substitutes for an occupied-listener launch, restart,
+native keyboard/layout, screen reader or provider login. No database services are started
+by this focused workflow.
+
+For live endpoint acceptance, use the Lab's separate leased workflow:
+
+```bash
+npm run resources:verify -- /absolute/path/to/core.tgz --profile=postgresql --endpoint-review
+```
+
+Require passing `profiles.json`, its PostgreSQL `endpointReview.status`, and
+`isolation.json`. This checks occupied-listener refusal, two database-backed application
+sessions, and an ordinary database stop/start with the synthetic edit and exact resources
+preserved. The existing engine must be running; only disposable Lab resources are removed.
+Browser and readiness paths stay separate. This is not native editor, provider-login,
+screen-reader, VM-shutdown or Supabase acceptance.
+
+## Installed baseline scope and resource-policy companion
+
+Add `--scope-policy-review` to the Lab activity command. It creates separate synthetic
+local-file PostgreSQL and Supabase consumers, with infrastructure tools denied and
+audited. Require a passing main report, `scopePolicyReview.status: "passed"`, zero
+audited tool calls and removed workspace. Then run:
+
+```bash
+node --import tsx scripts/verify-scope-policy-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+```
+
+The companion uses the production baseline/provider and policy parsers, aggregate scope
+renderer, and resource-field validators. It checks multi-schema allowed/excluded tables,
+an empty included table, relationship warnings, Storage aggregates, a bounded 2,051-row
+sample, retained generation identity, fingerprint-bound non-writing proposals and exact
+refusal outcomes. Source permission stays configured-but-not-contacted; missing source
+schema evidence stays unavailable. It does not authorize a source or display private rows.
+
+The companion preserves rc.7's observed refusal taxonomy rather than accepting any
+nonzero exit: zero retention reports `baseline_invalid` (4), and manual-only runtime
+identity/source-scope edits report `internal_failure` (10). Those heuristic classifications
+are recorded limitations, not a claim that the user-facing categories are ideal or fixed.
+
+The report is read through the shared 256 KiB regular-file, no-follow boundary and must
+match the exact artifact and completed cleanup. This proves neither a running database,
+Storage service, successful resource deletion, provider login nor native editor behavior.
+Save/apply, visual, keyboard and screen-reader observations remain separate requirements.
+
 ## Direct Extension Development Host observation
 
 On 2026-10-10, the prototype was exercised in an isolated macOS Extension Development

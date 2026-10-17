@@ -40,6 +40,7 @@ import {
 } from "./review_contract.js";
 import { isLocalEndpoint } from "./local_endpoint.js";
 import {
+  assertMatchingMigrationCandidates,
   parseMigrationReviewPlan,
   type MigrationReviewPlan,
 } from "./migration_review.js";
@@ -742,11 +743,49 @@ export const inspectProject = async ({
       });
     }
     const statusData = parseStatusData(status.result.data);
+    const reviewTargets = parseReviewTargets(explain.result.data);
+    const parsedMigrationReview = migrationReview
+      ? parseMigrationReviewPlan(migrationReview.result.data)
+      : undefined;
+    if (parsedMigrationReview) {
+      if (
+        migrationReview!.result.status !== "success" ||
+        candidates.result.status !== "success"
+      )
+        throw new ContractError(
+          "Migration review did not complete successfully.",
+        );
+      assertMatchingMigrationCandidates(
+        parsedMigrationReview,
+        candidates.result.data,
+      );
+      if (
+        reviewTargets.length !== parsedMigrationReview.targets.length ||
+        reviewTargets.some((target, index) => {
+          const migrationTarget = parsedMigrationReview.targets[index]!;
+          return (
+            target.name !== migrationTarget.name ||
+            target.provider !== migrationTarget.provider ||
+            (target.baseline !== null &&
+              target.baseline.generationId !==
+                migrationTarget.baselineGenerationId)
+          );
+        }) ||
+        parsedMigrationReview.targets[0]!.baselineGenerationId !==
+          baselineExecution.result.data.generationId
+      )
+        throw new ContractError(
+          "Migration plan and project target identities disagree. Refresh the project.",
+        );
+    }
     const baseline = {
       ...baselineExecution,
       result: {
         ...baselineExecution.result,
-        data: parseBaselineInspectionData(baselineExecution.result.data),
+        data: parseBaselineInspectionData(
+          baselineExecution.result.data,
+          reviewTargets[0]!.provider,
+        ),
       },
     };
     const shape =
@@ -881,12 +920,8 @@ export const inspectProject = async ({
         ? { resources: parseResourceInventoryData(resources.result.data) }
         : {}),
       ...(isLocalEndpoint(applicationUrl) ? { applicationUrl } : {}),
-      ...(migrationReview
-        ? {
-            migrationReview: parseMigrationReviewPlan(
-              migrationReview.result.data,
-            ),
-          }
+      ...(parsedMigrationReview
+        ? { migrationReview: parsedMigrationReview }
         : {}),
       ...(configurationMetadata
         ? {
@@ -905,7 +940,7 @@ export const inspectProject = async ({
             ),
           }
         : {}),
-      reviewTargets: parseReviewTargets(explain.result.data),
+      reviewTargets,
       environment: {
         target: explain.result.data.environment.target,
         ...(explain.result.data.environment.projectId

@@ -25,7 +25,11 @@ import {
   comparisonSubjects,
   compareEnvironmentEvidence,
 } from "./environment_comparison.js";
-import { migrationReviewMarkup } from "./migration_view.js";
+import {
+  migrationReviewCheckboxId,
+  migrationReviewMarkup,
+} from "./migration_view.js";
+import { selectMigrationView } from "./migration_filter.js";
 import { renderOperationProgress } from "./operation_progress.js";
 import { applyOperationProgressUpdate } from "./workspace_live_update.js";
 import { changedConfigurationFormValues } from "./configuration_form.js";
@@ -36,6 +40,7 @@ import {
   reconcileImageSelection,
   reconcileMigrationReview,
   migrationReviewIdentity,
+  MIGRATION_REVIEW_PERSISTENCE_LIMIT,
 } from "./workspace_view_state.js";
 import {
   coreConfigurationControls,
@@ -637,7 +642,7 @@ const candidateMarkup = (
     <ul class="migration-list" id="migration-list">${migrations
       .map(
         (migration, index) =>
-          `<li data-migration-row data-name="${escapeHtml(migration.filename.toLowerCase())}" data-target="${escapeHtml(migration.target)}" data-status="candidate" data-version="${escapeHtml(migration.version)}" data-order="${index}"><label class="migration-check"><input type="checkbox" data-migration-review="${escapeHtml(`${migration.target}:${migration.version || index}`)}" aria-label="Reviewed ${escapeHtml(migration.filename)}" /><span aria-hidden="true">↗</span><span><code>${escapeHtml(migration.filename)}</code><small>${escapeHtml(migration.target)} · ${escapeHtml(migration.version || "Version unavailable")} · ${escapeHtml(migration.sha256.slice(0, 12))}</small></span><strong class="field-state field-state--suggested">waiting</strong></label></li>`,
+          `<li data-migration-row data-name="${escapeHtml(migration.filename.toLowerCase())}" data-sort-name="${escapeHtml(migration.name.toLowerCase())}" data-target="${escapeHtml(migration.target)}" data-status="candidate" data-version="${escapeHtml(migration.version)}" data-order="${index}"><label class="migration-check"><input id="${migrationReviewCheckboxId(`${migration.target}:${migration.version || index}`)}" type="checkbox" data-migration-review="${escapeHtml(`${migration.target}:${migration.version || index}`)}" aria-label="Reviewed ${escapeHtml(migration.filename)}" /><span aria-hidden="true">↗</span><span><code>${escapeHtml(migration.filename)}</code><small>${escapeHtml(migration.target)} · ${escapeHtml(migration.version || "Version unavailable")} · ${escapeHtml(migration.sha256.slice(0, 12))}</small></span><strong class="field-state field-state--suggested">waiting</strong></label></li>`,
       )
       .join("")}</ul>
     <div id="migration-filter-empty" class="empty-state" hidden><strong>No migrations match these filters.</strong><button id="clear-migration-filters" type="button" class="button button--secondary">Clear migration filters</button></div>
@@ -1139,6 +1144,7 @@ export const renderWorkspaceDocument = (
         const resolveViewScope = ${resolveWorkspaceViewScope.toString()};
         const currentViewScope = () => resolveViewScope(configuredTargets,namedProfiles,preferences);
         const reconcileImageSelection = ${reconcileImageSelection.toString()};
+        const MIGRATION_REVIEW_PERSISTENCE_LIMIT = ${MIGRATION_REVIEW_PERSISTENCE_LIMIT};
         const reconcileMigrationReview = ${reconcileMigrationReview.toString()};
         const reviewIdentity = ${scriptReviewIdentity};
         ${CONFIGURATION_CONTROLS_SCRIPT}
@@ -1164,7 +1170,7 @@ export const renderWorkspaceDocument = (
         const rememberUi = () => {
           const active = document.activeElement;
           const focus = active instanceof HTMLElement && /^[a-z0-9-]{1,100}$/i.test(active.id) ? active.id : null;
-          const reviewed = [...document.querySelectorAll('[data-migration-review]:checked')].slice(0,1000).map(control=>control.dataset.migrationReview);
+          const reviewed = [...document.querySelectorAll('[data-migration-review]:checked')].slice(0,MIGRATION_REVIEW_PERSISTENCE_LIMIT).map(control=>control.dataset.migrationReview);
           const eligibleImageInputs=[...document.querySelectorAll('[data-image-id]')].filter(control=>!control.disabled);
           const images=reconcileImageSelection(eligibleImageInputs.filter(control=>control.checked).map(control=>control.dataset.imageId),eligibleImageInputs.map(control=>control.dataset.imageId));
           vscode?.setState({...vscode?.getState(),view:{focus,scroll:Math.max(0,Math.min(1000000,document.scrollingElement?.scrollTop??0)),reviewed,reviewIdentity,images}});
@@ -1244,31 +1250,19 @@ export const renderWorkspaceDocument = (
         const migrationFrom = document.querySelector("#migration-from");
         const migrationTo = document.querySelector("#migration-to");
         const migrationWarning = document.querySelector("#migration-warning");
+        const selectMigrationView = ${selectMigrationView.toString()};
         const applyMigrationView = () => {
-          const query = migrationSearch?.value.trim().toLowerCase() ?? "";
           const scope = currentViewScope();
           const status = migrationStatus?.value ?? "all";
           const sort = migrationSort?.value ?? "order";
-          migrationRows.sort((left, right) => {
-            if (sort === "name") return left.dataset.name.localeCompare(right.dataset.name);
-            if (sort === "date") return left.dataset.version.localeCompare(right.dataset.version);
-            if (sort === "target") return left.dataset.target.localeCompare(right.dataset.target) || left.dataset.version.localeCompare(right.dataset.version);
-            return Number(left.dataset.order) - Number(right.dataset.order);
-          });
+          const selection=selectMigrationView(migrationRows.map(row=>({row,name:String(row.dataset.name),sortName:row.dataset.sortName,target:String(row.dataset.target),status:String(row.dataset.status),version:String(row.dataset.version),order:Number(row.dataset.order),hasWarning:row.dataset.warning==='warnings'})),{query:migrationSearch?.value??'',targets:scope.targets,status,sort,from:migrationFrom?.value??'',to:migrationTo?.value??'',warning:migrationWarning?.value??'all'});
+          const visibleRows=new Set(selection.visible.map(entry=>entry.row));
           const list = document.querySelector("#migration-list");
-          let visible = 0;
-          migrationRows.forEach((row) => {
-            const matchesTarget = scope.targets.includes(row.dataset.target);
-            const matchesStatus = status === "all" || row.dataset.status === status;
-            const matchesQuery = !query || (String(row.dataset.name) + " " + String(row.dataset.target) + " " + String(row.dataset.version)).includes(query);
-            const date = String(row.dataset.version).slice(0,8);
-            const matchesFrom = !migrationFrom?.value || date >= migrationFrom.value.replaceAll('-', '');
-            const matchesTo = !migrationTo?.value || date <= migrationTo.value.replaceAll('-', '');
-            const matchesWarning = migrationWarning?.value !== 'warnings' || row.dataset.warning === 'warnings';
-            row.hidden = !(matchesTarget && matchesStatus && matchesQuery && matchesFrom && matchesTo && matchesWarning);
-            if (!row.hidden) visible += 1;
+          selection.ordered.forEach(({row}) => {
+            row.hidden = !visibleRows.has(row);
             list?.append(row);
           });
+          const visible=selection.visible.length;
           const count = document.querySelector("#migration-visible-count");
           if (count) count.textContent = String(visible);
           const empty = document.querySelector('#migration-filter-empty');
@@ -1283,7 +1277,8 @@ export const renderWorkspaceDocument = (
         };
         const updateReviewedCount = () => {
           const count=document.querySelector('#migration-reviewed-count');
-          if(count)count.textContent=String(document.querySelectorAll('[data-migration-review]:checked').length)+' reviewed';
+          const reviewedCount=document.querySelectorAll('[data-migration-review]:checked').length;
+          if(count)count.textContent=String(reviewedCount)+' reviewed'+(reviewedCount>MIGRATION_REVIEW_PERSISTENCE_LIMIT?' · Only the first '+MIGRATION_REVIEW_PERSISTENCE_LIMIT+' review checks are remembered after refresh.':'');
         };
         const updateDisplayScope = () => {
           const scope=currentViewScope();
@@ -1361,7 +1356,7 @@ export const renderWorkspaceDocument = (
         document.querySelector("#compare-right")?.addEventListener("change", compare);
         compare();
         const migrationReviewControls=[...document.querySelectorAll('[data-migration-review]')];
-        const restoredReviewIds=new Set(reconcileMigrationReview(savedUi.reviewed,savedUi.reviewIdentity,reviewIdentity,migrationReviewControls.map(control=>control.dataset.migrationReview)));
+        const restoredReviewIds=new Set(reconcileMigrationReview(savedUi.reviewed,savedUi.reviewIdentity,reviewIdentity,migrationReviewControls.map(control=>control.dataset.migrationReview),MIGRATION_REVIEW_PERSISTENCE_LIMIT));
         migrationReviewControls.forEach(control=>{control.checked=restoredReviewIds.has(control.dataset.migrationReview);});
         updateReviewedCount();updateDisplayScope();
         if(typeof savedUi.focus==='string' && /^[a-z0-9-]{1,100}$/i.test(savedUi.focus)) document.getElementById(savedUi.focus)?.focus({preventScroll:true});

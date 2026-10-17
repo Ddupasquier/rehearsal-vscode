@@ -161,6 +161,239 @@ const partialConfiguration = {
     concurrentChanges: "refuse",
   },
 };
+
+const migrationPlan = () => ({
+  schemaVersion: 1,
+  candidateSha256: "a".repeat(64),
+  candidateCount: 1,
+  selection: "complete-ordered-suffix",
+  safety: {
+    readsSqlBodiesForSafety: false,
+    executesSql: false,
+    startsEngine: false,
+  },
+  targets: [
+    {
+      name: "primary",
+      provider: "postgresql",
+      baselineGenerationId: "baseline-1",
+      candidateSha256: "a".repeat(64),
+      entries: ["20261008000000", "20261009000000", "20261009000100"].map(
+        (version, index) => ({
+          id: `primary:${version}`,
+          target: "primary",
+          version,
+          timestamp: version,
+          name: index === 2 ? "add_index" : "history",
+          filename: `${version}_${index === 2 ? "add_index" : "history"}.sql`,
+          sha256: "c".repeat(64),
+          order: index,
+          status: index === 2 ? "candidate" : "represented_by_baseline",
+          required: index === 2,
+          dependsOn: index
+            ? [`primary:${index === 1 ? "20261008000000" : "20261009000000"}`]
+            : [],
+          warnings: index === 2 ? ["sql_safety_not_inferred"] : [],
+          selectionReason: "Complete exact ordered suffix.",
+        }),
+      ),
+    },
+  ],
+});
+
+describe("independent baseline scope provider consistency", () => {
+  it.each(["postgresql", "supabase"] as const)(
+    "keeps matching %s scope ready and refuses a contradictory inspection",
+    async (provider) => {
+      const base = client();
+      const inspect = (
+        scopeProvider: "postgresql" | "supabase",
+        nestedPrimaryProvider?: "postgresql" | "supabase",
+      ) =>
+        inspectProject({
+          workspaceName: "fixture",
+          workspaceRoot: "/workspace",
+          trusted: true,
+          client: {
+            ...base,
+            command: async <Data>(
+              options: Parameters<SnapshotClient["command"]>[0],
+            ) => {
+              if (options.expectedCommand === "explain") {
+                const execution = await base.command<ExplainData>(options);
+                return {
+                  ...execution,
+                  result: {
+                    ...execution.result,
+                    data: {
+                      ...execution.result.data,
+                      environment: {
+                        ...execution.result.data.environment,
+                        target: provider,
+                      },
+                      ...(nestedPrimaryProvider
+                        ? {
+                            targets: [
+                              {
+                                name: "primary",
+                                plan: {
+                                  ...execution.result.data,
+                                  environment: {
+                                    ...execution.result.data.environment,
+                                    target: nestedPrimaryProvider,
+                                  },
+                                },
+                              },
+                            ],
+                          }
+                        : {}),
+                    },
+                  },
+                } as { result: ResultEnvelope<Data>; exitCode: number };
+              }
+              if (options.expectedCommand === "inspect baseline") {
+                const execution = await base.command<BaselineData>(options);
+                return {
+                  ...execution,
+                  result: {
+                    ...execution.result,
+                    data: {
+                      ...execution.result.data,
+                      sanitizationPolicySha256: "a".repeat(64),
+                      review: {
+                        schemaVersion: 1,
+                        provider: scopeProvider,
+                        policy: {
+                          version: 2,
+                          sha256: "a".repeat(64),
+                          state: "baseline-bound",
+                        },
+                        tables: [
+                          {
+                            schema: "public",
+                            name: "widgets",
+                            included: true,
+                            rowCount: 12,
+                            columnCount: 1,
+                            relationshipCount: 0,
+                            identityColumnCount: 0,
+                            transformations: {
+                              KEEP: 1,
+                              PSEUDONYMIZE: 0,
+                              REPLACE: 0,
+                              EXCLUDE: 0,
+                              DERIVE: 0,
+                            },
+                          },
+                        ],
+                        relationships: {
+                          declaredCount: 0,
+                          excludedReferenceCount: 0,
+                          verification: "declared-not-runtime-verified",
+                        },
+                        storage: { assetCount: 0, bytes: 0, buckets: [] },
+                        decisions: {
+                          sourcePermission: "local-inputs-only",
+                          identityHandling: "no-association-policy",
+                          replacement: "separate-core-confirmation",
+                        },
+                        privacy: {
+                          rowValuesIncluded: false,
+                          credentialsIncluded: false,
+                          sourceContacted: false,
+                        },
+                      },
+                    },
+                  },
+                } as { result: ResultEnvelope<Data>; exitCode: number };
+              }
+              return base.command<Data>(options);
+            },
+          },
+        });
+      expect((await inspect(provider)).availability).toBe("ready");
+      const contradictory = await inspect(
+        provider === "postgresql" ? "supabase" : "postgresql",
+      );
+      expect(contradictory.availability).toBe("error");
+      expect(contradictory.baseline).toBeUndefined();
+      expect(contradictory.reviewTargets).toBeUndefined();
+      const contradictoryNestedProvider =
+        provider === "postgresql" ? "supabase" : "postgresql";
+      const nested = await inspect(
+        contradictoryNestedProvider,
+        contradictoryNestedProvider,
+      );
+      expect(nested.availability).toBe("error");
+      expect(nested.baseline).toBeUndefined();
+      expect(nested.reviewTargets).toBeUndefined();
+    },
+  );
+});
+
+describe("simultaneous migration-plan inspection consistency", () => {
+  const inspect = async (plan = migrationPlan()) => {
+    const base = client();
+    return inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        version: async (...args) => ({
+          ...(await base.version(...args)),
+          migrationReviewSchema: 1,
+        }),
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ) =>
+          options.expectedCommand === "inspect plan"
+            ? (envelope("inspect plan", plan) as {
+                result: ResultEnvelope<Data>;
+                exitCode: number;
+              })
+            : base.command<Data>(options),
+      },
+    });
+  };
+  it("keeps matching plan and legacy filename candidate views ready", async () => {
+    const snapshot = await inspect();
+    expect(snapshot.availability).toBe("ready");
+    expect(snapshot.migrationReview?.candidateSha256).toBe(
+      snapshot.candidates?.digest,
+    );
+  });
+  it.each(["digest", "count", "target", "provider", "baseline"])(
+    "fails closed when the simultaneous %s evidence disagrees",
+    async (change) => {
+      const plan = migrationPlan();
+      if (change === "digest") plan.candidateSha256 = "b".repeat(64);
+      else if (change === "count") {
+        plan.candidateCount = 0;
+        const entry = plan.targets[0]!.entries[2]!;
+        entry.status = "applied_to_current_runtime";
+        entry.required = false;
+        entry.warnings = [];
+      } else if (change === "target") {
+        const target = plan.targets[0]!;
+        target.name = "publication";
+        for (const entry of target.entries) {
+          entry.target = target.name;
+          entry.id = entry.id.replace("primary:", "publication:");
+          entry.dependsOn = entry.dependsOn.map((id) =>
+            id.replace("primary:", "publication:"),
+          );
+        }
+      } else if (change === "provider") plan.targets[0]!.provider = "supabase";
+      else plan.targets[0]!.baselineGenerationId = "foreign-generation";
+      const snapshot = await inspect(plan);
+      expect(snapshot.availability).toBe("error");
+      expect(snapshot.migrationReview).toBeUndefined();
+      expect(snapshot.candidates).toBeUndefined();
+      expect(snapshot.error?.message).not.toContain("foreign-generation");
+    },
+  );
+});
 const partialDiscovery = {
   schemaVersion: 1,
   project: { name: "fixture", packageManifest: "present" },

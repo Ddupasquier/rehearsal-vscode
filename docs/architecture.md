@@ -194,6 +194,11 @@ read-only queries. When an operation is busy, stale, or invalid, the view omits 
 details that could be inconsistent and presents only the safe activity state. Runtime
 state comes exclusively from `status.data.runtimeStatus` for each configured target.
 
+Baseline privacy review is also target-bound: both explain scope and independently
+inspected baseline scope must name the target's reviewed provider. A contradiction
+refuses the inspection instead of presenting mixed evidence. Legacy baseline metadata
+without a scope-provider claim remains unknown; the client never invents that claim.
+
 Project discovery remains a core responsibility. A discovery-capable package classifies
 each entry as detected, suggested, or requiring a human decision and supplies bounded
 evidence, confidence, proposed field states, and a safety attestation. The extension
@@ -235,6 +240,20 @@ continues to own exact-plan digests, confirmation flags, operation locks, local-
 validation, cancellation, rollback, and cleanup. Candidate execution is bound to the
 digest already returned by `candidates --json`; a stale digest therefore fails closed.
 Configuration creation and baseline/source decisions remain in core's interactive guide.
+
+The migration plan must agree with the separately read candidate set on ordered targets,
+baseline identities, digests, counts and candidate files before the editor exposes that
+plan. A changed or contradictory snapshot requests a fresh inspection. Historical entries
+precede one complete candidate or applied suffix; filenames never establish SQL safety.
+`migration_filter.ts` owns display filtering and sorting for both the webview and installed
+contract checks. Review checkmarks never select execution scope. At most 1,000 checked IDs
+are remembered after refresh; larger histories show that limit and retain all migrations.
+Name sorting uses the descriptive migration name; full filenames remain searchable.
+Stable, target-scoped checkbox IDs restore keyboard focus after refresh. These IDs grant
+no approval; restored checkmarks still require the same plan and baseline identities.
+The maintained check executes the compiled controller without Node globals to catch
+CommonJS closure references in serialized helpers. This DOM-double check does not prove
+rendered navigation, layout or assistive-technology behavior.
 
 Explicit editor cancellation observes only public activity for at most 30 seconds,
 then refreshes actual project state. This is a bounded completion check, not idle
@@ -289,6 +308,10 @@ The browser address and application readiness endpoint are independent reviewed 
 Changing the browser URL preserves the health-check URL. Change its origin or path only
 through an explicit structured proposal or manual configuration edit. The provider's
 Auth callback remains a separate core-derived endpoint, not an editable browser address.
+Editor-entered URLs require an explicit unprivileged loopback port and no credentials,
+query/fragment delimiters or raw control/line-separator characters. Percent-encoded path
+characters remain path text. Core's configuration contract can be wider; editor input
+refusals are verified at this stricter boundary, not invented as core refusals.
 These checks do not claim to lock out ordinary manual filesystem edits by other tools.
 Only one configuration review may remain active per workspace, including its approval,
 apply and save phases. Cancellation, refusal and failure release that guard. The source,

@@ -47,6 +47,8 @@ application details. The Environment Workbench adds migration search/sort/review
 target and view-profile selection, editable loopback application addresses, retained
 baseline versions, provider-neutral authentication review, aggregate environment
 comparison, redacted report export, and a bounded project-local activity history.
+Migration checkmarks record review, not approval: only the first 1,000 checked IDs
+are remembered after refresh. All migrations remain in the complete execution set.
 Project setup presents a smart Project Profile:
 **Detected** facts, evidence-backed **Suggested** values with confidence, and
 security-sensitive **Your decision** choices that Rehearsal refuses to guess.
@@ -111,6 +113,10 @@ npm install
 npm run check
 code .
 ```
+
+The maintained check also initializes the compiled webview controller in an isolated
+DOM double. This catches packaging/serialization errors; it is not visual or
+screen-reader acceptance.
 
 Press `F5` and choose **Run Rehearsal Extension**. The development host opens Rehearsal
 Test Lab and its dashboard opens automatically after the trusted single-folder project is

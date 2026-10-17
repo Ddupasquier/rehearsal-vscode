@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.7 — Technical preview candidate
+
+- Refuse baseline scope evidence whose provider disagrees with its separately
+  reviewed target, including independent baseline inspection responses.
+- Refuse migration views whose target, baseline, ordered files, counts or digests
+  disagree with the separately inspected candidate set. Historical entries must
+  precede the complete candidate or applied suffix.
+- Use one filter/sort implementation for the workbench and installed-contract
+  checks. Disclose the 1,000-checkmark memory limit without truncating migrations
+  or changing their execution order.
+- Sort by descriptive migration name independently of its version prefix, and
+  retain keyboard focus on review checkboxes through a project refresh.
+- Reject raw URL control characters and empty query/fragment delimiters in local
+  endpoint input; browser, readiness and provider callback fields stay separate.
+- Validate compiled webview initialization after every maintained build check,
+  including helpers serialized from CommonJS output.
+
 ## 0.1.6 — 2026-10-16
 
 - Keep terminal outcomes tied to the exact Rehearsal shell execution, not another

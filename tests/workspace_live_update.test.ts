@@ -374,7 +374,7 @@ describe("operation progress live reconciliation", () => {
         "tsx",
         "--input-type=module",
         "-e",
-        "import { applyOperationProgressUpdate } from './src/workspace_live_update.ts'; process.stdout.write(applyOperationProgressUpdate.toString());",
+        "import { createRequire } from 'node:module'; const { applyOperationProgressUpdate } = createRequire(import.meta.url)('./src/workspace_live_update.ts'); process.stdout.write(applyOperationProgressUpdate.toString());",
       ],
       {
         cwd: process.cwd(),

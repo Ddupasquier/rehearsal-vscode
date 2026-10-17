@@ -279,6 +279,56 @@ describe("configuration proposals", () => {
     expect(result.changedFields).toEqual(["runtime.applicationUrl"]);
     expect(original).toContain('applicationUrl: "http://localhost:5175"');
   });
+  it("keeps browser, health, activity and provider declarations independent", () => {
+    const original = `export default {
+      application: {
+        readiness: { url: "http://127.0.0.1:5176/health", expectedStatus: 204 },
+        activity: { url: "http://127.0.0.1:5177/activity" },
+      },
+      runtime: { applicationUrl: "http://localhost:5175" },
+      supabase: {
+        // Provider callback: http://127.0.0.1:58341/auth/v1/callback
+        authentication: {
+          enableLocalSignup: true,
+          environmentFile: ".env.rehearsal-service.local",
+          providers: [{
+            name: "github",
+            clientIdEnvironmentVariable: "REHEARSAL_GITHUB_CLIENT_ID",
+            clientSecretEnvironmentVariable: "REHEARSAL_GITHUB_CLIENT_SECRET",
+          }],
+        },
+      },
+    };`;
+    const proposal = parseConfigurationProposal({
+      applicationUrl: "HTTP://LOCALHOST:06000/app/../sandbox",
+    });
+    expect(configurationProposalChanges(proposal)).toEqual([
+      {
+        path: "runtime.applicationUrl",
+        value: "http://localhost:6000/sandbox",
+      },
+    ]);
+    const result = applyConfigurationProposal({ source: original, proposal });
+    expect(result.changedFields).toEqual(["runtime.applicationUrl"]);
+    expect(result.source).toBe(
+      original.replace(
+        'applicationUrl: "http://localhost:5175"',
+        'applicationUrl: "http://localhost:6000/sandbox"',
+      ),
+    );
+  });
+  it.each([
+    "http://localhost:5175/?",
+    "http://localhost:5175/#",
+    "http://localhost:5175/PRIVATE_CANARY\u007f",
+    "http://localhost:5175/PRIVATE_CANARY\u2028",
+  ])(
+    "refuses an unsafe browser-address proposal before constructing an edit",
+    (applicationUrl) => {
+      expect(() => parseConfigurationProposal({ applicationUrl })).toThrow();
+      expect(source).toContain('applicationUrl: "http://localhost:5175"');
+    },
+  );
   it.each([
     "readiness: null",
     "readiness: { url: null }",

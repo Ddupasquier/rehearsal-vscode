@@ -340,7 +340,10 @@ const formatVersion = (value: unknown): 1 | 2 => {
     throw new ContractError("Baseline format is unsupported.");
   return value;
 };
-export const parseBaselineInspectionData = (value: unknown): BaselineData => {
+export const parseBaselineInspectionData = (
+  value: unknown,
+  expectedProvider?: BaselineScopeReview["provider"],
+): BaselineData => {
   const input = object(value, "Baseline inspection");
   const review =
     input.review === undefined
@@ -437,6 +440,10 @@ export const parseBaselineInspectionData = (value: unknown): BaselineData => {
       "Retained generation identities contradict the active baseline.",
     );
   if (review !== undefined) {
+    if (expectedProvider !== undefined && review.provider !== expectedProvider)
+      throw new ContractError(
+        "Baseline scope provider contradicts the reviewed target. Refresh the project.",
+      );
     if (
       review.policy.sha256 !== result.sanitizationPolicySha256 ||
       review.tables
@@ -454,8 +461,17 @@ export const parseReviewTargets = (data: ExplainData) => {
   const entries = data.targets ?? [{ name: "primary", plan: data }];
   if (!Array.isArray(entries) || entries.length < 1 || entries.length > 32)
     throw new ContractError("Target review exceeds its bounded contract.");
+  const primaryProvider = enumValue(
+    data.environment.target,
+    ["supabase", "postgresql"],
+    "Primary reviewed provider",
+  );
+  if (entries[0]?.name !== "primary")
+    throw new ContractError(
+      "Target review must begin with the primary project target. Refresh the project.",
+    );
   const names = new Set<string>();
-  return entries.map(({ name, plan }) => {
+  return entries.map(({ name, plan }, index) => {
     const label = metadataText(name, "Reviewed target");
     if (names.has(label))
       throw new ContractError("Reviewed target is duplicated.");
@@ -465,13 +481,21 @@ export const parseReviewTargets = (data: ExplainData) => {
       ["supabase", "postgresql"],
       "Reviewed provider",
     );
+    if (index === 0 && provider !== primaryProvider)
+      throw new ContractError(
+        "Primary target provider contradicts the project review. Refresh the project.",
+      );
     const baseline = plan.baseline
-      ? parseBaselineInspectionData(plan.baseline)
+      ? parseBaselineInspectionData(plan.baseline, provider)
       : null;
     const review =
       plan.baselineReview === undefined
         ? null
         : parseBaselineScopeReview(plan.baselineReview);
+    if (review && review.provider !== provider)
+      throw new ContractError(
+        "Target scope provider contradicts the reviewed target. Refresh the project.",
+      );
     if (
       review &&
       baseline &&
