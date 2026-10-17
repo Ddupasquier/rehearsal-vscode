@@ -1,4 +1,5 @@
 /** Strict bounded public migration plan; filenames never grant SQL safety. */
+import { ContractError } from "./contracts.js";
 export interface MigrationReviewEntry {
   readonly id: string;
   readonly target: string;
@@ -82,6 +83,7 @@ export const parseMigrationReviewPlan = (
     total += rawEntries.length;
     if (total > 10000)
       throw new Error("Migration review exceeds its bounded size.");
+    let suffix: "candidate" | "applied_to_current_runtime" | null = null;
     const entries = rawEntries.map((rawEntry, index): MigrationReviewEntry => {
       const entry = record(rawEntry);
       const version = text(entry.version, 14);
@@ -111,6 +113,16 @@ export const parseMigrationReviewPlan = (
           "Inconsistent migration dependency or safety evidence.",
         );
       if (status === "candidate") count++;
+      if (
+        (status === "represented_by_baseline" && suffix !== null) ||
+        (status !== "represented_by_baseline" &&
+          suffix !== null &&
+          status !== suffix)
+      )
+        throw new ContractError(
+          "Migration history contradicts the complete ordered suffix.",
+        );
+      if (status !== "represented_by_baseline") suffix = status;
       const migrationName = text(entry.name);
       const filename = text(entry.filename);
       if (
@@ -158,4 +170,75 @@ export const parseMigrationReviewPlan = (
     selection: "complete-ordered-suffix",
     targets,
   };
+};
+
+/** Bind independently read public views before their plan may supply editor controls. */
+export const assertMatchingMigrationCandidates = (
+  plan: MigrationReviewPlan,
+  value: unknown,
+): void => {
+  const candidates = record(value);
+  const mismatch = (): never => {
+    throw new ContractError(
+      "Migration plan and candidate evidence changed or disagree. Refresh and review the complete set again.",
+    );
+  };
+  const rawTargets = candidates.targets;
+  const rawCandidates = candidates.candidates;
+  if (!Array.isArray(rawTargets) || !Array.isArray(rawCandidates))
+    return mismatch();
+  if (
+    candidates.candidateSha256 !== plan.candidateSha256 ||
+    candidates.candidateCount !== plan.candidateCount ||
+    candidates.baselineGenerationId !== plan.targets[0]!.baselineGenerationId ||
+    rawTargets.length !== plan.targets.length ||
+    rawCandidates.length !== plan.candidateCount
+  )
+    mismatch();
+  const matches = (
+    raw: unknown,
+    entry: MigrationReviewEntry,
+    requireTarget = false,
+  ): boolean => {
+    if (typeof raw === "string") return raw === entry.filename;
+    const candidate = record(raw);
+    return (
+      candidate.version === entry.version &&
+      candidate.name === entry.name &&
+      candidate.filename === entry.filename &&
+      candidate.sha256 === entry.sha256 &&
+      candidate.status === "candidate" &&
+      (candidate.target === undefined
+        ? !requireTarget
+        : candidate.target === entry.target)
+    );
+  };
+  const expected: MigrationReviewEntry[] = [];
+  for (const [index, target] of plan.targets.entries()) {
+    const observed = record(rawTargets[index]);
+    const entries = target.entries.filter(
+      (entry) => entry.status === "candidate",
+    );
+    if (
+      observed.name !== target.name ||
+      observed.candidateSha256 !== target.candidateSha256 ||
+      observed.candidateCount !== entries.length ||
+      (observed.baselineGenerationId !== undefined &&
+        observed.baselineGenerationId !== target.baselineGenerationId) ||
+      !Array.isArray(observed.candidates) ||
+      observed.candidates.length !== entries.length ||
+      observed.candidates.some(
+        (entry, entryIndex) => !matches(entry, entries[entryIndex]!),
+      )
+    )
+      mismatch();
+    expected.push(...entries);
+  }
+  if (
+    rawCandidates.some(
+      (entry, index) =>
+        !matches(entry, expected[index]!, plan.targets.length > 1),
+    )
+  )
+    mismatch();
 };

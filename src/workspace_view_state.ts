@@ -2,6 +2,9 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import type { NamedWorkspaceProfile } from "./configuration_contract.js";
 
+/** Review ticks are display preferences, not approval or execution authority. */
+export const MIGRATION_REVIEW_PERSISTENCE_LIMIT = 1000;
+
 export const knownWorkspaceTargets = (
   snapshot: ProjectSnapshot,
 ): readonly string[] =>
@@ -91,11 +94,14 @@ export const reconcileMigrationReview = (
   savedIdentity: unknown,
   currentIdentity: string,
   currentIds: readonly string[],
+  // Keep this default literal self-contained when the function is serialized
+  // from CommonJS output. The shared constant is passed by the webview caller.
+  maximumRememberedIds = 1000,
 ): readonly string[] => {
   if (
     savedIdentity !== currentIdentity ||
     !Array.isArray(saved) ||
-    saved.length > 1000
+    saved.length > maximumRememberedIds
   )
     return [];
   const eligible = new Set(currentIds);

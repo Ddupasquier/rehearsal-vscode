@@ -11,8 +11,12 @@ import {
   type WorkspaceActionId,
 } from "../src/action_catalog.js";
 import { DEFAULT_WORKSPACE_PREFERENCES } from "../src/workspace_preferences.js";
-import { migrationReviewIdentity } from "../src/workspace_view_state.js";
+import {
+  migrationReviewIdentity,
+  MIGRATION_REVIEW_PERSISTENCE_LIMIT,
+} from "../src/workspace_view_state.js";
 import { changedConfigurationFormValues } from "../src/configuration_form.js";
+import { migrationReviewCheckboxId } from "../src/migration_view.js";
 import {
   applyConfigurationProposal,
   parseConfigurationProposal,
@@ -102,6 +106,7 @@ const exerciseViewScript = (
     readonly simple: Record<string, string>;
     readonly other?: Record<string, string>;
   },
+  additionalReviewIds: readonly string[] = [],
 ) => {
   const migrationRows = ["primary", "publication"].map(
     (target, index) =>
@@ -113,12 +118,17 @@ const exerciseViewScript = (
         order: String(index),
       }),
   );
-  const reviewControls = migrationRows.map(
-    (row) =>
-      new ViewControl({
-        migrationReview: row.dataset.target + ":20261010000100",
-      }),
-  );
+  const reviewControls = [
+    ...migrationRows.map(
+      (row) =>
+        new ViewControl({
+          migrationReview: row.dataset.target + ":20261010000100",
+        }),
+    ),
+    ...additionalReviewIds.map(
+      (migrationReview) => new ViewControl({ migrationReview }),
+    ),
+  ];
   const resourceRows = [
     new ViewControl({
       viewTarget: "primary",
@@ -152,6 +162,10 @@ const exerciseViewScript = (
     (row) => new ViewControl({ displayTarget: row.dataset.target! }),
   );
   const ids = new Map<string, ViewControl>();
+  for (const control of reviewControls) {
+    control.id = migrationReviewCheckboxId(control.dataset.migrationReview!);
+    ids.set("#" + control.id, control);
+  }
   [
     "migration-list",
     "migration-search",
@@ -831,9 +845,30 @@ describe("workspace control state and truthful actions", () => {
       assets,
     );
     expect(html).toContain('data-migration-review="primary:0"');
+    expect(html).toContain(`id="${migrationReviewCheckboxId("primary:0")}"`);
     expect(html).not.toMatch(/data-migration-review="[^"]+"[^>]+checked/u);
     expect(html).toContain("Version unavailable");
     expect(html).not.toContain('data-version="00000000000000"');
+  });
+
+  it("keeps legacy Name sorting independent of filename extensions and version prefixes", () => {
+    const snapshot = readySnapshot();
+    const html = renderWorkspaceDocument(
+      {
+        ...snapshot,
+        candidates: {
+          ...snapshot.candidates!,
+          files: [
+            "20261001000000_add_widget_index.sql",
+            "20261002000000_add_widget.sql",
+          ],
+        },
+      },
+      assets,
+    );
+    expect(html).toContain('data-sort-name="add_widget_index"');
+    expect(html).toContain('data-sort-name="add_widget"');
+    expect(html).toContain('data-name="20261001000000_add_widget_index.sql"');
   });
 
   it("restores valid reviews, refreshes the counter and revalidates eligible image selection", () => {
@@ -862,6 +897,70 @@ describe("workspace control state and truthful actions", () => {
     controller.ids.get("#clear-image-selection")!.click();
     expect(controller.state()).toMatchObject({ view: { images: [] } });
     expect(controller.ids.get("#review-image-cleanup")!.disabled).toBe(true);
+  });
+
+  it("restores keyboard focus to the target-scoped review control without granting review approval", () => {
+    const snapshot = readySnapshot();
+    const id = "primary:20261010000100";
+    const html = renderWorkspaceDocument(snapshot, assets, "migrations");
+    const saved = {
+      focus: migrationReviewCheckboxId(id),
+      reviewed: [id],
+      reviewIdentity: migrationReviewIdentity(snapshot),
+    };
+    const restored = exerciseViewScript(html, saved);
+    expect(restored.reviewControls[0]!.focusCalls).toEqual([
+      { preventScroll: true },
+    ]);
+    expect(restored.reviewControls.map(({ checked }) => checked)).toEqual([
+      true,
+      false,
+    ]);
+    const stale = exerciseViewScript(html, {
+      ...saved,
+      reviewIdentity: "superseded-plan",
+    });
+    expect(stale.reviewControls.every(({ checked }) => !checked)).toBe(true);
+    expect(snapshot.candidates).toEqual(readySnapshot().candidates);
+  });
+
+  it("discloses the review-memory cap without changing the complete plan or current review count", () => {
+    const snapshot = readySnapshot();
+    const html = renderWorkspaceDocument(snapshot, assets, "migrations");
+    const extraIds = Array.from(
+      { length: MIGRATION_REVIEW_PERSISTENCE_LIMIT },
+      (_, index) => `primary:review-${index}`,
+    );
+    const controller = exerciseViewScript(html, {}, false, undefined, extraIds);
+    for (const control of controller.reviewControls) control.checked = true;
+    controller.reviewControls[0]!.change();
+    controller.ids.get("#environment-target")!.change("all");
+    expect(controller.ids.get("#migration-reviewed-count")!.textContent).toBe(
+      "1002 reviewed · Only the first 1000 review checks are remembered after refresh.",
+    );
+    const saved = controller.state().view as {
+      reviewed: string[];
+      reviewIdentity: string;
+    };
+    expect(saved.reviewed).toHaveLength(MIGRATION_REVIEW_PERSISTENCE_LIMIT);
+    expect(saved.reviewIdentity).toBe(migrationReviewIdentity(snapshot));
+    expect(controller.reviewControls.every(({ checked }) => checked)).toBe(
+      true,
+    );
+    const restored = exerciseViewScript(
+      html,
+      saved,
+      false,
+      undefined,
+      extraIds,
+    );
+    expect(
+      restored.reviewControls.filter(({ checked }) => checked),
+    ).toHaveLength(MIGRATION_REVIEW_PERSISTENCE_LIMIT);
+    expect(restored.ids.get("#migration-reviewed-count")!.textContent).toBe(
+      "1000 reviewed",
+    );
+    expect(snapshot.candidates).toEqual(readySnapshot().candidates);
   });
 
   it("rejects stale review caches and applies named profile/target filters across all owned rows", () => {

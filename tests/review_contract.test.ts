@@ -267,6 +267,109 @@ describe("public baseline scope review", () => {
       }),
     ).toThrow(/SHA-256/u);
   });
+  it.each(["baseline.review", "baselineReview"] as const)(
+    "refuses %s provider evidence that contradicts the reviewed target",
+    (location) => {
+      const reviewed = scope();
+      const inspected = parseBaselineInspectionData({
+        generationId: "generation-provider-control",
+        createdAt: "2026-10-16T00:00:00Z",
+        migrationCutoff: "20261001000000",
+        rowCount: 1_000_000,
+        tableCount: 1,
+        migrationCount: 2,
+        verification: "checksums_verified",
+        sanitizationPolicySha256: reviewed.policy.sha256,
+        ...(location === "baseline.review" ? { review: reviewed } : {}),
+      });
+      const plan: ExplainData = {
+        config: {
+          schemaVersion: 1,
+          path: "rehearsal.config.mjs",
+          project: "provider-control",
+        },
+        environment: {
+          target: "supabase",
+          applicationUrl: "http://localhost:5175",
+        },
+        baseline: inspected,
+        ...(location === "baselineReview" ? { baselineReview: reviewed } : {}),
+      };
+      // Positive control: the scope and baseline are valid for this provider.
+      expect(parseReviewTargets(plan)[0]?.provider).toBe("supabase");
+      // Only the separately supplied target/provider changes; hashes and rows
+      // still match, so those checks cannot substitute for provider binding.
+      expect(() =>
+        parseReviewTargets({
+          ...plan,
+          environment: { ...plan.environment, target: "postgresql" },
+        }),
+      ).toThrow(/provider|contradict/iu);
+    },
+  );
+  it("binds independently inspected scope to its separately reviewed provider", () => {
+    const reviewed = scope();
+    const baseline = {
+      generationId: "generation-independent-provider",
+      createdAt: "2026-10-16T00:00:00Z",
+      migrationCutoff: "20261001000000",
+      rowCount: 1_000_000,
+      tableCount: 1,
+      migrationCount: 2,
+      verification: "checksums_verified",
+      sanitizationPolicySha256: reviewed.policy.sha256,
+      review: reviewed,
+    };
+    expect(
+      parseBaselineInspectionData(baseline, "supabase").review,
+    ).toBeDefined();
+    expect(() => parseBaselineInspectionData(baseline, "postgresql")).toThrow(
+      /provider.*contradict/iu,
+    );
+    // Legacy baseline metadata has no scope-provider claim to cross-bind.
+    const { review: _review, ...legacy } = baseline;
+    expect(
+      parseBaselineInspectionData(legacy, "postgresql").review,
+    ).toBeUndefined();
+  });
+  it("binds the named primary target to the top-level provider without flattening dependents", () => {
+    const plan: ExplainData = {
+      config: {
+        schemaVersion: 1,
+        path: "rehearsal.config.mjs",
+        project: "fixture",
+      },
+      environment: {
+        target: "postgresql",
+        applicationUrl: "http://localhost:5175",
+      },
+    };
+    const primary = { name: "primary", plan };
+    const dependent = {
+      name: "publication",
+      plan: {
+        ...plan,
+        environment: { ...plan.environment, target: "supabase" },
+      },
+    };
+    expect(
+      parseReviewTargets({ ...plan, targets: [primary, dependent] }).map(
+        (target) => target.provider,
+      ),
+    ).toEqual(["postgresql", "supabase"]);
+    expect(() => parseReviewTargets({ ...plan, targets: [dependent] })).toThrow(
+      /primary/iu,
+    );
+    expect(() =>
+      parseReviewTargets({ ...plan, targets: [dependent, primary] }),
+    ).toThrow(/primary/iu);
+    expect(() =>
+      parseReviewTargets({
+        ...plan,
+        targets: [{ name: "primary", plan: dependent.plan }],
+      }),
+    ).toThrow(/provider.*contradict/iu);
+  });
   it("accepts empty baseline aggregates without manufacturing hidden data", () => {
     const input = scope();
     input.tables = [];

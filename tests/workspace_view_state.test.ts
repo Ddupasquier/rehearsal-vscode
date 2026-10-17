@@ -6,6 +6,7 @@ import {
   reconcileImageSelection,
   reconcileMigrationReview,
   migrationReviewIdentity,
+  MIGRATION_REVIEW_PERSISTENCE_LIMIT,
 } from "../src/workspace_view_state.js";
 
 const profiles = [
@@ -24,6 +25,24 @@ const targets = ["primary", "publication"];
 const image = (letter: string) => `sha256:${letter.repeat(64)}`;
 
 describe("harmless workspace display state", () => {
+  it("accepts the exact review-memory boundary but refuses an oversized restored cache", () => {
+    const ids = Array.from(
+      { length: MIGRATION_REVIEW_PERSISTENCE_LIMIT },
+      (_, index) => `primary:${index}`,
+    );
+    expect(reconcileMigrationReview(ids, "current", "current", ids)).toEqual(
+      ids,
+    );
+    expect(
+      reconcileMigrationReview(
+        [...ids, "primary:extra"],
+        "current",
+        "current",
+        ids,
+      ),
+    ).toEqual([]);
+    expect(ids).toHaveLength(MIGRATION_REVIEW_PERSISTENCE_LIMIT);
+  });
   it("applies named and explicit target scopes without changing input or plan identity", () => {
     const selection = {
       profile: "named:Publication review",
