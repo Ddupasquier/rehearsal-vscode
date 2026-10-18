@@ -1418,6 +1418,79 @@ describe("Rehearsal workspace document", () => {
     expect(html).toContain("You do not need to wait for the session to end.");
     expect(html).toContain("View operation progress");
     expect(html).not.toContain("Let the active operation finish");
+    expect(html).toContain(
+      "Close the owning session when you want a fresh project check.",
+    );
+  });
+  it.each(["open", "run", "reset"])(
+    "marks omitted project facts paused rather than missing setup during %s",
+    (kind) => {
+      const html = renderWorkspaceDocument(
+        {
+          workspaceName: "Active project",
+          workspaceRoot: "/synthetic",
+          availability: "operation_active",
+          version: "0.1.0-rc.9",
+          activity: {
+            schemaVersion: 1,
+            state: "busy",
+            operation: {
+              kind,
+              startedAt: "2026-10-18T03:00:00.000Z",
+              rehearsalVersion: "0.1.0-rc.9",
+            },
+          },
+        },
+        assets,
+      );
+      const overview = html.match(
+        /<section id="overview"[\s\S]*?<\/section>/u,
+      )?.[0];
+      expect(overview).toBeDefined();
+      expect(overview?.match(/<strong>Paused<\/strong>/gu)).toHaveLength(4);
+      expect(overview).toContain("Verification waits for the active operation");
+      expect(overview).toContain("View operation progress");
+      expect(overview).not.toContain("Not verified");
+      expect(overview).not.toContain("Create or verify a baseline");
+      expect(overview).not.toContain("Run the project check to continue");
+      expect(overview).not.toContain("Check progress");
+      expect(overview).not.toContain("Needs review");
+      expect(overview).not.toContain("Configure application proof");
+      expect(overview).not.toContain(
+        'href="command:rehearsal.workspaceAction?refresh"',
+      );
+      if (kind !== "open")
+        expect(overview).toContain(
+          "Wait for it to finish before a fresh project check.",
+        );
+    },
+  );
+  it("retains inspection loading guidance while rechecking an active-operation snapshot", () => {
+    const html = renderWorkspaceDocument(
+      {
+        workspaceName: "Active project",
+        workspaceRoot: "/synthetic",
+        availability: "operation_active",
+        activity: {
+          schemaVersion: 1,
+          state: "busy",
+          operation: {
+            kind: "open",
+            startedAt: "2026-10-18T03:00:00.000Z",
+            rehearsalVersion: "0.1.0-rc.9",
+          },
+        },
+      },
+      assets,
+      "overview",
+      undefined,
+      [],
+      "loading",
+    );
+    expect(html).toContain("Checking your project");
+    expect(html).toContain("Inspection in progress");
+    expect(html).toContain("Looking for a verified baseline");
+    expect(html).not.toContain("<strong>Paused</strong>");
   });
   it("owns a stable progress region and routes live updates without whole-document replacement", () => {
     const html = renderWorkspaceDocument(readySnapshot(), assets, "activity");
