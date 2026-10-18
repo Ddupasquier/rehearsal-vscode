@@ -880,12 +880,51 @@ export const renderWorkspaceDocument = (
     "\\u003c",
   );
   const comparisons = comparisonSubjects(snapshot);
-  const comparisonOptions = comparisons
-    .map(
-      (item, index) =>
-        `<option value="${escapeHtml(item.id)}"${index === 0 ? " selected" : ""}>${escapeHtml(item.label)}</option>`,
-    )
-    .join("");
+  const activityTone: StatusTone =
+    snapshot.activity?.state === "busy"
+      ? "active"
+      : snapshot.activity?.state === "idle"
+        ? "success"
+        : snapshot.activity?.state === "stale" ||
+            snapshot.activity?.state === "invalid"
+          ? "warning"
+          : "muted";
+  const activityNote =
+    snapshot.activity?.operation?.kind ??
+    (snapshot.activity?.state === "idle"
+      ? "No active operation"
+      : snapshot.activity?.state === "busy"
+        ? "Operation in progress"
+        : snapshot.activity?.state === "stale" ||
+            snapshot.activity?.state === "invalid"
+          ? "Review operation state"
+          : "Activity unavailable");
+  const comparisonNotice = isLoading
+    ? "Checking comparison evidence. Wait for the project inspection to finish."
+    : snapshot.availability === "operation_active"
+      ? "Comparison is paused while a project operation is running. Finish the operation or review its owning terminal, then refresh."
+      : snapshot.availability === "operation_attention"
+        ? "Comparison evidence is unavailable until the interrupted or unsafe operation is reviewed. Open diagnostics, then refresh after resolving it."
+        : snapshot.availability === "untrusted"
+          ? "Review Workspace Trust before inspecting comparison evidence. No project process has been started."
+          : snapshot.availability === "package_missing"
+            ? "Install Rehearsal and complete project setup before inspecting comparison evidence."
+            : snapshot.availability === "package_outdated"
+              ? "Update the project's Rehearsal package before inspecting comparison evidence."
+              : snapshot.availability === "error"
+                ? "Comparison evidence is unavailable because the project check did not finish safely. Retry the inspection or open diagnostics."
+                : comparisons.length === 0
+                  ? "No reviewed environment or baseline evidence is available to compare. Review project setup, then refresh. Missing evidence is not equal or verified."
+                  : comparisons.length === 1
+                    ? "Only one reviewed environment or baseline is available. Comparison needs two distinct entries. Inspect another configured target or retained baseline, then refresh."
+                    : null;
+  const comparisonOptions = (selected: number) =>
+    comparisons
+      .map(
+        (item, index) =>
+          `<option value="${escapeHtml(item.id)}"${index === selected ? " selected" : ""}>${escapeHtml(item.label)}</option>`,
+      )
+      .join("") || '<option value="">No comparison evidence available</option>';
   // Bound rendered pairs; large histories use the native exported comparison review.
   const visibleComparisons = comparisons.slice(0, 32);
   const comparisonMatrix = visibleComparisons.flatMap((left) =>
@@ -1104,16 +1143,17 @@ export const renderWorkspaceDocument = (
           ${activityHistory.some(({ outcome }) => outcome === "running") ? actionGroup(actionButton(assets, "cancelOwnedOperation", "Cancel editor-started operation", "danger")) : ""}
           <div id="operation-progress" tabindex="-1">${renderOperationProgress(snapshot)}</div>
           <div class="metrics-grid">
-            ${metric("Activity", snapshot.activity?.state ?? "Unavailable", snapshot.activity?.operation?.kind ?? "No active operation", snapshot.activity?.state === "busy" ? "active" : "success")}
+            ${metric("Activity", snapshot.activity?.state ?? "Unavailable", activityNote, activityTone)}
             ${metric("Core", snapshot.version ?? "Not installed", snapshot.compatibility?.state ?? "Compatibility unknown", "muted", true)}
             ${metric("Baseline versions", formatCount(snapshot.baseline?.generations?.length), snapshot.baseline?.generationId ?? "Unavailable")}
-            ${metric("Candidate digest", snapshot.candidates?.digest.slice(0, 12) ?? "Unavailable", `${formatCount(snapshot.candidates?.count)} migrations`)}
+            ${metric("Candidate digest", snapshot.candidates?.digest.slice(0, 12) ?? "Unavailable", `${formatCount(snapshot.candidates?.count)} migrations`, "muted", true)}
           </div>
           <div class="two-column">
             <article class="surface surface--large">
               <div class="surface-heading"><span><small>Environment comparison</small><h2>Compare retained baseline evidence</h2></span></div>
-              <div class="comparison-controls"><label><span>First environment or baseline</span><select id="compare-left">${comparisonOptions}</select></label><label><span>Second environment or baseline</span><select id="compare-right">${comparisonOptions}</select></label></div>
-              <div id="comparison-result" class="comparison-result" role="status">Choose two versions to compare their aggregate evidence.</div>
+              <div class="comparison-controls"><label><span>First environment or baseline</span><select id="compare-left" aria-describedby="comparison-result"${comparisonNotice ? " disabled" : ""}>${comparisonOptions(0)}</select></label><label><span>Second environment or baseline</span><select id="compare-right" aria-describedby="comparison-result"${comparisonNotice ? " disabled" : ""}>${comparisonOptions(comparisons.length > 1 ? 1 : 0)}</select></label></div>
+              <div id="comparison-result" class="comparison-result" role="status">${escapeHtml(comparisonNotice ?? "Choose two distinct entries to compare their aggregate evidence.")}</div>
+              ${comparisonNotice ? actionGroup(navigationButton("setup", "Review project setup"), actionButton(assets, "refresh", "Refresh comparison evidence"), actionButton(assets, "showOutput", "Open comparison diagnostics")) : ""}
             </article>
             <article class="surface">
               <div class="surface-heading"><span><small>Export</small><h2>Privacy-safe verification report</h2></span></div>
@@ -1149,6 +1189,7 @@ export const renderWorkspaceDocument = (
         const reviewIdentity = ${scriptReviewIdentity};
         ${CONFIGURATION_CONTROLS_SCRIPT}
         const comparisonMatrix = ${scriptComparisons};
+        const comparisonNotice = ${JSON.stringify(comparisonNotice)};
         const compactNavigationQuery = window.matchMedia("(max-width: 1050px)");
         const compactNavigationTrigger = document.querySelector("#compact-navigation-trigger");
         const workspaceNavigation = document.querySelector("#workspace-navigation");
@@ -1343,9 +1384,17 @@ export const renderWorkspaceDocument = (
           const rightId = document.querySelector("#compare-right")?.value;
           const result = document.querySelector("#comparison-result");
           if (!result) return;
+          if (comparisonNotice) {
+            result.textContent = comparisonNotice;
+            return;
+          }
+          if (leftId === rightId) {
+            result.textContent = "Choose two distinct environments or baselines. Comparing an entry with itself does not establish a change.";
+            return;
+          }
           const comparison = comparisonMatrix.find((item) => item.leftId === leftId && item.rightId === rightId);
           if (!comparison) {
-            result.textContent = "Choose from the first 32 environments/versions for live comparison. Export a report for larger histories.";
+            result.textContent = "This selected pair is outside the first 32 environments/versions available for live comparison. Choose entries within that limit or export a report for the larger history.";
             return;
           }
           result.replaceChildren();

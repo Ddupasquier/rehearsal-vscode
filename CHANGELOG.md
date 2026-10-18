@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.1.8 — Unreleased technical preview candidate
+## 0.1.9 — Unreleased technical preview candidate
+
+- Disable unavailable comparison controls and explain loading, operation recovery,
+  missing evidence and a single available entry without implying equality.
+- Compare distinct entries by default and preserve the displayed case of exact
+  candidate identifiers.
+- Distinguish busy, idle, unsafe and unavailable activity indicators instead of
+  showing unsafe or missing activity as successful or idle.
+- Package only approved public runtime files and reject unexpected archive paths
+  before installation, keeping generated test evidence and private fixtures local.
+
+## 0.1.8 — Superseded technical preview candidate
 
 - Offer consent-based update reminders separately from minimum CLI compatibility,
   with manual checks, daily opening-session checks and defer/skip/disable choices.

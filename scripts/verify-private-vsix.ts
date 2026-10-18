@@ -29,13 +29,16 @@ const run = async (
     maxBuffer: outputLimit,
   });
 
-const assertArchiveContents = (entries: string[]): void => {
+export const assertArchiveContents = (entries: readonly string[]): void => {
   const required = [
+    "[Content_Types].xml",
+    "extension.vsixmanifest",
     "extension/package.json",
     "extension/dist/src/extension.js",
     "extension/readme.md",
     "extension/LICENSE.txt",
     "extension/PRIVACY.md",
+    "extension/SECURITY.md",
     "extension/SUPPORT.md",
     "extension/changelog.md",
     "extension/media/rehearsal.svg",
@@ -48,17 +51,15 @@ const assertArchiveContents = (entries: string[]): void => {
     }
   }
 
-  const forbidden = entries.filter(
+  const publicFiles = new Set(required);
+  const unexpected = entries.filter(
     (path) =>
-      path.startsWith("extension/src/") ||
-      path.startsWith("extension/tests/") ||
-      path.startsWith("extension/scripts/") ||
-      path.endsWith(".map") ||
-      path.endsWith(".d.ts"),
+      !publicFiles.has(path) &&
+      !/^extension\/dist\/src\/[a-z][a-z0-9_]*\.js$/u.test(path),
   );
-  if (forbidden.length > 0) {
+  if (unexpected.length > 0 || new Set(entries).size !== entries.length) {
     throw new Error(
-      `Packaged extension contains private development files: ${forbidden.join(", ")}`,
+      "Packaged extension contains unexpected or duplicate files outside the public runtime allowlist.",
     );
   }
 };
@@ -92,10 +93,7 @@ const main = async (): Promise<void> => {
     const archive = await readFile(vsixPath);
     const sha256 = createHash("sha256").update(archive).digest("hex");
     const { stdout: archiveOutput } = await run("unzip", ["-Z1", vsixPath]);
-    const entries = archiveOutput
-      .split(/\r?\n/u)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const entries = archiveOutput.split(/\r?\n/u).filter(Boolean);
     assertArchiveContents(entries);
 
     const { stdout: manifestOutput } = await run("unzip", [
@@ -233,7 +231,8 @@ const main = async (): Promise<void> => {
   }
 };
 
-void main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (require.main === module)
+  void main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
