@@ -1350,18 +1350,55 @@ describe("workspace control state and truthful actions", () => {
 });
 
 describe("Rehearsal workspace document", () => {
+  it("keeps installed extension and core versions separate in the top-right update control", () => {
+    const html = renderWorkspaceDocument(readySnapshot(), {
+      ...assets,
+      extensionVersion: "0.1.11",
+      extensionRelease: {
+        status: "checked",
+        latestVersion: "0.1.12",
+        checkedAt: 1_800_000_000_000,
+        channel: "preview",
+      },
+    });
+    const header = html.match(
+      /<header class="topbar">[\s\S]*?<\/header>/u,
+    )?.[0];
+    expect(header).toContain("Extension 0.1.11 → 0.1.12");
+    expect(header).toContain('id="extension-version"');
+    expect(header).toContain('data-state="available"');
+    expect(header).toContain(assets.actionUris.checkUpdates);
+    expect(header).toContain("Core ");
+    expect(header).not.toContain("up to date");
+  });
+  it("always shows the loaded extension before any project inspection or release check", () => {
+    const html = renderWorkspaceDocument(
+      {
+        workspaceName: "Fresh project",
+        workspaceRoot: "/private/fresh",
+        availability: "loading",
+      },
+      {
+        ...assets,
+        extensionVersion: "0.1.11",
+      },
+    );
+    expect(html).toContain("Extension 0.1.11");
+    expect(html).toContain("Update availability is unknown");
+    expect(html).not.toContain("Extension 0.1.11 →");
+  });
   it.each(WORKSPACE_PAGES)(
-    "keeps one manual update action in the shared wrapping footer on %s",
+    "keeps the manual update action in the footer and version header on %s",
     (page) => {
       const html = renderWorkspaceDocument(readySnapshot(), assets, page);
       const action = 'href="command:rehearsal.workspaceAction?checkUpdates"';
-      expect(html.split(action)).toHaveLength(2);
+      expect(html.split(action)).toHaveLength(3);
+      expect(
+        html.match(/<header class="topbar">[\s\S]*?<\/header>/u)?.[0],
+      ).toContain(action);
       expect(
         html.match(/<footer class="product-footer">[\s\S]*?<\/footer>/u)?.[0],
       ).toContain(action);
-      expect(
-        html.match(/<header class="topbar">[\s\S]*?<\/header>/u)?.[0],
-      ).not.toContain(action);
     },
   );
   it("keeps cancellation above progress and receipts only for an editor-owned operation", () => {

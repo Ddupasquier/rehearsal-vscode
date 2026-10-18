@@ -1,5 +1,6 @@
 /** Optional release metadata only; never part of passive project inspection. */
 import { createHash } from "node:crypto";
+import type { ExtensionReleaseEvidence } from "./extension_release_view.js";
 
 export const UPDATE_RELEASES_URL =
   "https://github.com/Ddupasquier/rehearsal-vscode/releases";
@@ -233,6 +234,7 @@ const initial: AdvisoryState = {
   skippedExtension: null,
 };
 export interface UpdateAdvisoryHost {
+  extensionRelease?(key: string, evidence: ExtensionReleaseEvidence): void;
   checking<T>(action: () => Promise<T>): Promise<T>;
   allowed(key: string): boolean;
   identify(key: string): Promise<UpdateProjectIdentity>;
@@ -316,6 +318,13 @@ export class UpdateAdvisoryController {
     if (current) return current;
     const pending = this.perform(key, manual, this.once.delete(key))
       .catch(() => {
+        if (this.allowed(key))
+          this.host.extensionRelease?.(key, {
+            status: "unknown",
+            latestVersion: null,
+            checkedAt: null,
+            channel: this.preview ? "preview" : "stable",
+          });
         if (manual && this.allowed(key))
           this.host.information(
             "Update availability is unknown. Nothing was changed; try again later.",
@@ -408,6 +417,12 @@ export class UpdateAdvisoryController {
       },
     });
     const unchanged = () => sameState() && !cancelledByOwner;
+    this.host.extensionRelease?.(key, {
+      status: "checking",
+      latestVersion: null,
+      checkedAt: null,
+      channel: this.preview ? "preview" : "stable",
+    });
     let timeout: ReturnType<typeof setTimeout>;
     let cancelled: () => void;
     let stoppedBy: "deadline" | "cancelled" | null = null;
@@ -504,16 +519,36 @@ export class UpdateAdvisoryController {
       abort.signal.removeEventListener("abort", cancelled!);
       // A failed progress host may leave its task pending; retire only our requests.
       abort.abort();
+      if (!unchanged() && this.allowed(key))
+        this.host.extensionRelease?.(key, {
+          status: "unknown",
+          latestVersion: null,
+          checkedAt: null,
+          channel: this.preview ? "preview" : "stable",
+        });
     }
     if (!unchanged()) return;
     const current = await this.host.identify(key);
     if (!unchanged() || current.fingerprint !== identity.fingerprint) {
+      if (this.allowed(key))
+        this.host.extensionRelease?.(key, {
+          status: "unknown",
+          latestVersion: null,
+          checkedAt: null,
+          channel: this.preview ? "preview" : "stable",
+        });
       if (manual && this.allowed(key))
         this.host.information(
           "The installed project changed during the check. Check for updates again; nothing was changed.",
         );
       return;
     }
+    this.host.extensionRelease?.(key, {
+      status: extension === null ? "unknown" : "checked",
+      latestVersion: extension,
+      checkedAt: extension === null ? null : this.now(),
+      channel: this.preview ? "preview" : "stable",
+    });
     const newerCore =
       core &&
       identity.version &&

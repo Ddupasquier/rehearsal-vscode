@@ -1311,6 +1311,9 @@ const server = createServer(async (request, response) => {
   const stylesheetUrl = new URL("/workspace.css", origin);
   const theme = url.searchParams.get("theme");
   if (theme) stylesheetUrl.searchParams.set("theme", theme);
+  const extensionVersion: string = JSON.parse(
+    await readFile(resolve(repositoryRoot, "package.json"), "utf8"),
+  ).version;
   response.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": "no-store",
@@ -1323,6 +1326,19 @@ const server = createServer(async (request, response) => {
       logoUri: `${origin}/rehearsal.png`,
       actionUris,
       scriptNonce: "preview-navigation-nonce",
+      extensionVersion,
+      extensionRelease:
+        url.searchParams.get("extension-update") === "available"
+          ? {
+              status: "checked",
+              // Synthetic next patch, not a claim about a published release.
+              latestVersion: extensionVersion.replace(/\d+$/u, (patch) =>
+                String(Number(patch) + 1),
+              ),
+              checkedAt: 1_792_303_200_000,
+              channel: "preview",
+            }
+          : undefined,
     },
     activePage,
     undefined,

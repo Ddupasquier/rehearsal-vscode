@@ -10,6 +10,7 @@ import {
 import { readUpdateProjectIdentity } from "./update_identity.js";
 import type { RehearsalTreeProvider } from "./tree_provider.js";
 import type { RehearsalWorkspaceActions } from "./workspace_actions.js";
+import type { ExtensionReleaseEvidence } from "./extension_release_view.js";
 
 export function createUpdateAdvisory({
   projects,
@@ -17,6 +18,7 @@ export function createUpdateAdvisory({
   state,
   version,
   preview,
+  onExtensionRelease,
   request = fetchUpdateMetadata,
 }: {
   projects: Pick<RehearsalTreeProvider, "snapshotFor">;
@@ -24,6 +26,10 @@ export function createUpdateAdvisory({
   state: vscode.Memento;
   version: string;
   preview: boolean;
+  onExtensionRelease?: (
+    key: string,
+    evidence: ExtensionReleaseEvidence,
+  ) => void;
   request?: typeof fetchUpdateMetadata;
 }) {
   const folder = (key: string) =>
@@ -32,6 +38,10 @@ export function createUpdateAdvisory({
     );
   return new UpdateAdvisoryController(
     {
+      extensionRelease: (key, evidence) => {
+        if (vscode.workspace.isTrusted && folder(key)?.uri.scheme === "file")
+          onExtensionRelease?.(key, evidence);
+      },
       checking: async (action) =>
         vscode.window.withProgress(
           {

@@ -60,6 +60,11 @@ defer or skip a release, or disable checks with **Rehearsal: Configure Update Ch
 Checks never install anything automatically. Compatible does not mean newest; local or
 candidate builds and unverified installation provenance require manual review.
 
+The dashboard's top-right **Extension** badge always shows the loaded extension
+version, separately from **Core**. A confirmed update shows installed → newest;
+select the badge to check or review updates. Offline or unchecked availability is
+unknown—not “up to date.” Release results update in place without refreshing the view.
+
 ## What the workbench shows
 
 The Environments page consumes Rehearsal core's versioned resource inventory. It shows
