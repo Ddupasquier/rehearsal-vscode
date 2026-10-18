@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.1.10 — Free Starter candidate
+## 0.1.11 — Active-session guidance candidate
+
+- Explain that project checks are paused while an operation owns the workspace,
+  rather than treating temporarily unavailable facts as missing setup or a failed
+  baseline. Persistent sandbox sessions direct users to their owning terminal.
+- Preserve unknown facts, the complete free Starter grant, existing safety controls
+  and command contracts.
+
+## 0.1.10 — Released Free Starter preview
 
 - License every included editor feature indefinitely at no charge for personal and
   commercial development, without an account, payment card, trial or activation.

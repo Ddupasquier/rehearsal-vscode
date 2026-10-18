@@ -238,53 +238,59 @@ const journeyFor = (snapshot: ProjectSnapshot): readonly JourneyStep[] =>
         { label: "Run", value: "Checking", state: "waiting" },
         { label: "Verify", value: "Checking", state: "waiting" },
       ]
-    : [
-        {
-          label: "Set up",
-          value: snapshot.configPath ? "Configured" : "Needs review",
-          state: snapshot.configPath ? "done" : "current",
-        },
-        {
-          label: "Baseline",
-          value: snapshot.baseline ? "Verified" : "Waiting",
-          state: snapshot.baseline ? "done" : "waiting",
-        },
-        {
-          label: "Review",
-          value:
-            snapshot.candidates?.count === undefined
-              ? "Waiting"
-              : snapshot.candidates.count === 0
-                ? "No changes"
-                : `${snapshot.candidates.count} pending`,
-          state:
-            snapshot.candidates?.count === undefined
-              ? "waiting"
-              : snapshot.candidates.count > 0
+    : snapshot.availability === "operation_active"
+      ? ["Set up", "Baseline", "Review", "Run", "Verify"].map((label) => ({
+          label,
+          value: "Paused",
+          state: "waiting" as const,
+        }))
+      : [
+          {
+            label: "Set up",
+            value: snapshot.configPath ? "Configured" : "Needs review",
+            state: snapshot.configPath ? "done" : "current",
+          },
+          {
+            label: "Baseline",
+            value: snapshot.baseline ? "Verified" : "Waiting",
+            state: snapshot.baseline ? "done" : "waiting",
+          },
+          {
+            label: "Review",
+            value:
+              snapshot.candidates?.count === undefined
+                ? "Waiting"
+                : snapshot.candidates.count === 0
+                  ? "No changes"
+                  : `${snapshot.candidates.count} pending`,
+            state:
+              snapshot.candidates?.count === undefined
+                ? "waiting"
+                : snapshot.candidates.count > 0
+                  ? "current"
+                  : "done",
+          },
+          {
+            label: "Run",
+            value:
+              verifiedRuntimeState(snapshot) === "missing"
+                ? "Not created"
+                : (snapshot.runtime?.state ?? "Unknown"),
+            state:
+              snapshot.runtime?.state === "running"
                 ? "current"
-                : "done",
-        },
-        {
-          label: "Run",
-          value:
-            verifiedRuntimeState(snapshot) === "missing"
-              ? "Not created"
-              : (snapshot.runtime?.state ?? "Unknown"),
-          state:
-            snapshot.runtime?.state === "running"
-              ? "current"
-              : verifiedRuntimeState(snapshot) === "available"
-                ? "done"
-                : "waiting",
-        },
-        {
-          label: "Verify",
-          value: snapshot.configuration?.application.readinessUrl
-            ? "Proof configured · run to verify"
-            : "Configure application proof",
-          state: "waiting",
-        },
-      ];
+                : verifiedRuntimeState(snapshot) === "available"
+                  ? "done"
+                  : "waiting",
+          },
+          {
+            label: "Verify",
+            value: snapshot.configuration?.application.readinessUrl
+              ? "Proof configured · run to verify"
+              : "Configure application proof",
+            state: "waiting",
+          },
+        ];
 
 const metric = (
   label: string,
@@ -431,9 +437,9 @@ const nextStepMarkup = (
   if (snapshot.availability === "operation_active") {
     const guidance =
       snapshot.activity?.operation?.kind === "open"
-        ? "Your sandbox session stays open for hands-on testing. When the application is ready, open the local address shown in its terminal. You do not need to wait for the session to end."
-        : "A project operation is running. View its progress or the owning terminal; project details refresh when it finishes.";
-    return `<p>${guidance}</p>${actionGroup(navigationButton("activity", "View operation progress"), actionButton(assets, "refresh", "Check progress", "primary"), actionButton(assets, "showOutput", "Open diagnostics"))}`;
+        ? "Your sandbox session stays open for hands-on testing. When the application is ready, open the local address shown in its terminal. You do not need to wait for the session to end. Close the owning session when you want a fresh project check."
+        : "A project operation is running. View its progress or the owning terminal. Wait for it to finish before a fresh project check.";
+    return `<p>${guidance}</p>${actionGroup(navigationButton("activity", "View operation progress"), actionButton(assets, "showOutput", "Open diagnostics"))}`;
   }
   if (snapshot.availability === "operation_attention") {
     return `<p>Review the interrupted operation before trying another change.</p>${actionGroup(actionButton(assets, "doctor", "Run Doctor", "primary"), actionButton(assets, "supportReport", "Support report"))}`;
@@ -874,6 +880,117 @@ export const renderWorkspaceDocument = (
   const candidateCount = snapshot.candidates?.count;
   const targetCount = configuredTargets.length || undefined;
   const decisionCount = profile?.decisions.length;
+  const summaryMetrics =
+    !isLoading && snapshot.availability === "operation_active"
+      ? [
+          metric(
+            "Readiness",
+            "Paused",
+            "Project checks wait for the active operation",
+            "active",
+          ),
+          metric(
+            "Baseline",
+            "Paused",
+            "Verification waits for the active operation",
+            "active",
+          ),
+          metric(
+            "Migrations",
+            "Paused",
+            "Migration inspection resumes after the operation",
+            "active",
+          ),
+          metric(
+            "Runtime",
+            "Paused",
+            "View Activity or the owning terminal for progress",
+            "active",
+          ),
+        ].join("")
+      : [
+          metric(
+            "Readiness",
+            readinessValue,
+            readiness
+              ? `${readiness.failed} checks need attention`
+              : isLoading
+                ? "Reading readiness checks"
+                : snapshot.error
+                  ? "Follow the recovery steps below"
+                  : "Run the project check to continue",
+            readiness?.failed === 0
+              ? "success"
+              : isLoading
+                ? "active"
+                : "warning",
+          ),
+          metric(
+            "Baseline",
+            snapshot.baseline
+              ? formatCount(snapshot.baseline.rowCount)
+              : isLoading
+                ? "Checking…"
+                : snapshot.error
+                  ? "Not checked"
+                  : "Not verified",
+            snapshot.baseline
+              ? `${formatCount(snapshot.baseline.tableCount)} tables`
+              : isLoading
+                ? "Looking for a verified baseline"
+                : snapshot.error
+                  ? "Inspection did not reach this check"
+                  : "Create or verify a baseline to continue",
+            snapshot.baseline ? "success" : isLoading ? "active" : "muted",
+          ),
+          metric(
+            "Migrations",
+            candidateCount === undefined
+              ? isLoading
+                ? "Checking…"
+                : snapshot.error
+                  ? "Not checked"
+                  : "—"
+              : formatCount(candidateCount),
+            candidateCount === undefined
+              ? isLoading
+                ? "Reading migration history"
+                : snapshot.error
+                  ? "Inspection did not reach this check"
+                  : "Run the project check to continue"
+              : candidateCount === 0
+                ? "Nothing waiting"
+                : "Ready for review",
+            candidateCount
+              ? "active"
+              : candidateCount === 0
+                ? "success"
+                : isLoading
+                  ? "active"
+                  : "muted",
+          ),
+          metric(
+            "Runtime",
+            snapshot.runtime?.state ??
+              (isLoading
+                ? "Checking…"
+                : snapshot.error
+                  ? "Not checked"
+                  : "Unknown"),
+            targetCount === undefined
+              ? isLoading
+                ? "Reading configured targets"
+                : snapshot.error
+                  ? "Inspection did not reach this check"
+                  : "Run the project check to continue"
+              : `${formatCount(targetCount)} local target${targetCount === 1 ? "" : "s"}`,
+            snapshot.runtime?.state === "running"
+              ? "active"
+              : isLoading
+                ? "active"
+                : "muted",
+          ),
+        ].join("");
   const activePageDetails = WORKSPACE_PAGE_DETAILS[activePage];
   const scriptPreferences = JSON.stringify(preferences).replaceAll(
     "<",
@@ -1018,10 +1135,7 @@ export const renderWorkspaceDocument = (
           </div>
 
           <div class="metrics-grid" aria-label="Project summary">
-            ${metric("Readiness", readinessValue, readiness ? `${readiness.failed} checks need attention` : isLoading ? "Reading readiness checks" : snapshot.error ? "Follow the recovery steps below" : "Run the project check to continue", readiness?.failed === 0 ? "success" : isLoading ? "active" : "warning")}
-            ${metric("Baseline", snapshot.baseline ? formatCount(snapshot.baseline.rowCount) : isLoading ? "Checking…" : snapshot.error ? "Not checked" : "Not verified", snapshot.baseline ? `${formatCount(snapshot.baseline.tableCount)} tables` : isLoading ? "Looking for a verified baseline" : snapshot.error ? "Inspection did not reach this check" : "Create or verify a baseline to continue", snapshot.baseline ? "success" : isLoading ? "active" : "muted")}
-            ${metric("Migrations", candidateCount === undefined ? (isLoading ? "Checking…" : snapshot.error ? "Not checked" : "—") : formatCount(candidateCount), candidateCount === undefined ? (isLoading ? "Reading migration history" : snapshot.error ? "Inspection did not reach this check" : "Run the project check to continue") : candidateCount === 0 ? "Nothing waiting" : "Ready for review", candidateCount ? "active" : candidateCount === 0 ? "success" : isLoading ? "active" : "muted")}
-            ${metric("Runtime", snapshot.runtime?.state ?? (isLoading ? "Checking…" : snapshot.error ? "Not checked" : "Unknown"), targetCount === undefined ? (isLoading ? "Reading configured targets" : snapshot.error ? "Inspection did not reach this check" : "Run the project check to continue") : `${formatCount(targetCount)} local target${targetCount === 1 ? "" : "s"}`, snapshot.runtime?.state === "running" ? "active" : isLoading ? "active" : "muted")}
+            ${summaryMetrics}
           </div>
 
           <div class="overview-grid">
