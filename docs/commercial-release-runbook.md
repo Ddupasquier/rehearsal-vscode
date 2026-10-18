@@ -1,13 +1,15 @@
 # Extension release runbook
 
 The [commercial-readiness guide](commercial-readiness.md) owns the planned tier matrix.
-The current preview has no technical trial or entitlement gating; its existing
-[LICENSE](../LICENSE) is unchanged. This runbook grants no release or legal authority.
+Versions supplied with the [Starter license](../LICENSE) permit indefinite no-charge
+personal and commercial development use of all included features, without a trial,
+account or activation. Pro remains unimplemented. Historical previews retain their
+bundled terms and checksums. This runbook grants no release or legal authority.
 
 ## Choose the release route
 
-- **Starter technical distribution:** no paid cohort is required. Review the intended
-  free terms and support/privacy information. Marketplace publication separately needs
+- **Starter technical distribution:** no paid cohort or payment setup is required.
+  Preserve the approved Starter grant and support/privacy information. Marketplace publication separately needs
   owner approval, verified publisher identity, account security and recovery controls.
 - **Pro paid launch:** additionally approve price, trial trigger/duration, update term,
   seller identity, checkout/refunds, support and the chosen entitlement/offline behavior.

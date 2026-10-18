@@ -37,7 +37,11 @@ export const renderBaselineScopeReview = (
       "Replacing the baseline requires a separate core confirmation; this review does not change it.",
     ],
   ];
-  return `<div class="readiness-summary"><span>${count(included.length)} included tables</span><span>${count(review.tables.length - included.length)} excluded tables</span><span>${count(schemas.length)} schemas</span></div>
+  return `<div class="readiness-summary">
+      <span>${count(included.length)} included tables</span>
+      <span>${count(review.tables.length - included.length)} excluded tables</span>
+      <span>${count(schemas.length)} schemas</span>
+    </div>
     <dl class="detail-list"><div><dt>Provider</dt><dd>${review.provider}</dd></div><div><dt>Policy</dt><dd>Version ${review.policy.version} · baseline-bound</dd></div><div><dt>Policy SHA-256</dt><dd><code>${review.policy.sha256}</code></dd></div><div><dt>Migration boundary</dt><dd>${escape(snapshot.baseline?.migrationCutoff ?? "Unavailable")}</dd></div><div><dt>Relationships</dt><dd>${count(review.relationships.declaredCount)} declared; runtime enforcement is not asserted by inspection</dd></div><div><dt>Storage</dt><dd>${count(review.storage.assetCount)} files · ${count(review.storage.bytes)} bytes · ${count(review.storage.buckets.length)} buckets</dd></div></dl>
     ${review.relationships.excludedReferenceCount ? `<p class="surface-copy" role="note">Review needed: ${count(review.relationships.excludedReferenceCount)} declared references point to excluded tables. Review the policy and runtime relationship proof before replacement.</p>` : ""}
     <details class="technical-details"><summary>Review allowed and excluded tables</summary><div class="version-list">${review.tables.map((table) => `<article class="version-row"><span><strong>${escape(`${table.schema}.${table.name}`)}</strong><small>${table.included ? "Included" : "Excluded"} · ${count(table.columnCount)} declared columns</small></span><span><b>${count(table.rowCount)} baseline rows</b><small>${count(table.transformations.KEEP)} kept · ${count(table.transformations.PSEUDONYMIZE)} pseudonymous · ${count(table.transformations.REPLACE)} replaced · ${count(table.transformations.EXCLUDE)} excluded · ${count(table.transformations.DERIVE)} derived</small></span></article>`).join("")}</div></details>

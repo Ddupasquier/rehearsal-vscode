@@ -80,6 +80,9 @@ describe("baseline and auth review presentation", () => {
     expect(html).toContain("references point to excluded tables");
     expect(html).toContain("did not contact or authorize a source");
     expect(html).toContain("separate core confirmation");
+    expect(html).toMatch(
+      /<div class="readiness-summary">\s+<span>1 included tables<\/span>\s+<span>0 excluded tables<\/span>\s+<span>1 schemas<\/span>\s+<\/div>/u,
+    );
     expect(html).not.toContain("/private");
   });
   it("makes provider, MFA and identity review distinct from login proof", () => {

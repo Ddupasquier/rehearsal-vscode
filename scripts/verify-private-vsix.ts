@@ -108,7 +108,7 @@ const main = async (): Promise<void> => {
       manifest.version !== expectedManifest.version ||
       manifest.license !== "SEE LICENSE IN LICENSE" ||
       manifest.preview !== true ||
-      manifest.pricing !== "Trial"
+      manifest.pricing !== "Free"
     ) {
       throw new Error(
         `Packaged extension metadata does not match ${expectedIdentity}.`,

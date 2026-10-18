@@ -2004,6 +2004,13 @@ input::placeholder {
   background: color-mix(in srgb, var(--rh-surface) 56%, transparent);
 }
 
+.readiness-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 14px;
+}
+
 .surface code,
 .comparison-result p {
   overflow-wrap: anywhere;

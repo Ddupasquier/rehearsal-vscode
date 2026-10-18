@@ -6,7 +6,7 @@
 
 <p align="center"><strong>Understand whether a database change is ready—without memorizing the CLI.</strong></p>
 
-This commercial preview is a project-aware client for the Rehearsal package
+This free Starter preview is a project-aware client for the Rehearsal package
 installed in each workspace. Its native project navigator opens a Rehearsal Workspace with
 persistent navigation for Overview, Project setup, Migrations, Environments, Data & auth,
 Configuration, and Activity & reports.
@@ -221,13 +221,21 @@ and optional paid **Pro** editor workflows. Starter keeps basic setup, migration
 review, runtime controls, safety and recovery; Pro adds advanced visual productivity.
 See the [edition boundary and launch gates](docs/commercial-readiness.md).
 
-That tier split is not implemented yet. Current preview artifacts retain the bundled
-[license](LICENSE), which defines a 14-day evaluation and per-user commercial-preview
-terms. An accepted receipt, invoice or order identifies a paid entitlement; public
-prerelease availability alone does not. There is no technical trial countdown or paid
-feature enforcement today. New Starter/Pro terms, pricing, billing and Marketplace
-publication still need separate review and approval. Rehearsal core remains fully usable
-without the extension.
+Versions distributed with the [Starter license](LICENSE) include all their editor
+features indefinitely at no charge for personal or commercial development work. No
+account, payment card, purchase, trial period or license activation is required. This
+includes the existing advanced review, configuration, comparison and reporting tools;
+they are not being removed or put behind a paywall.
+
+Future optional Pro features must be separately identified and cannot retroactively
+restrict a version already granted under the Starter license. No Pro entitlement system,
+billing flow or paid-feature gate is implemented. Pro terms, pricing and Marketplace
+publication remain separate decisions. Rehearsal core stays MIT-licensed and fully usable
+without the extension. Existing accepted-order rights and support remain in effect.
+
+Historical VSIX files retain their bundled terms; this source change does not replace
+their bytes or checksums. Install a reviewed release carrying the Starter license to use
+that grant. Technical preview status describes stability, not a timed trial.
 
 GitHub VSIX installations do not auto-update. Every delivery must identify the extension
 version, compatible core version, and SHA-256. Install a replacement with:
@@ -237,7 +245,7 @@ code --install-extension /absolute/path/to/rehearsal.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and
-[support policy](SUPPORT.md) before evaluation. The extension also exposes each document
+[support policy](SUPPORT.md) before use. The extension also exposes each document
 through the Command Palette. It includes no telemetry, advertising, hosted database access,
 or automatic license activation.
 

@@ -68,4 +68,10 @@ describe("Rehearsal workspace responsive styles", () => {
     );
     expect(stylesheet).toMatch(/\.activity-history li \{[^}]*flex-wrap: wrap;/);
   });
+
+  it("separates baseline counts and wraps their groups within the review card", () => {
+    expect(stylesheet).toMatch(
+      /\.readiness-summary \{\s*display: flex;\s*flex-wrap: wrap;\s*gap: 8px 18px;\s*margin-top: 14px;/,
+    );
+  });
 });
