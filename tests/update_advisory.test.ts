@@ -61,6 +61,7 @@ function fixture(initial: unknown = state()) {
     dependencyGroup: "devDependencies" as const,
   };
   const host: UpdateAdvisoryHost = {
+    extensionRelease: vi.fn(),
     checking: async (action) => action(),
     allowed: vi.fn(() => allowed),
     identify: vi.fn(async () => identity),
@@ -223,6 +224,79 @@ describe("bounded public update metadata", () => {
 });
 
 describe("opt-in opening-session update controller", () => {
+  it("publishes confirmed extension evidence before notification choices, even when skipped", async () => {
+    const f = fixture();
+    f.host.notify = vi.fn(async () => {
+      expect(f.host.extensionRelease).toHaveBeenLastCalledWith("a", {
+        status: "checked",
+        latestVersion: "0.1.8",
+        checkedAt: 1_800_000_000_000,
+        channel: "preview",
+      });
+      return "skip" as const;
+    });
+    await f.create().check("a");
+    expect(f.host.extensionRelease).toHaveBeenNthCalledWith(
+      1,
+      "a",
+      expect.objectContaining({ status: "checking" }),
+    );
+    expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.saved().skippedExtension).toBe("0.1.8");
+  });
+  it("keeps failed extension metadata unknown without hiding an independent core update", async () => {
+    const f = fixture();
+    f.request.mockImplementation(async (kind) =>
+      kind === "extension" ? [] : core(),
+    );
+    await f.create().check("a");
+    expect(f.host.extensionRelease).toHaveBeenLastCalledWith("a", {
+      status: "unknown",
+      latestVersion: null,
+      checkedAt: null,
+      channel: "preview",
+    });
+    expect(f.host.notify).toHaveBeenCalledWith(
+      "a",
+      { core: "0.1.0-rc.8", extension: null },
+      true,
+      expect.anything(),
+    );
+  });
+  it("clears checking without publishing latest after consent changes during the request", async () => {
+    const f = fixture();
+    f.request.mockImplementation(async (kind) => {
+      await f.host.save("a", state({ enabled: false }));
+      return kind === "extension" ? [release()] : core();
+    });
+    await f.create().check("a");
+    expect(f.host.extensionRelease).toHaveBeenLastCalledWith(
+      "a",
+      expect.objectContaining({ status: "unknown" }),
+    );
+    expect(
+      vi
+        .mocked(f.host.extensionRelease!)
+        .mock.calls.some(([, evidence]) => evidence.status === "checked"),
+    ).toBe(false);
+    expect(f.host.notify).not.toHaveBeenCalled();
+  });
+  it("does not publish latest after the project fingerprint changes", async () => {
+    const f = fixture();
+    vi.mocked(f.host.identify)
+      .mockResolvedValueOnce(f.identity)
+      .mockResolvedValue({ ...f.identity, fingerprint: "changed" });
+    await f.create().check("a");
+    expect(f.host.extensionRelease).toHaveBeenLastCalledWith(
+      "a",
+      expect.objectContaining({ status: "unknown" }),
+    );
+    expect(
+      vi
+        .mocked(f.host.extensionRelease!)
+        .mock.calls.some(([, evidence]) => evidence.status === "checked"),
+    ).toBe(false);
+  });
   it("aborts owned requests when native progress rejects after starting its action", async () => {
     vi.useFakeTimers();
     const f = fixture();

@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.1.11 — Active-session guidance candidate
+## 0.1.12 — Version-header candidate
+
+- Show the loaded extension version at the top right, separately from the project's
+  Rehearsal core version. Confirmed newer releases show installed → newest.
+- Keep update availability visibly unknown until an existing consented release
+  check succeeds; checking, offline and failed checks never imply currentness.
+- Update only the version badge when release evidence changes, preserving navigation,
+  focus, scroll and form state without flashing or reloading the dashboard.
+- Keep the badge visible in compact windows. Existing opt-in checks, explicit
+  installation approval, free Starter terms and core safety boundaries are unchanged.
+
+## 0.1.11 — Released active-session guidance preview
 
 - Explain that project checks are paused while an operation owns the workspace,
   rather than treating temporarily unavailable facts as missing setup or a failed

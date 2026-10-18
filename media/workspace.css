@@ -462,6 +462,23 @@ summary {
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.topbar .topbar__version {
+  text-transform: none;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.topbar__version[data-state="available"] {
+  color: var(--rh-yellow-text);
+  border-color: currentColor;
+}
+
+.topbar__version:hover {
+  color: var(--vscode-textLink-activeForeground, var(--rh-accent-strong));
 }
 
 .topbar__badge,
@@ -1611,6 +1628,14 @@ summary {
   }
 
   .topbar {
+    position: static;
+    justify-content: flex-end;
+    min-height: 44px;
+    padding: 8px 16px;
+  }
+
+  .topbar .breadcrumbs,
+  .topbar__local {
     display: none;
   }
 

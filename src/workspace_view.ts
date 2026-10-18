@@ -1,5 +1,10 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import {
+  extensionReleasePresentation,
+  applyExtensionReleaseUpdate,
+  type ExtensionReleaseEvidence,
+} from "./extension_release_view.js";
+import {
   workspaceActionPlan,
   type WorkspaceActionId,
 } from "./action_catalog.js";
@@ -49,6 +54,8 @@ import {
 } from "./configuration_view.js";
 
 export interface WorkspaceViewAssets {
+  readonly extensionVersion?: string;
+  readonly extensionRelease?: ExtensionReleaseEvidence | undefined;
   readonly resourceSource: string;
   readonly stylesheetUri: string;
   readonly logoUri: string;
@@ -845,6 +852,10 @@ export const renderWorkspaceDocument = (
   activityHistory: readonly WorkspaceActivityRecord[] = [],
   inspectionState: "loading" | "idle" = "idle",
 ): string => {
+  const extensionRelease = extensionReleasePresentation(
+    assets.extensionVersion ?? "unavailable",
+    assets.extensionRelease,
+  );
   const configuredTargets = knownWorkspaceTargets(snapshot);
   const viewScope = resolveWorkspaceViewScope(
     configuredTargets,
@@ -1113,8 +1124,9 @@ export const renderWorkspaceDocument = (
         <header class="topbar">
           <div class="breadcrumbs"><span>Rehearsal</span><b>/</b><strong>${safeName}</strong></div>
           <div class="topbar__actions">
-            <span class="topbar__badge">Local only</span>
+            <span class="topbar__badge topbar__local">Local only</span>
             <span class="topbar__badge">Core ${escapeHtml(isLoading && !snapshot.version ? "checking" : (snapshot.version ?? "not installed"))}</span>
+            <a id="extension-version" class="topbar__badge topbar__version" href="${escapeHtml(assets.actionUris.checkUpdates)}" title="${escapeHtml(extensionRelease.title)}" data-state="${extensionRelease.state}"><span id="extension-version-label" role="status" aria-live="polite">${escapeHtml(extensionRelease.text)}</span></a>
             ${actionButton(assets, "refresh", "Refresh", "secondary")}
           </div>
         </header>
@@ -1349,7 +1361,8 @@ export const renderWorkspaceDocument = (
         document.querySelector('#review-stale-stop')?.addEventListener('click',()=>vscode?.postMessage({type:'reviewStaleStop'}));
         document.querySelector('#discard-form-drafts')?.addEventListener('click',()=>vscode?.postMessage({type:'editing',editing:false}));
         const applyOperationProgressUpdate = ${applyOperationProgressUpdate.toString()};
-        window.addEventListener('message',event=>{ if(event.data?.type==='operationProgressUpdated') { applyOperationProgressUpdate(document,event.data); } else if(event.data?.type==='inspectionUpdated') { const notice=document.querySelector('#inspection-draft-notice'); if(notice) notice.hidden=false; } });
+        const applyExtensionReleaseUpdate = ${applyExtensionReleaseUpdate.toString()};
+        window.addEventListener('message',event=>{ if(event.data?.type==='extensionReleaseUpdated') { applyExtensionReleaseUpdate(document,event.data); } else if(event.data?.type==='operationProgressUpdated') { applyOperationProgressUpdate(document,event.data); } else if(event.data?.type==='inspectionUpdated') { const notice=document.querySelector('#inspection-draft-notice'); if(notice) notice.hidden=false; } });
         ${RESOURCE_MANAGER_SCRIPT}
         let displayedPage = ${JSON.stringify(activePage)};
         const activate = (page, sourceControl) => {

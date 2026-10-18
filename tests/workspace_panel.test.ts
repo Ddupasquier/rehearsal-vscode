@@ -1314,6 +1314,102 @@ describe("asynchronous configuration review authority", () => {
 });
 
 describe("live workspace progress presentation", () => {
+  it("ignores late extension evidence after the panel owner is disposed", async () => {
+    const fixture = harness();
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    fixture.owner.dispose();
+    fixture.owner.updateExtensionRelease(key, {
+      status: "checked",
+      latestVersion: "0.1.12",
+      checkedAt: 1_800_000_000_000,
+      channel: "preview",
+    });
+    expect(panel.webview.postMessage).not.toHaveBeenCalled();
+    expect(
+      (
+        fixture.owner as unknown as {
+          extensionReleases: Map<string, unknown>;
+        }
+      ).extensionReleases.size,
+    ).toBe(0);
+  });
+  it("retires a checking or checked extension badge after workspace trust is lost", async () => {
+    const fixture = harness();
+    fixture.owner.updateExtensionRelease(key, {
+      status: "checking",
+      latestVersion: null,
+      checkedAt: null,
+      channel: "preview",
+    });
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    expect(panel.webview.html).toContain('data-state="checking"');
+    editor.module.workspace.isTrusted = false;
+    fixture.update(ready());
+    expect(panel.webview.html).toContain('data-state="unknown"');
+    expect(panel.webview.html).not.toContain('data-state="checking"');
+    editor.module.workspace.isTrusted = true;
+    fixture.update(ready());
+    expect(panel.webview.html).toContain('data-state="unknown"');
+  });
+  it("patches extension release evidence without reloading a busy or edited dashboard", async () => {
+    const fixture = harness(busy());
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    expect(panel.webview.html).toContain("Extension 0.1.2");
+    panel.receive({ type: "navigate", page: "activity" });
+    panel.receive({ type: "editing", editing: true });
+    fixture.owner.updateExtensionRelease(key, {
+      status: "checked",
+      latestVersion: "0.1.12",
+      checkedAt: 1_800_000_000_000,
+      channel: "preview",
+    });
+    expect(panel.assignments).toHaveLength(1);
+    expect(panel.webview.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        type: "extensionReleaseUpdated",
+        text: "Extension 0.1.2 → 0.1.12",
+        state: "available",
+      }),
+    );
+    fixture.update(busy(2));
+    expect(panel.assignments).toHaveLength(1);
+    expect(panel.webview.postMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "operationProgressUpdated" }),
+    );
+  });
+  it("retains checked versions for a later opening and refresh without borrowing another project", async () => {
+    const fixture = harness();
+    fixture.owner.updateExtensionRelease(key, {
+      status: "checked",
+      latestVersion: "0.1.12",
+      checkedAt: 1_800_000_000_000,
+      channel: "preview",
+    });
+    fixture.owner.updateExtensionRelease("file:///other-project", {
+      status: "checked",
+      latestVersion: "9.9.9",
+      checkedAt: 1_800_000_000_000,
+      channel: "preview",
+    });
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    expect(panel.webview.html).toContain("Extension 0.1.2 → 0.1.12");
+    expect(panel.webview.html).not.toContain("9.9.9");
+    fixture.update(ready());
+    expect(panel.webview.html).toContain("Extension 0.1.2 → 0.1.12");
+    editor.module.workspace.isTrusted = false;
+    const deliveries = panel.webview.postMessage.mock.calls.length;
+    fixture.owner.updateExtensionRelease(key, {
+      status: "checked",
+      latestVersion: "9.9.9",
+      checkedAt: 1_800_000_000_000,
+      channel: "preview",
+    });
+    expect(panel.webview.postMessage).toHaveBeenCalledTimes(deliveries);
+  });
   it("enters busy once, patches repeated progress, then renders actual completion once", async () => {
     const fixture = harness();
     await fixture.owner.open(key);

@@ -41,6 +41,7 @@ vi.mock("../src/update_identity.js", () => ({
 import { createUpdateAdvisory } from "../src/update_advisory_host.js";
 const key = "file:///private/never-send";
 function fixture() {
+  const onExtensionRelease = vi.fn();
   const stored = new Map<string, unknown>();
   const update = vi.fn(
     async (
@@ -84,9 +85,10 @@ function fixture() {
     } as never,
     version: "0.1.7",
     preview: true,
+    onExtensionRelease,
     request,
   });
-  return { controller, request, update, stored };
+  return { controller, request, update, stored, onExtensionRelease };
 }
 beforeEach(() => {
   vi.clearAllMocks();
@@ -106,6 +108,29 @@ beforeEach(() => {
   );
 });
 describe("native update consent and review host", () => {
+  it("forwards only confirmed extension release evidence through the native host", async () => {
+    const f = fixture();
+    mocks.message.mockImplementation(async (message: string) =>
+      message.includes("Allow optional") ? "Check Once" : "Later",
+    );
+    await f.controller.check(key);
+    expect(f.onExtensionRelease).toHaveBeenNthCalledWith(1, key, {
+      status: "checking",
+      latestVersion: null,
+      checkedAt: null,
+      channel: "preview",
+    });
+    expect(f.onExtensionRelease).toHaveBeenLastCalledWith(key, {
+      status: "checked",
+      latestVersion: "0.1.8",
+      checkedAt: expect.any(Number),
+      channel: "preview",
+    });
+    expect(f.onExtensionRelease).toHaveBeenCalledTimes(2);
+    expect(f.request).toHaveBeenCalledTimes(3);
+    expect(f.update).not.toHaveBeenCalled();
+    f.controller.dispose();
+  });
   it.each(["current", "offline", "declined"])(
     "closes native metadata progress for %s without installing",
     async (mode) => {
@@ -140,8 +165,10 @@ describe("native update consent and review host", () => {
       await f.controller.open(key);
       expect(active).toBe(0);
       expect(mocks.progress).toHaveBeenCalledTimes(mode === "declined" ? 0 : 1);
-      if (mode === "declined") expect(f.request).not.toHaveBeenCalled();
-      else
+      if (mode === "declined") {
+        expect(f.request).not.toHaveBeenCalled();
+        expect(f.onExtensionRelease).not.toHaveBeenCalled();
+      } else
         expect(mocks.progress).toHaveBeenCalledWith(
           {
             location: 15,
@@ -234,6 +261,7 @@ describe("native update consent and review host", () => {
       await f.controller.check(key);
       expect(mocks.message).not.toHaveBeenCalled();
       expect(f.request).not.toHaveBeenCalled();
+      expect(f.onExtensionRelease).not.toHaveBeenCalled();
       f.controller.dispose();
     },
   );

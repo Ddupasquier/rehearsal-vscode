@@ -70,6 +70,8 @@ export const activate = (context: vscode.ExtensionContext): void => {
     state: context.workspaceState,
     version: String(context.extension.packageJSON.version),
     preview: context.extension.packageJSON.preview === true,
+    onExtensionRelease: (key, evidence) =>
+      workspaces.updateExtensionRelease(key, evidence),
   });
   const tryAutomaticDashboard = (workspaceKey: string): void => {
     const folders = vscode.workspace.workspaceFolders ?? [];

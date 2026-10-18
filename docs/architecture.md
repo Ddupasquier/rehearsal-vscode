@@ -103,6 +103,14 @@ cookies, authentication and project data are excluded. Stable installations do n
 receive prerelease core recommendations; preview users may inspect the beta channel.
 Compatibility floor and release freshness remain independent.
 
+The dashboard header always identifies the loaded extension separately from core.
+Only the existing consented check supplies its session-local, workspace-scoped newest
+release evidence. A newer confirmed version displays installed → newest; unknown or
+failed checks never imply currentness. Header-only messages update fixed text nodes,
+not the document, so active progress, navigation, focus, scroll and form drafts survive.
+The version badge remains visible in compact layouts and opens the existing update
+review command; it neither fetches metadata itself nor installs an extension.
+
 Local workspace storage holds only consent/times/skipped versions under a hashed key.
 Matching npm root/hidden locks, a compatible root declaration and canonical local
 metadata enable a same-compatibility-series exact-version review. The update preserves

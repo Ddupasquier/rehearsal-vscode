@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
 import {
+  extensionReleasePresentation,
+  type ExtensionReleaseEvidence,
+} from "./extension_release_view.js";
+import {
   lstat,
   realpath,
   mkdtemp,
@@ -69,6 +73,11 @@ const isWorkspacePage = (value: unknown): value is WorkspacePage =>
   typeof value === "string" && PAGE_IDS.has(value as WorkspacePage);
 
 export class RehearsalWorkspacePanels implements vscode.Disposable {
+  private disposed = false;
+  private readonly extensionReleases = new Map<
+    string,
+    ExtensionReleaseEvidence
+  >();
   private readonly panels = new Map<string, vscode.WebviewPanel>();
   private readonly workspaceTokens = new Map<string, string>();
   private readonly activePages = new Map<string, WorkspacePage>();
@@ -102,6 +111,13 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     );
     this.subscriptions = [
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
+        for (const key of this.extensionReleases.keys())
+          if (
+            !vscode.workspace.workspaceFolders?.some(
+              ({ uri }) => uri.toString() === key,
+            )
+          )
+            this.extensionReleases.delete(key);
         for (const workspaceKey of this.panels.keys())
           if (
             !vscode.workspace.workspaceFolders?.some(
@@ -212,15 +228,41 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const subscription of this.subscriptions) subscription.dispose();
     for (const panel of this.panels.values()) panel.dispose();
     this.panels.clear();
     this.workspaceTokens.clear();
     this.activePages.clear();
     this.preferences.clear();
+    this.extensionReleases.clear();
     this.editing.clear();
     this.liveDocuments.clear();
     this.configurationReviews.dispose();
+  }
+
+  updateExtensionRelease(
+    key: string,
+    evidence: ExtensionReleaseEvidence,
+  ): void {
+    if (
+      this.disposed ||
+      !vscode.workspace.isTrusted ||
+      !vscode.workspace.workspaceFolders?.some(
+        ({ uri }) => uri.toString() === key,
+      )
+    )
+      return;
+    this.extensionReleases.set(key, evidence);
+    const panel = this.panels.get(key);
+    if (!panel?.visible) return;
+    // Advisory completion must not reset navigation, focus, scroll or unsaved forms.
+    void Promise.resolve(
+      panel.webview.postMessage({
+        type: "extensionReleaseUpdated",
+        ...extensionReleasePresentation(this.extensionVersion, evidence),
+      }),
+    ).catch(() => {});
   }
 
   async resetLocalState(workspaceKey: string): Promise<void> {
@@ -805,6 +847,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     const workspaceToken = this.workspaceTokens.get(workspaceKey);
     if (!workspaceToken) return;
     if (!vscode.workspace.isTrusted) {
+      this.extensionReleases.clear();
       this.configurationReviews.clear();
       snapshot = {
         workspaceName: snapshot.workspaceName,
@@ -902,6 +945,8 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           ]),
         ) as Record<WorkspaceActionId, string>,
         scriptNonce: randomBytes(18).toString("base64url"),
+        extensionVersion: this.extensionVersion,
+        extensionRelease: this.extensionReleases.get(workspaceKey),
       },
       this.activePages.get(workspaceKey) ?? "overview",
       this.preferences.get(workspaceKey) ?? DEFAULT_WORKSPACE_PREFERENCES,
