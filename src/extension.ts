@@ -3,6 +3,7 @@ import { RehearsalTreeProvider } from "./tree_provider.js";
 import { RehearsalWorkspacePanels } from "./workspace_panel.js";
 import { RehearsalWorkspaceActions } from "./workspace_actions.js";
 import { AutomaticDashboardController } from "./automatic_dashboard.js";
+import { createUpdateAdvisory } from "./update_advisory_host.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
 
@@ -63,6 +64,13 @@ export const activate = (context: vscode.ExtensionContext): void => {
     showCollapseAll: true,
   });
   const automaticDashboard = new AutomaticDashboardController();
+  const updates = createUpdateAdvisory({
+    projects: provider,
+    actions,
+    state: context.workspaceState,
+    version: String(context.extension.packageJSON.version),
+    preview: context.extension.packageJSON.preview === true,
+  });
   const tryAutomaticDashboard = (workspaceKey: string): void => {
     const folders = vscode.workspace.workspaceFolders ?? [];
     const folder = folders.find(({ uri }) => uri.toString() === workspaceKey);
@@ -99,10 +107,13 @@ export const activate = (context: vscode.ExtensionContext): void => {
     actions,
     workspaces,
     tree,
+    updates,
     provider.onDidUpdateSnapshot(({ workspaceKey }) => {
       tryAutomaticDashboard(workspaceKey);
+      void updates.open(workspaceKey);
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+    vscode.workspace.onDidChangeWorkspaceFolders(({ removed }) => {
+      for (const folder of removed) updates.remove(folder.uri.toString());
       if (vscode.workspace.isTrusted) void provider.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
@@ -123,6 +134,20 @@ export const activate = (context: vscode.ExtensionContext): void => {
         async (_progress, token) => provider.refresh(token),
       );
     }),
+    vscode.commands.registerCommand(
+      "rehearsal.checkUpdates",
+      async (workspaceKey: unknown) => {
+        const selected = await selectWorkspaceKey(workspaceKey);
+        if (selected) await updates.check(selected);
+      },
+    ),
+    vscode.commands.registerCommand(
+      "rehearsal.configureUpdateChecks",
+      async (workspaceKey: unknown) => {
+        const selected = await selectWorkspaceKey(workspaceKey);
+        if (selected) await updates.configure(selected);
+      },
+    ),
     vscode.commands.registerCommand("rehearsal.openDocumentation", async () => {
       await vscode.env.openExternal(vscode.Uri.parse(DOCUMENTATION_URL));
     }),

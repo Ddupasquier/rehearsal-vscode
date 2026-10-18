@@ -164,10 +164,17 @@ sample, retained generation identity, fingerprint-bound non-writing proposals an
 refusal outcomes. Source permission stays configured-but-not-contacted; missing source
 schema evidence stays unavailable. It does not authorize a source or display private rows.
 
-The companion preserves rc.7's observed refusal taxonomy rather than accepting any
-nonzero exit: zero retention reports `baseline_invalid` (4), and manual-only runtime
-identity/source-scope edits report `internal_failure` (10). Those heuristic classifications
-are recorded limitations, not a claim that the user-facing categories are ideal or fixed.
+The companion requires sixteen exact, ordered refusal controls, including prototype
+paths. Only the exact published rc.7 version and SHA-256 retain its observed diagnostic
+defects: zero retention is `baseline_invalid` (4); manual-only and prototype paths are
+`internal_failure` (10). Every other artifact must classify rejected configuration
+proposals as `configuration_invalid` / `CONFIGURATION_INVALID` / exit 2. Matching version
+metadata alone cannot select a historical exception. Baseline-input and checksum failures
+retain their separate categories. These checks never accept an arbitrary nonzero result.
+
+Earlier fourteen-control reports remain historical evidence for their original scope;
+rerun the strengthened Lab scenario before using this companion. Their earlier acceptance
+does not establish prototype refusal or whole-sequence preservation coverage.
 
 The report is read through the shared 256 KiB regular-file, no-follow boundary and must
 match the exact artifact and completed cleanup. This proves neither a running database,

@@ -15,6 +15,53 @@ The repository and [reviewed VSIX prereleases](https://github.com/Ddupasquier/re
 are public on GitHub. This is not a Marketplace listing or an announcement of a paid
 launch; those remain separate release decisions.
 
+## Install and open your project
+
+Use desktop VS Code 1.101 or newer on macOS or Linux, with Node.js 22, 24, or 26.
+No source checkout, extension build, or Test Lab installation is needed.
+
+1. Open your application's folder in VS Code—the one containing `package.json` and
+   your migrations. If it does not already use Rehearsal, run this in that project's terminal:
+
+   ```bash
+   npm install --save-dev @rehearsal-db/core
+   ```
+
+   Core `0.1.0-rc.4` or newer is required. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
+   for safe setup and baseline inputs.
+
+2. Open the [GitHub prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases).
+   Download the chosen release's `.vsix` and `SHA256SUMS`. Compare its SHA-256 with the
+   checksum from that same release: use `shasum -a 256 /path/to/rehearsal.vsix` on macOS
+   or `sha256sum /path/to/rehearsal.vsix` on Linux. Stop if they differ.
+3. Open **Extensions → … → Install from VSIX…** and choose that verified file.
+   Reload the extension host if VS Code asks.
+4. Review Workspace Trust. Open the Command Palette and choose
+   **Rehearsal: Open Dashboard**, or use the dashboard button in the Rehearsal sidebar.
+5. Follow **Next best step**. Review detected facts and the active configuration;
+   operational actions still show their exact CLI command and required confirmations.
+
+If VS Code's `code` command is available, step 3 can instead use:
+
+```bash
+code --install-extension /absolute/path/to/rehearsal.vsix --force
+```
+
+To update the extension, download and verify the next reviewed VSIX and repeat step 3.
+GitHub VSIX installations do not auto-update. Keep the previous reviewed file for rollback.
+An ordinary core-package update is different: the dashboard detects it automatically,
+without reloading the VS Code window. [Support](SUPPORT.md) explains how to report problems.
+
+Use **Check for updates** in the dashboard or **Rehearsal: Check for Updates** in the
+Command Palette for an optional release check. The first trusted opening offers informed
+opt-in: npm/GitHub see ordinary connection information, but receive no project data or
+installed versions. Daily checks run only at project opening, not while idle. You can
+defer or skip a release, or disable checks with **Rehearsal: Configure Update Checks**.
+Checks never install anything automatically. Compatible does not mean newest; local or
+candidate builds and unverified installation provenance require manual review.
+
+## What the workbench shows
+
 The Environments page consumes Rehearsal core's versioned resource inventory. It shows
 only the current project's ownership-proven containers, running/stopped state, nullable
 live CPU and memory totals, restart policy, retention intent, Docker totals, and
@@ -106,7 +153,12 @@ it does not execute project code. Once core advertises the versioned Project Pro
 contract, the extension uses `rehearsal discover --json` and stops duplicating broader
 discovery rules.
 
-## Use the extension
+## Contributing and local development
+
+These steps are for developing the extension, not installing it into your application.
+Clone this repository first. The F5 launch configuration expects a sibling
+`rehearsal-test-lab` checkout; its maintained runbook owns fixture preparation and
+resource guards. Ordinary extension users do not need that repository.
 
 ```bash
 npm install
@@ -162,12 +214,19 @@ The workspace repository must install `@rehearsal-db/core`. A nested project may
 repository's normal hoisted dependency, but resolution never crosses the Git repository
 boundary or falls back to a global package or private source checkout.
 
-## Evaluation and paid preview
+## Licensing and planned editions
 
-The license defines a 14-day evaluation and per-user commercial-preview terms. An
-accepted receipt, invoice or order identifies a paid entitlement; public prerelease
-availability alone does not. A paid launch, pricing, billing and Marketplace publication
-remain separate approval gates. Rehearsal core remains MIT-licensed and fully usable
+The approved direction is a complete free MIT CLI, a useful free **VS Code Starter**,
+and optional paid **Pro** editor workflows. Starter keeps basic setup, migration-plan
+review, runtime controls, safety and recovery; Pro adds advanced visual productivity.
+See the [edition boundary and launch gates](docs/commercial-readiness.md).
+
+That tier split is not implemented yet. Current preview artifacts retain the bundled
+[license](LICENSE), which defines a 14-day evaluation and per-user commercial-preview
+terms. An accepted receipt, invoice or order identifies a paid entitlement; public
+prerelease availability alone does not. There is no technical trial countdown or paid
+feature enforcement today. New Starter/Pro terms, pricing, billing and Marketplace
+publication still need separate review and approval. Rehearsal core remains fully usable
 without the extension.
 
 GitHub VSIX installations do not auto-update. Every delivery must identify the extension

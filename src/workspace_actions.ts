@@ -2,6 +2,8 @@ import { relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
 import * as vscode from "vscode";
 import { runRehearsalJson } from "./process_adapter.js";
+import { parseActivityData } from "./contracts.js";
+import { isEligibleCoreUpdate } from "./update_advisory.js";
 import { parseImageCleanupReview } from "./resource_contract.js";
 import { parseStaleStopReview } from "./stale_review.js";
 import { createOperationCompletionObserver } from "./operation_completion.js";
@@ -10,6 +12,7 @@ import {
   shellCommand,
   WORKSPACE_ACTION_IDS,
   workspaceActionPlan,
+  exactPackageUpdateArguments,
   type WorkspaceActionId,
 } from "./action_catalog.js";
 import type { RehearsalTreeProvider } from "./tree_provider.js";
@@ -193,6 +196,12 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     }
 
     switch (plan.kind) {
+      case "check_updates":
+        await vscode.commands.executeCommand(
+          "rehearsal.checkUpdates",
+          workspaceKey,
+        );
+        return;
       case "refresh":
         await this.refresh(workspaceKey, true);
         return;
@@ -289,6 +298,94 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     this.activeMonitors.clear();
     this.refreshedActivityIds.clear();
     this.activityEmitter.dispose();
+  }
+
+  /** A freshness advisory supplies a checked exact version, never a moving tag. */
+  async updatePackageVersion(
+    workspaceKey: string,
+    installedVersion: string,
+    version: string,
+    verifyIdentity: () => Promise<boolean>,
+    group: import("./update_advisory.js").DependencyGroup,
+  ): Promise<void> {
+    if (
+      !isEligibleCoreUpdate(installedVersion, version) ||
+      !["dependencies", "devDependencies", "optionalDependencies"].includes(
+        group,
+      )
+    )
+      return;
+    const folder = vscode.workspace.workspaceFolders?.find(
+      ({ uri }) => uri.toString() === workspaceKey,
+    );
+    const snapshot = this.projects.snapshotFor(workspaceKey);
+    if (!folder || !snapshot || snapshot.version !== installedVersion) return;
+    const allowed = async () => {
+      if (
+        this.disposed ||
+        !vscode.workspace.isTrusted ||
+        this.projects.snapshotFor(workspaceKey) !== snapshot ||
+        !vscode.workspace.workspaceFolders?.some(
+          ({ uri }) => uri.toString() === workspaceKey,
+        ) ||
+        !(await verifyIdentity())
+      )
+        return false;
+      try {
+        const activity = await runRehearsalJson<unknown>({
+          workspaceRoot: folder.uri.fsPath,
+          command: ["activity"],
+          expectedCommand: "activity",
+          ...(snapshot.configPath ? { configPath: snapshot.configPath } : {}),
+        });
+        return (
+          !this.disposed &&
+          vscode.workspace.isTrusted &&
+          this.projects.snapshotFor(workspaceKey) === snapshot &&
+          (await verifyIdentity()) &&
+          !this.disposed &&
+          vscode.workspace.isTrusted &&
+          this.projects.snapshotFor(workspaceKey) === snapshot &&
+          Boolean(
+            vscode.workspace.workspaceFolders?.some(
+              ({ uri }) => uri.toString() === workspaceKey,
+            ),
+          ) &&
+          parseActivityData(activity.result.data).state === "idle"
+        );
+      } catch {
+        return false;
+      }
+    };
+    if (!(await allowed())) {
+      void vscode.window.showInformationMessage(
+        "A safe, idle, unchanged package installation could not be confirmed. No update was run; review the current project before retrying.",
+      );
+      return;
+    }
+    const args = exactPackageUpdateArguments(version, group);
+    const choice = await vscode.window.showWarningMessage(
+      `Update Rehearsal in ${folder.name} from ${installedVersion} to ${version}?`,
+      {
+        modal: true,
+        detail: `This updates this project's manifest, lockfile and dependencies through its configured package manager/registry. Review the dependency diff afterward. No runtime or data cleanup is requested.\n\nCommand: ${shellCommand(args)}`,
+      },
+      "Update Exact Version",
+    );
+    if (choice !== "Update Exact Version") return;
+    if (!(await allowed())) {
+      void vscode.window.showInformationMessage(
+        "The project, trust or operation changed during review. No update was run; check again before installing.",
+      );
+      return;
+    }
+    await this.runInTerminal(
+      folder,
+      workspaceKey,
+      "Update Rehearsal",
+      args,
+      allowed,
+    );
   }
 
   activityFor(workspaceKey: string): readonly WorkspaceActivityRecord[] {
@@ -486,6 +583,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     workspaceKey: string,
     label: string,
     arguments_: readonly string[],
+    authorize?: () => Promise<boolean>,
   ): Promise<void> {
     const canLaunch = () =>
       !this.disposed &&
@@ -495,7 +593,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
           ({ uri }) => uri.toString() === workspaceKey,
         ),
       );
-    if (!canLaunch()) return;
+    if (!canLaunch() || (authorize && !(await authorize()))) return;
     const terminal = vscode.window.createTerminal({
       name: `Rehearsal · ${folder.name}`,
       cwd: folder.uri,
@@ -518,6 +616,10 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     this.output.info(`Started ${label} for ${folder.name}.`);
 
     if (terminal.shellIntegration) {
+      if (authorize && !(await authorize())) {
+        terminal.dispose();
+        return;
+      }
       this.terminalExecutions.set(
         terminal,
         terminal.shellIntegration.executeCommand(arguments_[0]!, [
@@ -551,13 +653,19 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         },
       );
     if (integration) {
-      if (!canLaunch()) return;
+      if (!canLaunch() || (authorize && !(await authorize()))) {
+        terminal.dispose();
+        return;
+      }
       this.terminalExecutions.set(
         terminal,
         integration.executeCommand(arguments_[0]!, [...arguments_.slice(1)]),
       );
     } else {
-      if (!canLaunch()) return;
+      if (!canLaunch() || (authorize && !(await authorize()))) {
+        terminal.dispose();
+        return;
+      }
       terminal.sendText(shellCommand(arguments_), true);
     }
     this.monitorTerminalActivity(folder, workspaceKey, terminal, activity.id);
