@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.8 — Unreleased technical preview candidate
+
+- Offer consent-based update reminders separately from minimum CLI compatibility,
+  with manual checks, daily opening-session checks and defer/skip/disable choices.
+- Review exact core dependency updates through the existing project terminal flow;
+  preserve custom candidates and open VSIX release guidance rather than silently
+  replacing a global extension installation.
+- Clarify customer installation and dashboard access, and bind configuration-review
+  evidence to the exact tested core artifact and refusal categories.
+
 ## 0.1.7 — Technical preview candidate
 
 - Refuse baseline scope evidence whose provider disagrees with its separately

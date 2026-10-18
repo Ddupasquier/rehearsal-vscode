@@ -92,6 +92,30 @@ repository visibility or prevent reviewed VSIX packaging.
 
 ## Runtime boundary
 
+### Optional release advisories
+
+`update_advisory.ts` owns a separate opt-in release check, never `inspectProject` or
+the webview. Native consent names the fixed public npm/GitHub metadata endpoints and
+ordinary connection disclosure. Opening-session checks are coalesced, at most daily
+per opted-in workspace, with no polling/daemon. Explicit checks remain available.
+Each request set has a five-second deadline and each response a 128 KiB limit; redirects,
+cookies, authentication and project data are excluded. Stable installations do not
+receive prerelease core recommendations; preview users may inspect the beta channel.
+Compatibility floor and release freshness remain independent.
+
+Local workspace storage holds only consent/times/skipped versions under a hashed key.
+Matching npm root/hidden locks, a compatible root declaration and canonical local
+metadata enable a same-compatibility-series exact-version review. The update preserves
+the dependency group and uses `--save-exact`. Other package managers, local candidates,
+ambiguous metadata and new major (or 0.x minor) series stay manual-only. Native approval
+rechecks trust, saved consent, workspace, installation fingerprint and public operation
+activity before launch. Saved-preference drift cancels an in-flight advisory; Memento
+checks are not cross-window atomic locking, a filesystem lock or artifact-integrity
+certification. Existing
+watchers retire obsolete compatibility warnings after external dependency updates.
+Extension advice opens a fixed GitHub release with reviewed VSIX/checksum assets, never
+a package-supplied URL or a global installer. Offline/unsafe metadata stays unknown.
+
 The Environments page reads `environments --json` only when the installed package
 declares `rehearsalContracts.resourceInventory: 1`. Core owns Docker inspection,
 ownership labels, capacity measurement, and cleanup eligibility. The extension validates
@@ -355,10 +379,17 @@ These guards do not make the asynchronous OS write atomic against later external
 
 ## Commercial boundary
 
-The extension supports a manually fulfilled 14-day evaluation and per-user commercial
-preview without telemetry, an account, or a hosted license service. The accepted order is
-the entitlement record. License failure or expiration never changes Rehearsal core and
-cannot block CLI recovery. Public GitHub prereleases are a technical distribution channel,
-not proof that commercial launch gates passed. A paid launch, automated checkout,
-entitlement enforcement, Marketplace publication, pricing and refunds remain separately
-reviewed operational decisions.
+The approved product direction is a complete free MIT CLI, free VS Code Starter and
+optional paid Pro editor workflows. [Commercial readiness](commercial-readiness.md)
+owns the edition boundary and separate Starter/Pro launch gates; it is not an entitlement
+implementation. Database execution and safety remain core-owned and independent of
+payment. Future editor gates must preserve free stop, cancellation, recovery and essential
+evidence; a failed or expired entitlement must never interrupt an operation or block CLI
+recovery.
+
+Current artifacts still use the commercial-preview `LICENSE`: 14-day evaluation and
+per-user licensing through an accepted order. No trial clock, activation or feature-paywall
+enforcement exists. There is no telemetry, account or hosted license service. Public
+GitHub prereleases establish technical distribution only. New license terms, entitlement
+design, paid launch, checkout, Marketplace publication, pricing and refunds require their
+own review and approval; approving the product model does not approve those operations.

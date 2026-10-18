@@ -1089,6 +1089,20 @@ describe("workspace control state and truthful actions", () => {
 });
 
 describe("Rehearsal workspace document", () => {
+  it.each(WORKSPACE_PAGES)(
+    "keeps one manual update action in the shared wrapping footer on %s",
+    (page) => {
+      const html = renderWorkspaceDocument(readySnapshot(), assets, page);
+      const action = 'href="command:rehearsal.workspaceAction?checkUpdates"';
+      expect(html.split(action)).toHaveLength(2);
+      expect(
+        html.match(/<footer class="product-footer">[\s\S]*?<\/footer>/u)?.[0],
+      ).toContain(action);
+      expect(
+        html.match(/<header class="topbar">[\s\S]*?<\/header>/u)?.[0],
+      ).not.toContain(action);
+    },
+  );
   it("keeps cancellation above progress and receipts only for an editor-owned operation", () => {
     const active = renderWorkspaceDocument(
       readySnapshot(),

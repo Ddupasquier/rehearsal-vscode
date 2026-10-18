@@ -200,6 +200,102 @@ beforeEach(() => {
   }));
 });
 describe("reviewed resource actions", () => {
+  it.each([
+    ["dependencies", "--save-prod"],
+    ["optionalDependencies", "--save-optional"],
+  ] as const)(
+    "preserves %s and installs an exact checked release",
+    async (group, flag) => {
+      mocks.confirm.mockResolvedValue("Update Exact Version");
+      await actions().updatePackageVersion(
+        "file:///workspace",
+        "0.1.0-rc.4",
+        "0.1.0-rc.8",
+        async () => true,
+        group,
+      );
+      expect(mocks.execute).toHaveBeenCalledWith("npm", [
+        "install",
+        flag,
+        "--save-exact",
+        "@rehearsal-db/core@0.1.0-rc.8",
+      ]);
+    },
+  );
+  it("uses only the checked exact core release after native approval and fresh idle reads", async () => {
+    const identity = vi.fn(async () => true);
+    mocks.confirm.mockResolvedValue("Update Exact Version");
+    await actions().updatePackageVersion(
+      "file:///workspace",
+      "0.1.0-rc.4",
+      "0.1.0-rc.8",
+      identity,
+      "devDependencies",
+    );
+    expect(mocks.execute).toHaveBeenCalledWith("npm", [
+      "install",
+      "--save-dev",
+      "--save-exact",
+      "@rehearsal-db/core@0.1.0-rc.8",
+    ]);
+    expect(identity.mock.calls.length).toBeGreaterThanOrEqual(4);
+    expect(mocks.read).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: ["activity"],
+        expectedCommand: "activity",
+      }),
+    );
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("0.1.0-rc.8"),
+      expect.objectContaining({ modal: true }),
+      "Update Exact Version",
+    );
+  });
+  it.each(["trust", "manifest", "activity", "cancel"])(
+    "does not update after %s changes/refuses during review",
+    async (mode) => {
+      const identity = vi.fn(async () => true);
+      if (mode === "activity")
+        mocks.read.mockResolvedValue({
+          result: {
+            data: { schemaVersion: 1, state: "invalid", operation: null },
+          },
+          exitCode: 0,
+        });
+      mocks.confirm.mockImplementation(async () => {
+        if (mode === "trust") mocks.trusted = false;
+        if (mode === "manifest") identity.mockResolvedValue(false);
+        return mode === "cancel" ? undefined : "Update Exact Version";
+      });
+      await actions().updatePackageVersion(
+        "file:///workspace",
+        "0.1.0-rc.4",
+        "0.1.0-rc.8",
+        identity,
+        "devDependencies",
+      );
+      expect(mocks.terminal).not.toHaveBeenCalled();
+      expect(mocks.execute).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "0.1.0-rc.4",
+    "0.1.0-rc.3",
+    "latest",
+    "file:local",
+    "0.1.0-rc.8+candidate",
+    "0.2.0",
+    "1.0.0",
+  ])("refuses unsafe/non-new exact update selector %s", async (version) => {
+    await actions().updatePackageVersion(
+      "file:///workspace",
+      "0.1.0-rc.4",
+      version,
+      async () => true,
+      "devDependencies",
+    );
+    expect(mocks.terminal).not.toHaveBeenCalled();
+  });
   it("previews exact selected images and runs only the digest-bound image-only command", async () => {
     await actions().cleanupImages("file:///workspace", [id]);
     expect(mocks.read).toHaveBeenCalledWith(

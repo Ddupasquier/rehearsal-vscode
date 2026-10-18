@@ -1127,7 +1127,7 @@ export const renderWorkspaceDocument = (
 
         <footer class="product-footer">
           <span><strong>Safe by design.</strong> Rehearsal core owns every confirmation, local-only boundary, lock, and cleanup rule.</span>
-          ${actionGroup(actionButton(assets, "documentation", "Documentation"), ...(snapshot.version && snapshot.availability !== "package_outdated" ? [actionButton(assets, "supportReport", "Support report")] : []), actionButton(assets, "showOutput", "Diagnostics"))}
+          ${actionGroup(actionButton(assets, "documentation", "Documentation"), actionButton(assets, "checkUpdates", "Check for updates"), ...(snapshot.version && snapshot.availability !== "package_outdated" ? [actionButton(assets, "supportReport", "Support report")] : []), actionButton(assets, "showOutput", "Diagnostics"))}
         </footer>
       </main>
     </div>

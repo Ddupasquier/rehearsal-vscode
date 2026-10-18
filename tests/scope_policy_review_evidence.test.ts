@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   verifyScopePolicyReviewEvidence,
-  verifyScopePolicyReviewSamples,
+  verifyScopePolicyReviewSamples as verifySamples,
 } from "../scripts/verify-scope-policy-review.js";
 
 const digest = (character: string) => character.repeat(64);
-function fixture() {
+const publishedRc7 = {
+  version: "0.1.0-rc.7",
+  sha256: "e2bf8d40456ebf7b8b1b2526e5d774f45f8d53ee25358cd62f5f8b65bf5c556b",
+};
+const verifyScopePolicyReviewSamples = (
+  value: unknown,
+  artifact = publishedRc7,
+) => verifySamples(value, artifact);
+function fixture(artifact = publishedRc7) {
+  const legacy =
+    artifact.version === publishedRc7.version &&
+    artifact.sha256 === publishedRc7.sha256;
   const baseline = (provider: "postgresql" | "supabase", large = false) => {
     const publicRows = large ? 2048 : 2,
       appRows = large ? 3 : 1;
@@ -165,6 +176,8 @@ function fixture() {
     "automatic-delete-schedule",
     "manual-runtime-identity",
     "manual-source-scope",
+    "prototype-path",
+    "constructor-prototype-path",
     "stale-source",
     "foreign-source-fingerprint",
     "protected-cleanup-preview",
@@ -194,12 +207,18 @@ function fixture() {
     },
     refusals: refusalNames.map((scenario) => {
       const category =
-        scenario === "empty-baseline-input" || scenario === "retention-zero"
+        scenario === "empty-baseline-input" ||
+        (legacy && scenario === "retention-zero")
           ? "baseline_invalid"
           : scenario === "stale-policy"
             ? "baseline_checksum_mismatch"
-            : scenario === "manual-runtime-identity" ||
-                scenario === "manual-source-scope"
+            : legacy &&
+                [
+                  "manual-runtime-identity",
+                  "manual-source-scope",
+                  "prototype-path",
+                  "constructor-prototype-path",
+                ].includes(scenario)
               ? "internal_failure"
               : "configuration_invalid";
       return {
@@ -207,12 +226,18 @@ function fixture() {
         category,
         code: category.toUpperCase(),
         exitCode:
-          scenario === "empty-baseline-input" || scenario === "retention-zero"
+          scenario === "empty-baseline-input" ||
+          (legacy && scenario === "retention-zero")
             ? 4
             : scenario === "stale-policy"
               ? 5
-              : scenario === "manual-runtime-identity" ||
-                  scenario === "manual-source-scope"
+              : legacy &&
+                  [
+                    "manual-runtime-identity",
+                    "manual-source-scope",
+                    "prototype-path",
+                    "constructor-prototype-path",
+                  ].includes(scenario)
                 ? 10
                 : 2,
       };
@@ -253,12 +278,12 @@ function fixture() {
   };
 }
 
-function activityReport() {
+function activityReport(artifact = publishedRc7) {
   const startedAt = "2026-10-16T00:00:00.000Z",
     updatedAt = "2026-10-16T00:00:01.000Z";
   const receipt = (failed: boolean) => ({
     kind: failed ? "run" : "baseline create",
-    rehearsalVersion: "0.1.0-rc.7",
+    rehearsalVersion: artifact.version,
     progress: {
       schemaVersion: 1,
       operationId: digest(failed ? "b" : "c"),
@@ -295,8 +320,7 @@ function activityReport() {
     cleanup: "removed",
     artifact: {
       name: "@rehearsal-db/core",
-      version: "0.1.0-rc.7",
-      sha256: digest("a"),
+      ...artifact,
     },
     safeActivitySamples: {
       freshIdle: idle,
@@ -304,7 +328,7 @@ function activityReport() {
       failed: { ...idle, recent: [completed, receipt(true)] },
       siblingIdle: idle,
     },
-    scopePolicyReview: fixture(),
+    scopePolicyReview: fixture(artifact),
   };
 }
 function changed(path: readonly (string | number)[], value: unknown) {
@@ -317,6 +341,76 @@ function changed(path: readonly (string | number)[], value: unknown) {
 }
 
 describe("installed baseline scope/resource policy evidence consumer", () => {
+  it.each([
+    { ...publishedRc7, sha256: digest("a") },
+    { ...publishedRc7, version: "0.1.0-rc.8" },
+    { version: "0.1.0-rc.8", sha256: digest("b") },
+  ])(
+    "requires corrected configuration outcomes for every other exact artifact (%j)",
+    (artifact) => {
+      const input = fixture(artifact);
+      expect(verifySamples(input, artifact)).toMatchObject({
+        status: "passed",
+        refusalsAccepted: 16,
+      });
+      for (const refusal of input.refusals.slice(0, 12))
+        expect(refusal).toMatchObject({
+          exitCode: 2,
+          category: "configuration_invalid",
+          code: "CONFIGURATION_INVALID",
+        });
+      expect(() => verifySamples(fixture(), artifact)).toThrow();
+      expect(
+        verifyScopePolicyReviewEvidence(
+          activityReport(artifact),
+          artifact.sha256,
+        ),
+      ).toMatchObject({
+        version: artifact.version,
+        artifactSha256: artifact.sha256,
+        refusalsAccepted: 16,
+      });
+    },
+  );
+  it("rejects malformed or inherited artifact identity and evidence fields", () => {
+    for (const artifact of [
+      { ...publishedRc7, version: "" },
+      { ...publishedRc7, version: "rc.7" },
+      { ...publishedRc7, version: "0.1.0-rc.7\n" },
+      { ...publishedRc7, sha256: "not-a-digest" },
+      { ...publishedRc7, sha256: "A".repeat(64) },
+      Object.create(publishedRc7),
+    ])
+      expect(() => verifySamples(fixture(), artifact)).toThrow();
+    expect(() =>
+      verifySamples(Object.create(fixture()), publishedRc7),
+    ).toThrow();
+    const input = fixture();
+    input.refusals[0] = Object.create(input.refusals[0]!);
+    expect(() => verifySamples(input, publishedRc7)).toThrow();
+  });
+  it("requires exactly sixteen controls; historical fourteen-control reports remain separately scoped", () => {
+    const fourteen = fixture();
+    fourteen.refusals.splice(8, 2);
+    expect(fourteen.refusals).toHaveLength(14);
+    expect(() => verifySamples(fourteen, publishedRc7)).toThrow();
+    const seventeen = fixture();
+    seventeen.refusals.push({ ...seventeen.refusals[0]! });
+    expect(() => verifySamples(seventeen, publishedRc7)).toThrow();
+  });
+  it.each(Array.from({ length: 16 }, (_, index) => index))(
+    "refuses wrong category or code independently for control %i",
+    (index) => {
+      for (const [field, value] of [
+        ["category", "unexpected_category"],
+        ["code", "UNKNOWN_DIAGNOSTIC"],
+      ] as const) {
+        const input = fixture();
+        input.refusals[index]![field] = value;
+        expect(() => verifySamples(input, publishedRc7)).toThrow();
+      }
+    },
+  );
   it("retains the installed rc.7 baseline category for zero baseline retention", () => {
     const input = fixture();
     input.refusals[1] = {
@@ -327,7 +421,12 @@ describe("installed baseline scope/resource policy evidence consumer", () => {
     };
     expect(() => verifyScopePolicyReviewSamples(input)).not.toThrow();
   });
-  it.each(["manual-runtime-identity", "manual-source-scope"])(
+  it.each([
+    "manual-runtime-identity",
+    "manual-source-scope",
+    "prototype-path",
+    "constructor-prototype-path",
+  ])(
     "retains observed internal-failure refusal for %s without inventing a corrected category",
     (scenario) => {
       const input = fixture();
@@ -349,7 +448,7 @@ describe("installed baseline scope/resource policy evidence consumer", () => {
       expect(() => verifyScopePolicyReviewSamples(input)).toThrow();
     },
   );
-  it.each(Array.from({ length: 14 }, (_, index) => index))(
+  it.each(Array.from({ length: 16 }, (_, index) => index))(
     "refuses a wrong nonzero exit outcome for exact negative control %i",
     (index) => {
       const input = fixture();
@@ -373,7 +472,7 @@ describe("installed baseline scope/resource policy evidence consumer", () => {
       baselineSamplesAccepted: 3,
       providersReviewed: ["postgresql", "supabase"],
       resourceProposalReviewsAccepted: 2,
-      refusalsAccepted: 14,
+      refusalsAccepted: 16,
     });
     expect(JSON.stringify(input)).toBe(before);
     expect(JSON.stringify(result)).not.toMatch(
@@ -535,8 +634,8 @@ describe("installed baseline scope/resource policy evidence consumer", () => {
       ],
       "not-validated",
     ],
-    [["refusals", 12, "exitCode"], 2],
-    [["refusals", 13, "code"], "CONFIGURATION_INVALID"],
+    [["refusals", 14, "exitCode"], 2],
+    [["refusals", 15, "code"], "CONFIGURATION_INVALID"],
   ] as const)(
     "refuses missing, unsafe, stale or contradictory evidence at %j",
     (path, value) => {
@@ -582,10 +681,10 @@ describe("installed baseline scope/resource policy evidence consumer", () => {
   });
   it("requires matching whole-report artifact/history/cleanup before scope evidence is accepted", () => {
     expect(
-      verifyScopePolicyReviewEvidence(activityReport(), digest("a")),
+      verifyScopePolicyReviewEvidence(activityReport(), publishedRc7.sha256),
     ).toMatchObject({
       status: "passed",
-      artifactSha256: digest("a"),
+      artifactSha256: publishedRc7.sha256,
       version: "0.1.0-rc.7",
     });
     for (const input of [
@@ -595,7 +694,7 @@ describe("installed baseline scope/resource policy evidence consumer", () => {
       { ...activityReport(), safeActivitySamples: {} },
     ])
       expect(() =>
-        verifyScopePolicyReviewEvidence(input, digest("a")),
+        verifyScopePolicyReviewEvidence(input, publishedRc7.sha256),
       ).toThrow();
     expect(() =>
       verifyScopePolicyReviewEvidence(activityReport(), digest("f")),

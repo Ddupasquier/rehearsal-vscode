@@ -16,6 +16,10 @@ identity, Storage, restore, or cleanup behavior.
 - Do not read credential, privacy-key, baseline-data, or source-policy files.
 - Do not send telemetry or contact a hosted database. An explicitly approved install or
   update uses the project's package manager and may contact its configured registry.
+- Optional update advisories are a separate, consent-gated exception to network-free
+  passive inspection: fixed public npm/GitHub metadata URLs, no credentials/cookies or
+  project data, no redirects, bounded response/time limits and no idle polling. Unknown,
+  offline, candidate/custom or drifting installations never grant install authority.
 - Treat unknown JSON versions, fields required by the current view, oversized output,
   timeouts, and malformed results as unavailable state—not permission to guess.
 
@@ -43,6 +47,15 @@ diff, checks that the source was not dirty or changed during review, and require
 approval before applying it. Ambiguous, expression-based, oversized, or out-of-workspace
 configuration is refused. The complete saved file must still pass Rehearsal core validation
 before it can affect a runtime.
+
+Freshness does not change the minimum compatibility contract. A newer public version
+may be offered without labeling the installed compatible version broken. Exact-version
+core updates still need native approval, current trust, unchanged installation metadata
+and an idle public activity result before terminal execution. Proven npm updates preserve
+the existing dependency group and exact pin. Unsupported/ambiguous installation
+provenance and new compatibility series stay manual-only; inspection never overwrites
+them. Saved-consent drift cancels review, without claiming atomic cross-window locking. Extension
+updates open the fixed reviewed GitHub release; no global extension installation runs.
 
 Report security concerns through the private process in the core repository's
 [`SECURITY.md`](https://github.com/Ddupasquier/rehearsal-db/blob/main/SECURITY.md).

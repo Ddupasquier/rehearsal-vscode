@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
+import { isPublishedVersion } from "./update_advisory.js";
 
 export type WorkspaceActionId =
   | "refresh"
@@ -24,7 +25,9 @@ export type WorkspaceActionId =
   | "showOutput"
   | "inspectionSettings"
   | "cancelOwnedOperation"
-  | "manageTrust";
+  | "manageTrust"
+  | "checkUpdates";
+// Update freshness is separate from the minimum compatibility warning.
 
 export const WORKSPACE_ACTION_IDS: readonly WorkspaceActionId[] = [
   "refresh",
@@ -51,10 +54,12 @@ export const WORKSPACE_ACTION_IDS: readonly WorkspaceActionId[] = [
   "inspectionSettings",
   "cancelOwnedOperation",
   "manageTrust",
+  "checkUpdates",
 ];
 
 export type WorkspaceActionKind =
   | "refresh"
+  | "check_updates"
   | "terminal"
   | "open_config"
   | "open_application"
@@ -90,17 +95,48 @@ const packageManagerFor = (snapshot: ProjectSnapshot): PackageManager => {
     : "npm";
 };
 
-const installArguments = (snapshot: ProjectSnapshot): readonly string[] => {
+export const packageInstallArguments = (
+  snapshot: ProjectSnapshot,
+  version = "latest",
+): readonly string[] => {
+  if (version !== "latest" && !isPublishedVersion(version))
+    throw new Error("Invalid reviewed update version.");
+  const dependency = `@rehearsal-db/core@${version}`;
   switch (packageManagerFor(snapshot)) {
     case "pnpm":
-      return ["pnpm", "add", "--save-dev", "@rehearsal-db/core@latest"];
+      return ["pnpm", "add", "--save-dev", dependency];
     case "yarn":
-      return ["yarn", "add", "--dev", "@rehearsal-db/core@latest"];
+      return ["yarn", "add", "--dev", dependency];
     case "bun":
-      return ["bun", "add", "--dev", "@rehearsal-db/core@latest"];
+      return ["bun", "add", "--dev", dependency];
     case "npm":
-      return ["npm", "install", "--save-dev", "@rehearsal-db/core@latest"];
+      return ["npm", "install", "--save-dev", dependency];
   }
+};
+
+/** Opt-in freshness updates preserve the proven npm dependency group and exact pin. */
+export const exactPackageUpdateArguments = (
+  version: string,
+  group: import("./update_advisory.js").DependencyGroup,
+): readonly string[] => {
+  if (
+    !isPublishedVersion(version) ||
+    !["dependencies", "devDependencies", "optionalDependencies"].includes(group)
+  )
+    throw new Error("Invalid reviewed update.");
+  const flag =
+    group === "dependencies"
+      ? "--save-prod"
+      : group === "optionalDependencies"
+        ? "--save-optional"
+        : "--save-dev";
+  return [
+    "npm",
+    "install",
+    flag,
+    "--save-exact",
+    `@rehearsal-db/core@${version}`,
+  ];
 };
 
 const rehearsalArguments = (
@@ -150,6 +186,14 @@ export const workspaceActionPlan = (
   )
     return null;
   switch (id) {
+    case "checkUpdates":
+      return {
+        id,
+        kind: "check_updates",
+        label: "Check for updates",
+        detail:
+          "Review optional public release checks without changing project inspection.",
+      };
     case "refresh":
       return {
         id,
@@ -173,7 +217,7 @@ export const workspaceActionPlan = (
         kind: "terminal",
         label: "Install Rehearsal",
         detail: "Add the current Rehearsal package to this project.",
-        arguments: installArguments(snapshot),
+        arguments: packageInstallArguments(snapshot),
         confirmation: {
           title: "Install Rehearsal in this project?",
           detail:
@@ -188,7 +232,7 @@ export const workspaceActionPlan = (
         kind: "terminal",
         label: "Update Rehearsal",
         detail: `Replace ${snapshot.version ?? "the installed version"} with the current supported release.`,
-        arguments: installArguments(snapshot),
+        arguments: packageInstallArguments(snapshot),
         confirmation: {
           title: "Update Rehearsal in this project?",
           detail:

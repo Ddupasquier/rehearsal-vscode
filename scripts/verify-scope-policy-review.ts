@@ -25,7 +25,32 @@ function requireEvidence(value: unknown): asserts value {
 }
 const object = (value: unknown): Record<string, unknown> => {
   requireEvidence(value && typeof value === "object" && !Array.isArray(value));
+  requireEvidence(
+    Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null,
+  );
   return value as Record<string, unknown>;
+};
+type ArtifactIdentity = { version: string; sha256: string };
+const publishedRc7 = (value: ArtifactIdentity) => {
+  const artifact = object(value);
+  requireEvidence(
+    Object.hasOwn(artifact, "version") &&
+      Object.hasOwn(artifact, "sha256") &&
+      typeof artifact.version === "string" &&
+      artifact.version.length <= 64 &&
+      artifact.version.trim() === artifact.version &&
+      /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(
+        artifact.version,
+      ) &&
+      typeof artifact.sha256 === "string" &&
+      /^[a-f0-9]{64}$/u.test(artifact.sha256),
+  );
+  return (
+    artifact.version === "0.1.0-rc.7" &&
+    artifact.sha256 ===
+      "e2bf8d40456ebf7b8b1b2526e5d774f45f8d53ee25358cd62f5f8b65bf5c556b"
+  );
 };
 const checkNames = [
   "local-file provider scope and Storage aggregates",
@@ -44,17 +69,21 @@ const invalidPolicies = [
   ["automatic-delete-schedule", "resources.cleanupSchedule", "daily-delete"],
   ["manual-runtime-identity", "runtime.projectId", "other-project"],
   ["manual-source-scope", "preparation.sourcePolicy", "other.json"],
+  ["prototype-path", "__proto__.polluted", true],
+  ["constructor-prototype-path", "constructor.prototype.polluted", true],
 ] as const;
-// Exact observed rc.7 tuples, not a claim that its heuristic taxonomy is ideal.
+// Corrected tuples; only exact immutable rc.7 bytes inherit the legacy exceptions.
 const refusalOutcomes = [
   ["idle-below-minimum", 2, "configuration_invalid"],
-  ["retention-zero", 4, "baseline_invalid"],
+  ["retention-zero", 2, "configuration_invalid"],
   ["disk-over-percent", 2, "configuration_invalid"],
   ["environment-count-over-bound", 2, "configuration_invalid"],
   ["quota-zero", 2, "configuration_invalid"],
   ["automatic-delete-schedule", 2, "configuration_invalid"],
-  ["manual-runtime-identity", 10, "internal_failure"],
-  ["manual-source-scope", 10, "internal_failure"],
+  ["manual-runtime-identity", 2, "configuration_invalid"],
+  ["manual-source-scope", 2, "configuration_invalid"],
+  ["prototype-path", 2, "configuration_invalid"],
+  ["constructor-prototype-path", 2, "configuration_invalid"],
   ["stale-source", 2, "configuration_invalid"],
   ["foreign-source-fingerprint", 2, "configuration_invalid"],
   ["protected-cleanup-preview", 2, "configuration_invalid"],
@@ -90,8 +119,12 @@ const expectedChanges = [
 ] as const;
 
 /** Production parsing/rendering of a fixed synthetic evidence section, not a runtime check. */
-export function verifyScopePolicyReviewSamples(value: unknown) {
+export function verifyScopePolicyReviewSamples(
+  value: unknown,
+  artifact: ArtifactIdentity,
+) {
   try {
+    const legacy = publishedRc7(artifact);
     const encoded = JSON.stringify(value);
     requireEvidence(
       typeof encoded === "string" && Buffer.byteLength(encoded) <= 128 * 1024,
@@ -148,7 +181,21 @@ export function verifyScopePolicyReviewSamples(value: unknown) {
     );
     for (const [index, raw] of section.refusals.entries()) {
       const refusal = object(raw),
-        [name, exitCode, category] = refusalOutcomes[index]!;
+        [name, correctedExit, correctedCategory] = refusalOutcomes[index]!;
+      const historicalInternal =
+        legacy &&
+        [
+          "manual-runtime-identity",
+          "manual-source-scope",
+          "prototype-path",
+          "constructor-prototype-path",
+        ].includes(name);
+      const [exitCode, category]: readonly [number, string] =
+        legacy && name === "retention-zero"
+          ? [4, "baseline_invalid"]
+          : historicalInternal
+            ? [10, "internal_failure"]
+            : [correctedExit, correctedCategory];
       assert.deepEqual(refusal, {
         scenario: name,
         exitCode,
@@ -338,12 +385,15 @@ export function verifyScopePolicyReviewSamples(value: unknown) {
       baselineSamplesAccepted: 3,
       providersReviewed: ["postgresql", "supabase"],
       resourceProposalReviewsAccepted: 2,
-      refusalsAccepted: 14,
+      refusalsAccepted: refusalOutcomes.length,
       limitations: [
         "Saved exact-installed public metadata and read-only proposals; no source, SQL, running database, Storage service or provider login is verified here.",
         "The 2,051-row sample proves bounded aggregate review, not large-database performance or restore fidelity. Missing source-schema evidence remains unavailable.",
         "Protected cleanup refusal is not successful resource deletion or VM shutdown. Persistent baseline/source-file preservation is reported separately by Lab.",
-        "Exact observed rc.7 refusal tuples are retained: zero retention reports baseline_invalid; manual-only identity/source edits report internal_failure. These heuristic categories are not claimed to be ideal or corrected here.",
+        legacy
+          ? "Only the exact published rc.7 version and artifact checksum retain observed taxonomy defects: zero retention is baseline_invalid; manual-only and prototype paths are internal_failure. This is characterization, not endorsement."
+          : "All rejected configuration proposals require configuration_invalid / CONFIGURATION_INVALID / exit 2; another artifact cannot inherit rc.7's diagnostic defects from its version alone.",
+        "Sixteen exact refusal controls are required. Historical fourteen-control reports do not establish the added prototype-path or complete proposal-sequence preservation coverage.",
         "Production editor parsing, field validation and HTML generation only; native save, keyboard, visual and screen-reader acceptance remain separate.",
       ],
     };
@@ -359,7 +409,10 @@ export function verifyScopePolicyReviewEvidence(
   try {
     const activity = verifyOperationActivityEvidence(value, expectedSha256);
     return {
-      ...verifyScopePolicyReviewSamples(object(value).scopePolicyReview),
+      ...verifyScopePolicyReviewSamples(object(value).scopePolicyReview, {
+        version: String(activity.version),
+        sha256: activity.artifactSha256,
+      }),
       artifactSha256: expectedSha256,
       version: activity.version,
     };
