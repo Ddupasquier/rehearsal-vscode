@@ -38,7 +38,17 @@ class ViewControl {
   checked = false;
   disabled = false;
   hidden = false;
-  textContent = "";
+  readonly children: ViewControl[] = [];
+  private ownText = "";
+  get textContent(): string {
+    return (
+      this.ownText + this.children.map((child) => child.textContent).join("")
+    );
+  }
+  set textContent(value: string) {
+    this.ownText = value;
+    this.children.length = 0;
+  }
   id = "";
   owner: ViewControl | null = null;
   fields: Record<string, string> = {};
@@ -88,7 +98,13 @@ class ViewControl {
       return this.navigationMember ? this : null;
     return selector === "[data-resource-row]" ? this.owner : null;
   }
-  append() {}
+  append(child?: ViewControl) {
+    if (child) this.children.push(child);
+  }
+  replaceChildren(...children: ViewControl[]) {
+    this.ownText = "";
+    this.children.splice(0, this.children.length, ...children);
+  }
   setAttribute() {}
   querySelector(selector: string) {
     return selector === "h1" ? this.heading : null;
@@ -107,6 +123,7 @@ const exerciseViewScript = (
     readonly other?: Record<string, string>;
   },
   additionalReviewIds: readonly string[] = [],
+  comparisonControls = false,
 ) => {
   const migrationRows = ["primary", "publication"].map(
     (target, index) =>
@@ -193,6 +210,23 @@ const exerciseViewScript = (
   ids.get("#workspace-profile")!.value = "full";
   ids.get("#resource-sort")!.value = "name";
   ids.get("#migration-sort")!.value = "order";
+  if (comparisonControls) {
+    for (const id of ["compare-left", "compare-right"]) {
+      const field = new RegExp(
+        `<select id="${id}"([^>]*)>([\\s\\S]*?)</select>`,
+      ).exec(html);
+      if (!field) throw new Error("Missing comparison control.");
+      const options = [
+        ...field[2]!.matchAll(/<option value="([^"]*)"( selected)?>/gu),
+      ];
+      const control = new ViewControl();
+      control.disabled = field[1]!.includes("disabled");
+      control.value =
+        (options.find((option) => option[2]) ?? options[0])?.[1] ?? "";
+      ids.set("#" + id, control);
+    }
+    ids.set("#comparison-result", new ViewControl());
+  }
   if (formValues) {
     const form = new ViewControl();
     form.fields = { ...formValues.simple };
@@ -299,6 +333,7 @@ const exerciseViewScript = (
           ]);
         },
         getElementById: (id: string) => ids.get("#" + id) ?? null,
+        createElement: () => new ViewControl(),
         scrollingElement: scrolling,
       },
       window: {
@@ -764,11 +799,237 @@ describe("simple configuration form changes", () => {
   });
 });
 
+describe("comparison availability and recovery", () => {
+  const view = (snapshot: ProjectSnapshot, loading = false) => {
+    const html = renderWorkspaceDocument(
+      snapshot,
+      assets,
+      "activity",
+      DEFAULT_WORKSPACE_PREFERENCES,
+      [],
+      loading ? "loading" : "idle",
+    );
+    return {
+      html,
+      ...exerciseViewScript(html, {}, false, undefined, [], true),
+    };
+  };
+  const result = (current: ReturnType<typeof view>) =>
+    current.ids.get("#comparison-result")!;
+  const baselineOnly = () => {
+    const { runtime: _runtime, ...snapshot } = readySnapshot();
+    return snapshot;
+  };
+
+  it("disables empty controls with recovery instead of a history-cap explanation or equal facts", () => {
+    const { baseline: _baseline, ...snapshot } = baselineOnly();
+    const current = view(snapshot);
+    expect(current.ids.get("#compare-left")!.disabled).toBe(true);
+    expect(current.ids.get("#compare-right")!.disabled).toBe(true);
+    expect(result(current).textContent).toContain(
+      "No reviewed environment or baseline evidence",
+    );
+    expect(result(current).textContent).not.toMatch(
+      /first 32|: equal|larger histories/u,
+    );
+    expect(result(current).children).toEqual([]);
+    expect(current.html).toContain(
+      'aria-describedby="comparison-result" disabled',
+    );
+    expect(current.html).toContain("No comparison evidence available");
+    expect(current.html).toContain("Review project setup");
+    expect(current.html).toContain("Refresh comparison evidence");
+  });
+
+  it.each([
+    ["loading", "Checking comparison evidence"],
+    ["operation_active", "paused while a project operation is running"],
+    ["operation_attention", "interrupted or unsafe operation"],
+    ["untrusted", "Review Workspace Trust"],
+    ["package_missing", "Install Rehearsal"],
+    ["package_outdated", "Update the project's Rehearsal package"],
+    ["error", "project check did not finish safely"],
+  ] as const)(
+    "does not turn retained details into comparison evidence during %s",
+    (availability, guidance) => {
+      const current = view({ ...readySnapshot(), availability });
+      expect(current.ids.get("#compare-left")!.disabled).toBe(true);
+      expect(current.ids.get("#compare-right")!.disabled).toBe(true);
+      expect(result(current).textContent).toContain(guidance);
+      expect(result(current).children).toEqual([]);
+      current.ids
+        .get("#compare-right")!
+        .change(current.ids.get("#compare-left")!.value);
+      expect(result(current).textContent).toContain(guidance);
+      expect(result(current).textContent).not.toContain(": equal");
+    },
+  );
+
+  it("pauses a ready comparison while its project inspection is loading", () => {
+    const current = view(readySnapshot(), true);
+    expect(current.ids.get("#compare-left")!.disabled).toBe(true);
+    expect(result(current).textContent).toContain(
+      "Wait for the project inspection to finish",
+    );
+    expect(result(current).children).toEqual([]);
+  });
+
+  it("distinguishes a valid single generation from missing evidence without comparing it to itself", () => {
+    const snapshot = baselineOnly();
+    const current = view({
+      ...snapshot,
+      baseline: {
+        ...snapshot.baseline!,
+        generations: snapshot.baseline!.generations!.slice(0, 1),
+      },
+    });
+    expect(current.ids.get("#compare-left")!.disabled).toBe(true);
+    expect(current.ids.get("#compare-right")!.disabled).toBe(true);
+    expect(result(current).textContent).toContain(
+      "Only one reviewed environment or baseline is available",
+    );
+    expect(result(current).textContent).toContain("two distinct entries");
+    expect(result(current).textContent).not.toMatch(
+      /No reviewed|first 32|: equal/u,
+    );
+    expect(current.html).toContain(
+      snapshot.baseline!.generations![0]!.generationId,
+    );
+  });
+
+  it("starts with distinct generations and retains different and unavailable facts", () => {
+    const current = view(baselineOnly());
+    expect(current.ids.get("#compare-left")!.disabled).toBe(false);
+    expect(current.ids.get("#compare-right")!.disabled).toBe(false);
+    expect(current.ids.get("#compare-left")!.value).not.toBe(
+      current.ids.get("#compare-right")!.value,
+    );
+    expect(result(current).textContent).toContain(
+      "Database rows: different — 10003 / 9990",
+    );
+    expect(result(current).textContent).toContain(
+      "Reviewed source-column schema: unavailable",
+    );
+    expect(result(current).textContent).toContain(
+      "Equal aggregate counts do not prove equal rows",
+    );
+  });
+
+  it("keeps equal zero aggregates separate from unavailable evidence for distinct entries", () => {
+    const snapshot = baselineOnly();
+    const current = view({
+      ...snapshot,
+      baseline: {
+        ...snapshot.baseline!,
+        generations: snapshot.baseline!.generations!.map((generation) => ({
+          ...generation,
+          rowCount: 0,
+        })),
+      },
+    });
+    expect(result(current).textContent).toContain(
+      "Database rows: equal — 0 / 0",
+    );
+    expect(result(current).textContent).toContain(
+      "Reviewed source-column schema: unavailable",
+    );
+  });
+
+  it("removes previous facts when the user selects the same entry twice", () => {
+    const current = view(baselineOnly());
+    expect(result(current).children.length).toBeGreaterThan(0);
+    current.ids
+      .get("#compare-right")!
+      .change(current.ids.get("#compare-left")!.value);
+    expect(result(current).textContent).toContain(
+      "Choose two distinct environments or baselines",
+    );
+    expect(result(current).children).toEqual([]);
+    expect(result(current).textContent).not.toContain(": equal");
+  });
+
+  it("reserves the live-pair cap explanation for a pair actually outside the bounded matrix", () => {
+    const snapshot = baselineOnly();
+    const template = snapshot.baseline!.generations![0]!;
+    const current = view({
+      ...snapshot,
+      baseline: {
+        ...snapshot.baseline!,
+        generations: Array.from({ length: 33 }, (_, index) => ({
+          ...template,
+          generationId: `generation-${index}`,
+        })),
+      },
+    });
+    current.ids.get("#compare-right")!.change("baseline:generation-32");
+    expect(result(current).textContent).toContain(
+      "selected pair is outside the first 32",
+    );
+    expect(result(current).textContent).not.toContain("No reviewed");
+    expect(result(current).children).toEqual([]);
+  });
+});
+
 describe("workspace control state and truthful actions", () => {
+  it.each([
+    ["idle", "success", "No active operation"],
+    ["busy", "active", "Operation in progress"],
+    ["stale", "warning", "Review operation state"],
+    ["invalid", "warning", "Review operation state"],
+    [undefined, "muted", "Activity unavailable"],
+  ] as const)("gives activity %s its truthful %s tone", (state, tone, note) => {
+    const { activity: _activity, ...snapshot } = readySnapshot();
+    const html = renderWorkspaceDocument(
+      state
+        ? {
+            ...snapshot,
+            activity: { schemaVersion: 1, state, operation: null },
+          }
+        : snapshot,
+      assets,
+      "activity",
+    );
+    expect(html).toContain(
+      `<article class="metric metric--${tone}">\n    <div class="metric__top"><span>Activity</span>`,
+    );
+    expect(html).toContain(
+      `<strong>${state ?? "Unavailable"}</strong>\n    <small>${note}</small>`,
+    );
+    if (tone !== "success") {
+      expect(html).not.toContain(
+        '<article class="metric metric--success">\n    <div class="metric__top"><span>Activity</span>',
+      );
+    }
+  });
+  it("retains a known operation kind in the activity subtitle", () => {
+    const html = renderWorkspaceDocument(
+      {
+        ...readySnapshot(),
+        activity: {
+          schemaVersion: 1,
+          state: "busy",
+          operation: {
+            kind: "run",
+            startedAt: "2026-10-17T00:00:00.000Z",
+            rehearsalVersion: "0.1.0-rc.8",
+          },
+        },
+      },
+      assets,
+      "activity",
+    );
+    expect(html).toContain("<strong>busy</strong>\n    <small>run</small>");
+  });
   it("renders exact version identifiers without capitalizing or clipping their value", () => {
     const html = renderWorkspaceDocument(readySnapshot(), assets, "activity");
     expect(html).toContain('class="metric metric--muted metric--identifier"');
     expect(html).toContain("<strong>0.1.0-rc.4</strong>");
+  });
+  it("marks candidate digests as verbatim identifiers rather than capitalized status text", () => {
+    const html = renderWorkspaceDocument(readySnapshot(), assets, "activity");
+    expect(html).toMatch(
+      /<article class="metric metric--muted metric--identifier">\s*<div class="metric__top"><span>Candidate digest<\/span>[\s\S]*?<strong>aaaaaaaaaaaa<\/strong>/u,
+    );
   });
   it("distinguishes custom, saved and suggested addresses and preserves the separate health URL", () => {
     const snapshot = readySnapshot();

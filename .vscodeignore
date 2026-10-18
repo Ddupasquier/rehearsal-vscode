@@ -1,13 +1,13 @@
-.github/**
-.vscode/**
-.gitignore
-docs/**
-scripts/**
-tests/**
-src/**
-*.map
-dist/**/*.d.ts
-dist/**/*.map
-tsconfig.json
-tsconfig.build.json
-vitest.config.mts
+# Package public runtime files only. Generated/private test-results stay local.
+**
+!package.json
+!README.md
+!CHANGELOG.md
+!LICENSE
+!PRIVACY.md
+!SECURITY.md
+!SUPPORT.md
+!dist/src/*.js
+!media/rehearsal.svg
+!media/rehearsal-readme.png
+!media/workspace.css
