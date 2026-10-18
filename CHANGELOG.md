@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.1.9 — Unreleased technical preview candidate
+## 0.1.10 — Free Starter candidate
+
+- License every included editor feature indefinitely at no charge for personal and
+  commercial development, without an account, payment card, trial or activation.
+- Match the manifest, support information and release checks to free Starter use.
+  Future optional Pro terms cannot reduce the rights granted for this version;
+  previously accepted orders and Rehearsal core's MIT license remain unchanged.
+- Separate and wrap the baseline-scope counts in Data & auth instead of running
+  the included-table, excluded-table and schema totals together.
+- Keep the existing editor features and runtime/safety behavior unchanged.
+  Marketplace publication, paid offers and billing remain separate decisions.
+
+## 0.1.9 — Released technical preview
 
 - Disable unavailable comparison controls and explain loading, operation recovery,
   missing evidence and a single available entry without implying equality.

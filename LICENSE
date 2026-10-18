@@ -1,24 +1,32 @@
-Rehearsal for VS Code — Commercial Preview License
+Rehearsal for VS Code — Starter License
 
 Copyright (c) 2026 Dylan Dupasquier. All rights reserved.
 
-1. Evaluation
+1. Free Starter use
 
-You may install and evaluate this preview for 14 days after it is delivered to you.
-Evaluation use is limited to your own development work and may not be redistributed.
+You and your organization receive a non-exclusive license to install, copy internally,
+and use this extension indefinitely at no charge for personal or commercial development
+work. All features included in a version distributed under this license are Starter
+features covered by this grant. No purchase, accepted order, account, payment card,
+trial period, or license activation is required for Starter use.
 
-2. Paid use
+2. Future Pro features and existing orders
 
-A receipt, invoice, or written order accepted by the copyright holder grants each named
-or purchased user a non-exclusive, non-transferable license to install and use this
-extension in Visual Studio Code for that user's development work. The order controls the
-number of users, term, price, included updates, and any additional support.
+Future, separately identified optional Pro features may be offered under separate terms.
+They do not reduce the rights granted for a version already received under this license
+or turn its included Starter features into paid features. This license does not promise
+future Pro features, updates, support, or a particular price or purchase model.
+
+Rights and support already granted by an accepted receipt, invoice, or written order
+remain in effect under that order. An accepted order may grant additional rights, but
+does not narrow the free Starter rights granted by this license.
 
 3. Restrictions
 
-You may not redistribute, resell, sublicense, publish, or provide the extension as a
-hosted service. You may not remove ownership notices or bypass a technical license limit.
-Reverse engineering is prohibited only to the extent permitted by applicable law.
+Except for the internal copies permitted above, you may not redistribute, resell,
+sublicense, publish, or provide the extension as a hosted service. You may not remove
+ownership notices or bypass a separately agreed Pro license limit. Reverse engineering
+is prohibited only to the extent permitted by applicable law.
 
 4. Ownership and third-party software
 
@@ -54,5 +62,7 @@ restrictions, warranty, and liability survive termination.
 
 9. Entire agreement
 
-This license and the accepted order are the agreement for the extension unless both sides
-agree to different written terms. If they conflict, the accepted order controls.
+This license and any accepted order are the agreement for the extension unless both sides
+agree to different written terms. An accepted order controls its additional purchased
+rights and support without reducing the Starter grant above. Third-party licenses and
+rights that cannot legally be excluded remain unaffected.

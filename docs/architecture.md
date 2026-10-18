@@ -10,7 +10,7 @@
 | Extension ID  | `rehearsal-db.rehearsal`                                                  |
 | Publisher     | `rehearsal-db` is reserved in metadata; no Marketplace account is assumed |
 | Product owner | Rehearsal project, administered by Ddupasquier                            |
-| License       | Commercial preview per user; Rehearsal core remains MIT                   |
+| License       | Free Starter for included features; Rehearsal core remains MIT            |
 | Version       | Owned by `package.json`; each released VSIX identifies its exact version  |
 
 Public GitHub source and VSIX prereleases do not establish a Marketplace listing or paid
@@ -387,9 +387,15 @@ payment. Future editor gates must preserve free stop, cancellation, recovery and
 evidence; a failed or expired entitlement must never interrupt an operation or block CLI
 recovery.
 
-Current artifacts still use the commercial-preview `LICENSE`: 14-day evaluation and
-per-user licensing through an accepted order. No trial clock, activation or feature-paywall
-enforcement exists. There is no telemetry, account or hosted license service. Public
-GitHub prereleases establish technical distribution only. New license terms, entitlement
-design, paid launch, checkout, Marketplace publication, pricing and refunds require their
-own review and approval; approving the product model does not approve those operations.
+The current `LICENSE` grants indefinite no-charge Starter use for personal and commercial
+development of all features included in versions distributed with it. No account, card,
+trial, activation or feature-paywall enforcement exists. Future separately identified
+optional Pro additions cannot restrict already-granted versions; no entitlement code
+belongs in core or its safety operations. Existing accepted-order rights and support are
+preserved. Historical VSIX files keep their bundled terms and immutable checksums; the
+new grant travels with a separately reviewed Starter release, not a rebuilt old artifact.
+
+There is no telemetry or hosted license service. Public GitHub prereleases establish
+technical distribution only. Future Pro terms, entitlement design, paid launch, checkout,
+Marketplace publication, pricing and refunds need their own approval. Those future paid
+decisions are not prerequisites for the approved Starter grant or free CLI use.

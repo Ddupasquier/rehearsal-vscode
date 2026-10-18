@@ -1,27 +1,29 @@
 # Commercial readiness and planned tiers
 
-This guide owns the approved product model and its planned tier boundaries: a complete
-free MIT CLI, a useful free VS Code Starter, and optional paid Pro editor productivity.
-It is a plan, not a claim that tier enforcement or a paid launch is ready.
+This guide owns the approved product model: a complete free MIT CLI, a useful free
+VS Code Starter, and future optional paid Pro editor productivity. The current
+[Starter license](../LICENSE) aligns rights for versions distributed with it; the Pro
+boundary remains a plan, not a claim that paid features or a paid launch are ready.
 
 ## Planned tier matrix
 
-| Tier                      | Included workflow                                                                                                                                                                                   | Boundary                                                                                                                                        |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Free CLI                  | The complete Rehearsal engine and all supported commands.                                                                                                                                           | MIT-licensed; no extension purchase, account or entitlement required.                                                                           |
-| Free VS Code Starter      | Project setup and readiness; basic ordered migration review; reviewed run, open, verify and stop actions; baseline and authentication guidance; safe cleanup, recovery, updates and support access. | A useful end-to-end local rehearsal, not a teaser. Safety, account connection and recovery are never paid unlocks.                              |
-| Optional paid VS Code Pro | Rich visual migration/resource exploration, saved workspaces, advanced configuration editors, environment comparisons, expanded history and reports.                                                | Editor convenience and productivity, not exclusive database capabilities. The same underlying operations remain available through the free CLI. |
-| Later Team / Enterprise   | Shared organizational workflows and administration, if validated demand supports them.                                                                                                              | Deferred; no current collaboration, governance, compliance or enterprise-support promise.                                                       |
+| Tier                      | Included workflow                                                                                                                                                                                                      | Boundary                                                                                                                                                   |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Free CLI                  | The complete Rehearsal engine and all supported commands.                                                                                                                                                              | MIT-licensed; no extension purchase, account or entitlement required.                                                                                      |
+| Free VS Code Starter      | All editor features included in the Starter-licensed version, including setup, migration/resource review, configuration tools, profiles, comparisons, reports, runtime controls, authentication guidance and recovery. | Indefinite no-charge personal and commercial development use; no account, purchase, card, trial or activation. Safety and recovery are never paid unlocks. |
+| Optional paid VS Code Pro | Future separately identified, additive editor productivity, such as richer saved review workspaces or expanded comparative/history workflows beyond the included Starter features.                                     | Not implemented or approved feature-by-feature. It cannot restrict already-granted Starter versions or make core database capabilities exclusive to Pro.   |
+| Later Team / Enterprise   | Shared organizational workflows and administration, if validated demand supports them.                                                                                                                                 | Deferred; no current collaboration, governance, compliance or enterprise-support promise.                                                                  |
 
 Free basics and the complete CLI are protected principles. Advanced Pro bundles are
 candidates, not a final feature-by-feature paywall allocation or approval to remove or
 restrict existing features.
 
-The matrix describes future packaging. **The current preview is not technically gated:**
-there is no trial clock, license activation, entitlement check or paid-feature switch.
-The existing [LICENSE](../LICENSE), including its 14-day evaluation language, is unchanged.
-Approval of this model does not establish new license terms, authorize a paywall, set a
-price or permit publication. A free Starter release needs reviewed terms that match it.
+**Every feature included in a Starter-licensed version is covered by its free grant.**
+There is no trial clock, license activation, entitlement check or paid-feature switch.
+The owner approved this Starter alignment; it does not approve future Pro terms, a
+paywall, pricing, billing or publication. Existing accepted-order rights and support
+remain in effect. Historical VSIX artifacts keep their bundled terms and immutable
+checksums; publish a new reviewed Starter artifact rather than relabelling old bytes.
 
 Any future Pro expiry, payment failure or offline state must preserve Starter workflows,
 safe shutdown and CLI recovery; it must never delete or lock database data. Exact
@@ -60,7 +62,7 @@ design still need review. No hosted billing service is required just to give acc
 - Pro price and purchase model; trial trigger and duration.
 - Included update term, refunds, seller/support ownership and checkout provider.
 - Whether enforcement is needed, how it works offline, and recovery after license loss.
-- Public Starter and Pro license terms and accurate distribution metadata.
+- Future Pro license terms and accurate distribution metadata for the selected route.
 
 Validate why developers would pay and whether they return to the workflow before adding
 Team/Enterprise or hosted billing infrastructure. Use voluntary feedback and separately
@@ -68,8 +70,10 @@ approved customer records, not automatic telemetry, project contents or database
 
 ## Distribution and release gates
 
-**Starter technical distribution** can proceed independently of a paid cohort. Public
-GitHub prereleases already exist; Marketplace publication still needs separate approval,
+**Starter technical distribution** can proceed independently of a paid cohort. The
+Starter grant requires no payment service or future Pro seller/refund decision. Public
+GitHub prereleases already exist; a new Starter artifact needs its own exact release
+approval. Marketplace publication still needs separate approval,
 publisher/account recovery controls, reviewed license/privacy/support information and
 tested installation, upgrade, rollback, uninstall and offline behavior. A Marketplace
 `Free` or `Trial` label is metadata, not an entitlement system.

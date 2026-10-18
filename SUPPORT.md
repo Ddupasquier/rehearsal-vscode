@@ -1,7 +1,8 @@
 # Support
 
-Rehearsal for VS Code is a commercial preview. It is suitable for local development and
-evaluation, not as a backup system or production emergency service.
+Rehearsal for VS Code Starter is free preview software for local development, not a
+backup system or production emergency service. Starter support is best effort through
+the issue tracker; no purchase or account is required to use the extension.
 
 ## Before asking for help
 
@@ -19,8 +20,9 @@ Open an issue at <https://github.com/Ddupasquier/rehearsal-db/issues> and includ
 - the redacted report and the exact step that failed; and
 - whether the problem is repeatable in Rehearsal Test Lab.
 
-Paid-preview customers receive best-effort priority handling. The target is an initial
-response within three business days; this is not a service-level agreement. Purchase,
-refund, and private-contact instructions must be stated in the accepted order.
+Existing accepted commercial-preview orders retain their best-effort priority handling
+and initial-response target of three business days; this is not a service-level agreement.
+Any additional support, purchase, refund or private-contact terms remain governed by the
+accepted order. Starter does not promise a response deadline or future paid support.
 
 Security reports follow [SECURITY.md](SECURITY.md), not the public issue tracker.

@@ -20,20 +20,13 @@ const requiredCommands = [
 
 const forbidden = /\b(?:TODO|TBD|CHANGEME|example\.com)\b/iu;
 
-const main = async (): Promise<void> => {
-  const contents = new Map<string, string>();
-  for (const filename of requiredFiles) {
-    const path = resolve(root, filename);
-    const details = await stat(path);
-    if (!details.isFile() || details.size === 0) {
-      throw new Error(`Commercial candidate is missing ${filename}.`);
-    }
-    contents.set(filename, await readFile(path, "utf8"));
-  }
-
-  const manifest = JSON.parse(
-    await readFile(resolve(root, "package.json"), "utf8"),
-  ) as Record<string, unknown>;
+export const commercialReadinessFailures = ({
+  manifest,
+  contents,
+}: {
+  manifest: Readonly<Record<string, unknown>>;
+  contents: ReadonlyMap<string, string>;
+}): string[] => {
   const commands = Array.isArray(
     (manifest.contributes as { commands?: unknown } | undefined)?.commands,
   )
@@ -48,28 +41,51 @@ const main = async (): Promise<void> => {
     manifest.private !== true &&
       "package must remain private before reviewed publication",
     manifest.preview !== true && "preview metadata is required",
-    manifest.pricing !== "Trial" && "Marketplace pricing label must be Trial",
+    manifest.pricing !== "Free" && "Starter pricing metadata must be Free",
     manifest.license !== "SEE LICENSE IN LICENSE" &&
       "manifest license is incorrect",
     !/^0\.1\.\d+$/u.test(String(manifest.version)) &&
-      "unexpected commercial preview version",
+      "unexpected Starter preview version",
     ...requiredCommands.map(
       (command) => !commands.includes(command) && `missing command ${command}`,
     ),
-    !contents.get("README.md")?.includes("14-day evaluation") &&
-      "README does not explain the evaluation",
+    !contents.get("README.md")?.includes("indefinitely at no charge") &&
+      "README does not explain indefinite free Starter use",
     !contents.get("PRIVACY.md")?.includes("does not include telemetry") &&
       "privacy statement does not explicitly reject telemetry",
-    !contents.get("LICENSE")?.includes("Commercial Preview License") &&
-      "commercial license is missing",
-    !contents.get("SUPPORT.md")?.includes("three business days") &&
-      "support response target is missing",
+    !contents.get("LICENSE")?.includes("Starter License") &&
+      "Starter license is missing",
+    !contents.get("LICENSE")?.includes("indefinitely at no charge") &&
+      "Starter license does not grant indefinite no-charge use",
+    !contents.get("LICENSE")?.includes("personal or commercial development") &&
+      "Starter license does not cover commercial development",
+    /for 14 days/iu.test(contents.get("LICENSE") ?? "") &&
+      "Starter license must not impose the previous evaluation period",
+    !contents.get("SUPPORT.md")?.includes("best effort") &&
+      "best-effort Starter support boundary is missing",
   ].filter((failure): failure is string => Boolean(failure));
 
   for (const [filename, content] of contents) {
     if (forbidden.test(content))
       failures.push(`${filename} contains a placeholder`);
   }
+  return failures;
+};
+
+const main = async (): Promise<void> => {
+  const contents = new Map<string, string>();
+  for (const filename of requiredFiles) {
+    const path = resolve(root, filename);
+    const details = await stat(path);
+    if (!details.isFile() || details.size === 0) {
+      throw new Error(`Commercial candidate is missing ${filename}.`);
+    }
+    contents.set(filename, await readFile(path, "utf8"));
+  }
+  const manifest = JSON.parse(
+    await readFile(resolve(root, "package.json"), "utf8"),
+  ) as Record<string, unknown>;
+  const failures = commercialReadinessFailures({ manifest, contents });
   if (failures.length > 0) {
     throw new Error(`Commercial readiness failed:\n- ${failures.join("\n- ")}`);
   }
@@ -83,11 +99,12 @@ const main = async (): Promise<void> => {
         telemetry: "none",
         documents: requiredFiles,
         commands: requiredCommands,
+        scope:
+          "Starter metadata and documents, not legal or paid-launch approval",
         remainingOperationalApprovals: [
-          "legal review",
-          "seller and support identity",
-          "checkout and refund setup",
           "distribution or Marketplace publication",
+          "future Pro terms, seller and support identity",
+          "future Pro checkout, refunds and entitlement design",
         ],
       },
       null,
@@ -96,7 +113,8 @@ const main = async (): Promise<void> => {
   );
 };
 
-void main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (require.main === module)
+  void main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
