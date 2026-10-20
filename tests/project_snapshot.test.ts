@@ -822,6 +822,26 @@ describe("workspace package compatibility", () => {
 });
 
 describe("project overview", () => {
+  it("stops at the platform boundary and supplies WSL recovery without inspecting the project", async () => {
+    const observed: string[] = [];
+    const stable = client("READY", undefined, observed);
+    const result = await inspectProject({
+      workspaceName: "Windows app",
+      workspaceRoot: "C:\\projects\\app",
+      trusted: true,
+      client: {
+        ...stable,
+        version: async () => {
+          throw new AdapterError("platform_unsupported", "Use WSL 2.");
+        },
+      },
+    });
+    expect(result.availability).toBe("error");
+    expect(result.error?.code).toBe("platform_unsupported");
+    expect(result.error?.suggestions.join(" ")).toContain("Linux home");
+    expect(observed).toEqual([]);
+    expect(result.readiness).toBeUndefined();
+  });
   it("checks activity after every detailed query has completed, not concurrently with them", async () => {
     const stable = client();
     let activityCalls = 0;

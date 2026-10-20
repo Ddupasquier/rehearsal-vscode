@@ -21,6 +21,7 @@ import {
 } from "./contracts.js";
 import {
   AdapterError,
+  assertInspectionPlatform,
   RehearsalCliError,
   resolveWorkspaceRehearsal,
   runRehearsalJson,
@@ -241,6 +242,7 @@ type ObservedVersion = Awaited<ReturnType<SnapshotClient["version"]>>;
 
 export const processSnapshotClient: SnapshotClient = {
   version: async (workspaceRoot, signal, timeoutMs) => {
+    assertInspectionPlatform();
     const resolved = await resolveWorkspaceRehearsal(workspaceRoot);
     const location = relative(
       await realpath(workspaceRoot),
@@ -347,13 +349,20 @@ const failureSnapshot = (
         code: error.code,
         message: error.message,
         suggestions:
-          error.code === "timeout"
+          error.code === "platform_unsupported"
             ? [
-                "Retry the read-only inspection.",
-                "Increase Rehearsal: Inspection Timeout Seconds for this workspace if the project needs longer.",
-                "Run Rehearsal Doctor for a focused readiness check.",
+                "Install Microsoft's WSL extension in VS Code and use a WSL 2 Linux distribution.",
+                "Keep this project in the distribution's Linux home, not a Windows-mounted drive.",
+                "Use WSL: Open Folder in WSL, then install Rehearsal DB in that WSL extension host.",
+                "Enable Docker Desktop integration for that distribution, or use its local Docker Engine.",
               ]
-            : [],
+            : error.code === "timeout"
+              ? [
+                  "Retry the read-only inspection.",
+                  "Increase Rehearsal: Inspection Timeout Seconds for this workspace if the project needs longer.",
+                  "Run Rehearsal Doctor for a focused readiness check.",
+                ]
+              : [],
       },
     };
   }

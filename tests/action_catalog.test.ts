@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { shellCommand, workspaceActionPlan } from "../src/action_catalog.js";
+import {
+  shellCommand,
+  workspaceActionPlan,
+  WORKSPACE_ACTION_IDS,
+} from "../src/action_catalog.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 
 const snapshot = (
@@ -33,6 +37,19 @@ const snapshot = (
 });
 
 describe("workspace action catalog", () => {
+  it("never offers a process or mutation on an unsupported native Windows host", () => {
+    const unsupported = snapshot({
+      availability: "error",
+      error: {
+        code: "platform_unsupported",
+        message: "Use WSL 2.",
+        suggestions: [],
+      },
+    });
+    expect(
+      WORKSPACE_ACTION_IDS.filter((id) => workspaceActionPlan(unsupported, id)),
+    ).toEqual(["refresh", "documentation", "showOutput", "checkUpdates"]);
+  });
   it("binds mutation actions to the exact reviewed candidate digest", () => {
     expect(workspaceActionPlan(snapshot(), "runRehearsal")?.arguments).toEqual([
       "npx",
@@ -154,6 +171,20 @@ describe("workspace action catalog", () => {
     expect(
       shellCommand(["npx", "--config=folder/it's-safe.mjs", "$(unsafe)"]),
     ).toBe(`'npx' '--config=folder/it'"'"'s-safe.mjs' '$(unsafe)'`);
+  });
+  it("uses PowerShell invocation and literal quoting rather than POSIX command text", () => {
+    expect(
+      shellCommand(
+        [
+          "C:\\Program Files\\Node\\npx.cmd",
+          "--config=folder/it's-safe.mjs",
+          "$(unsafe); & %PATH% !",
+        ],
+        "powershell",
+      ),
+    ).toBe(
+      "& 'C:\\Program Files\\Node\\npx.cmd' '--config=folder/it''s-safe.mjs' '$(unsafe); & %PATH% !'",
+    );
   });
 
   it("states discard data loss and qualified engine retention before destructive approval", () => {

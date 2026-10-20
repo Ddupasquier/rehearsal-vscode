@@ -32,6 +32,7 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
       loadedVersion: string;
       preview: boolean;
       download?: typeof downloadVerifiedExtensionUpdate;
+      platform?: NodeJS.Platform;
     },
   ) {}
 
@@ -96,6 +97,7 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
       }
     };
     let temporary: string | undefined;
+    let temporaryFileIdentity: { dev: number; ino: number } | undefined;
     try {
       await lock.writeFile(
         JSON.stringify({ pid: process.pid, token: randomUUID(), version }),
@@ -122,6 +124,8 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
       const target = join(temporary, extensionArtifactFilename(version));
       const file = await open(target, "wx", 0o600);
       try {
+        const identity = await file.stat();
+        temporaryFileIdentity = { dev: identity.dev, ino: identity.ino };
         await file.writeFile(verified.bytes);
         await file.chmod(0o400);
       } finally {
@@ -155,9 +159,40 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
       abort.abort();
       this.aborts.delete(abort);
       if (temporary) {
-        await unlink(join(temporary, extensionArtifactFilename(version))).catch(
-          () => {},
-        );
+        const target = join(temporary, extensionArtifactFilename(version));
+        // Windows cannot unlink a read-only file. Change only the exact file we
+        // created, through a handle checked against its current directory entry.
+        if ((this.options.platform ?? process.platform) === "win32") {
+          let file;
+          try {
+            const entry = await lstat(target);
+            if (
+              temporaryFileIdentity &&
+              entry.isFile() &&
+              !entry.isSymbolicLink() &&
+              entry.dev === temporaryFileIdentity.dev &&
+              entry.ino === temporaryFileIdentity.ino
+            ) {
+              file = await open(target, "r");
+              const held = await file.stat();
+              const current = await lstat(target);
+              if (
+                current.isFile() &&
+                !current.isSymbolicLink() &&
+                held.dev === entry.dev &&
+                held.ino === entry.ino &&
+                current.dev === held.dev &&
+                current.ino === held.ino
+              )
+                await file.chmod(0o600);
+            }
+          } catch {
+            // An unavailable/replaced path is not authority to change its mode.
+          } finally {
+            await file?.close().catch(() => {});
+          }
+        }
+        await unlink(target).catch(() => {});
         await rmdir(temporary).catch(() => {});
       }
       await lock.close();

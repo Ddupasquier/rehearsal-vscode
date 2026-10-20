@@ -31,6 +31,17 @@ canonical package. This is an explicit manual change, not an automatic rename.
 
 Use desktop VS Code 1.101 or newer on macOS or Linux, with Node.js 22, 24, or 26.
 No source checkout, extension build, or Test Lab installation is needed.
+For Windows desktop use, open the project with **Remote - WSL** in a WSL 2 Linux
+distribution and install Rehearsal into that Linux extension host. Keep project files,
+Linux Node and the local Docker engine on the Linux side, not under `/mnt/c`. Follow
+the [Windows setup guide](https://ddupasquier.github.io/rehearsal-db/getting-started/#windows-use-a-wsl-2-linux-workspace).
+Starting with 0.1.20, native Windows inspection refuses before any CLI child process is
+launched; its guidance is not a claim that native Windows database runtime works.
+WSL remains a compatibility preview: Linux/WSL core fixture proof does not certify a
+native Remote-WSL editor walkthrough or Supabase/Auth/Storage in that environment.
+Optional [OS-specific setup helpers](https://github.com/Ddupasquier/rehearsal-db/blob/main/installers/README.md)
+provide separate Windows/WSL, macOS and Linux entry points. They check prerequisites by
+default; installation requires an explicit option and never starts a database.
 
 1. Open your application's folder in VS Code—the one containing `package.json` and
    your migrations. If it does not already use Rehearsal, run this in that project's terminal:
@@ -39,15 +50,17 @@ No source checkout, extension build, or Test Lab installation is needed.
    npm install --save-dev @rehearsal-db/core
    ```
 
-   Core `0.1.0-rc.4` or newer is required. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
+   This release targets core **1.0.1**; `0.1.0-rc.4` remains the minimum core contract.
+   Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
    for safe setup and baseline inputs.
 
 2. Open the [GitHub prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases).
-   Choose a canonical release starting at **0.1.19** and download
-   `rehearsal-db-0.1.19.vsix` and `SHA256SUMS` (later releases use their own version).
+   Choose the **0.1.20** release and download
+   `rehearsal-db-0.1.20.vsix` and `SHA256SUMS`. If that version is absent, publication
+   has not completed; a source version is not a downloadable release.
    Compare its SHA-256 with the
-   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.19.vsix`
-   on macOS or `sha256sum /path/to/rehearsal-db-0.1.19.vsix` on Linux. Stop if they differ.
+   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.20.vsix`
+   on macOS or `sha256sum /path/to/rehearsal-db-0.1.20.vsix` on Linux. Stop if they differ.
 3. Open **Extensions → … → Install from VSIX…** and choose that verified file.
    Reload the extension host if VS Code asks.
 4. Review Workspace Trust. Open the Command Palette and choose
@@ -58,7 +71,7 @@ No source checkout, extension build, or Test Lab installation is needed.
 If VS Code's `code` command is available, step 3 can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.19.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.20.vsix --force
 ```
 
 ### Move from a preview through 0.1.18
@@ -351,7 +364,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.19.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.20.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and
@@ -361,7 +374,12 @@ or automatic license activation.
 
 ## Product boundary
 
-- Desktop VS Code 1.101 or newer on macOS and Linux.
+- Desktop VS Code 1.101 or newer on macOS and Linux; Windows desktop uses the WSL 2
+  Linux extension-host compatibility preview described above. Native Windows inspection
+  is deliberately refused in 0.1.20 rather than claiming unsafe process cleanup works.
+- SSH, Dev Containers, Codespaces, browser-only VS Code, mobile systems and other
+  unlisted environments have no end-to-end support claim. A Node/controller CI pass is
+  not a native editor, database, provider, accessibility or every-architecture acceptance.
 - Node.js 22, 24, or 26 in the extension host.
 - Native Tree View navigation plus a theme-aware project workbench with nonce-restricted
   in-panel navigation; no telemetry, billing, or hosted license service.

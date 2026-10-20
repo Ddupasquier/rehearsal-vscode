@@ -1468,6 +1468,29 @@ describe("workspace control state and truthful actions", () => {
 });
 
 describe("Rehearsal workspace document", () => {
+  it("offers actionable WSL guidance rather than retrying a native Windows process", () => {
+    const html = renderWorkspaceDocument(
+      {
+        workspaceName: "Windows project",
+        workspaceRoot: "C:\\projects\\app",
+        availability: "error",
+        error: {
+          code: "platform_unsupported",
+          message: "Native Windows requires a WSL 2 extension host.",
+          suggestions: ["Open the project in its Linux home filesystem."],
+        },
+      },
+      assets,
+    );
+    expect(html).toContain("Open this project in WSL 2");
+    expect(html).toContain("Windows setup guide");
+    expect(html).toContain("Linux home filesystem");
+    expect(html).toContain("No inspection process was started");
+    expect(html).toContain("Core not inspected");
+    expect(html).not.toContain("Try again");
+    expect(html).not.toContain("Run Doctor");
+    expect(html).not.toContain("Create sandbox");
+  });
   it("keeps installed extension and core versions separate in the top-right update control", () => {
     const html = renderWorkspaceDocument(readySnapshot(), {
       ...assets,

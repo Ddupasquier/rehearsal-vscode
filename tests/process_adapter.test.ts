@@ -19,6 +19,7 @@ import {
   runVersion,
   ownedProcessState,
   retireOwnedProcessGroup,
+  assertInspectionPlatform,
 } from "../src/process_adapter.js";
 
 const roots: string[] = [];
@@ -91,6 +92,41 @@ afterEach(async () => {
 });
 
 describe("workspace process adapter", () => {
+  it("refuses native Windows inspection before any package or process can be used", () => {
+    expect(() => assertInspectionPlatform("win32")).toThrowError(
+      expect.objectContaining({
+        code: "platform_unsupported",
+        message: expect.stringContaining("WSL 2 Linux distribution"),
+      }),
+    );
+    expect(() => assertInspectionPlatform("darwin")).not.toThrow();
+    expect(() => assertInspectionPlatform("linux")).not.toThrow();
+  });
+  it("does not mistake an exited Windows launcher for verified descendant cleanup", () => {
+    const kill = vi.fn(() => true as const);
+    expect(
+      ownedProcessState(
+        { pid: 4321, exitCode: 0, signalCode: null },
+        kill,
+        "win32",
+      ),
+    ).toBe("unknown");
+    expect(
+      ownedProcessState(
+        { pid: 4321, exitCode: null, signalCode: "SIGTERM" },
+        kill,
+        "win32",
+      ),
+    ).toBe("unknown");
+    expect(
+      ownedProcessState(
+        { pid: 4321, exitCode: null, signalCode: null },
+        kill,
+        "win32",
+      ),
+    ).toBe("present");
+    expect(kill).not.toHaveBeenCalled();
+  });
   it.skipIf(process.platform === "win32")(
     "classifies exact owned-group EPERM as unknown, never as absence or permission to signal",
     () => {

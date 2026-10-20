@@ -2,7 +2,7 @@
   "name": "rehearsal-db",
   "displayName": "Rehearsal DB",
   "description": "See whether database changes are ready for a safe local rehearsal without memorizing CLI commands.",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "private": true,
   "publisher": "rehearsal-db",
   "license": "SEE LICENSE IN LICENSE",

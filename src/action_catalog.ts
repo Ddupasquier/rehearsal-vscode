@@ -1,5 +1,6 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import { isPublishedVersion } from "./update_advisory.js";
+import type { TerminalShellFamily } from "./platform_runtime.js";
 
 export type WorkspaceActionId =
   | "refresh"
@@ -178,6 +179,11 @@ export const workspaceActionPlan = (
   snapshot: ProjectSnapshot,
   id: WorkspaceActionId,
 ): WorkspaceActionPlan | null => {
+  if (
+    snapshot.error?.code === "platform_unsupported" &&
+    !["refresh", "documentation", "showOutput", "checkUpdates"].includes(id)
+  )
+    return null;
   if (
     ["runRehearsal", "migrate", "reset", "discardRuntime"].includes(id) &&
     snapshot.resources?.environments.some(
@@ -492,7 +498,12 @@ export const workspaceActionPlan = (
   }
 };
 
-export const shellCommand = (arguments_: readonly string[]): string =>
-  arguments_
-    .map((argument) => `'${argument.replaceAll("'", `'"'"'`)}'`)
-    .join(" ");
+export const shellCommand = (
+  arguments_: readonly string[],
+  shell: TerminalShellFamily = "posix",
+): string =>
+  shell === "powershell"
+    ? `& ${arguments_.map((argument) => `'${argument.replaceAll("'", "''")}'`).join(" ")}`
+    : arguments_
+        .map((argument) => `'${argument.replaceAll("'", `'"'"'`)}'`)
+        .join(" ");
