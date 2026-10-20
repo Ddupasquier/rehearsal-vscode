@@ -60,6 +60,10 @@ import {
 } from "./workspace_preferences.js";
 import { knownWorkspaceTargets } from "./workspace_view_state.js";
 import {
+  migrationSourceTextSha256,
+  readExactMigrationSource,
+} from "./migration_failure_source.js";
+import {
   buildVerificationReport,
   renderVerificationReportJson,
   renderVerificationReportMarkdown,
@@ -304,6 +308,10 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
     const snapshot = this.projects.snapshotFor(workspaceKey);
     if (!snapshot) return;
+    if (message.type === "openMigrationFailure") {
+      await this.openMigrationFailure(panel, workspaceKey, message.operationId);
+      return;
+    }
     if (message.type === "reviewStaleStop") {
       await this.actions.reviewStaleStop(workspaceKey);
       return;
@@ -941,6 +949,72 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       return false;
     } finally {
       this.pendingConfigurationReviews.delete(workspaceKey);
+    }
+  }
+
+  private async openMigrationFailure(
+    panel: vscode.WebviewPanel,
+    workspaceKey: string,
+    operationId: string,
+  ): Promise<void> {
+    try {
+      const initial = this.projects
+        .snapshotFor(workspaceKey)
+        ?.activity?.recentFailures?.find(
+          (entry) => entry.operationId === operationId,
+        )?.diagnostic.source;
+      if (!initial?.workspaceRelativePath) return;
+      const binding = JSON.stringify(initial);
+      const requireCurrent = (): string => {
+        const folder = vscode.workspace.workspaceFolders?.find(
+          (entry) => entry.uri.toString() === workspaceKey,
+        );
+        const activity = this.projects.snapshotFor(workspaceKey)?.activity;
+        const source = activity?.recentFailures?.find(
+          (entry) => entry.operationId === operationId,
+        )?.diagnostic.source;
+        if (
+          this.disposed ||
+          this.panels.get(workspaceKey) !== panel ||
+          !vscode.workspace.isTrusted ||
+          !folder ||
+          JSON.stringify(source) !== binding ||
+          !activity?.recent?.some(
+            (entry) =>
+              entry.progress.operationId === operationId &&
+              entry.progress.state === "failed",
+          )
+        )
+          throw new Error("Migration source is no longer current.");
+        return folder.uri.fsPath;
+      };
+      const root = requireCurrent();
+      const checked = await readExactMigrationSource(root, initial);
+      if (requireCurrent() !== root) throw new Error("Workspace changed.");
+      const document = await vscode.workspace.openTextDocument(
+        vscode.Uri.file(checked.path),
+      );
+      requireCurrent();
+      if (
+        document.uri.scheme !== "file" ||
+        document.uri.fsPath !== checked.path ||
+        document.isDirty ||
+        migrationSourceTextSha256(document.getText()) !== initial.sha256
+      )
+        throw new Error("Migration input changed.");
+      const confirmed = await readExactMigrationSource(root, initial);
+      if (
+        confirmed.identity !== checked.identity ||
+        requireCurrent() !== root ||
+        document.isDirty ||
+        migrationSourceTextSha256(document.getText()) !== initial.sha256
+      )
+        throw new Error("Migration input changed.");
+      await vscode.window.showTextDocument(document, { preview: true });
+    } catch {
+      void vscode.window.showWarningMessage(
+        "This migration input changed, is no longer available, or cannot be safely opened. Refresh and review the current local migration manually. No SQL was executed and no file was changed.",
+      );
     }
   }
 

@@ -59,6 +59,7 @@ import {
   reconcileMigrationReview,
   migrationReviewIdentity,
   MIGRATION_REVIEW_PERSISTENCE_LIMIT,
+  workspaceExecutionState,
 } from "./workspace_view_state.js";
 import {
   coreConfigurationControls,
@@ -229,12 +230,37 @@ const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
           tone: "warning",
         };
       }
-      return {
-        label: "Ready to rehearse",
-        detail:
-          "Your project and baseline are ready for local migration testing.",
-        tone: "success",
-      };
+      if ((snapshot.candidates?.count ?? 0) > 0)
+        return {
+          label: "Ready to rehearse",
+          detail:
+            "Review the pending migrations before starting a new rehearsal command.",
+          tone: "success",
+        };
+      {
+        const execution = workspaceExecutionState(snapshot);
+        const idle =
+          execution.command === "idle"
+            ? "No Rehearsal command is active. "
+            : "";
+        if (execution.lastRun)
+          return {
+            label: `Last rehearsal ${execution.lastRun.progress.state}`,
+            detail: `${idle}This is a recorded command result, not the database lifecycle. Review its proof in Activity & reports.`,
+            tone:
+              execution.lastRun.progress.state === "completed"
+                ? "success"
+                : "warning",
+          };
+        return {
+          label:
+            snapshot.runtime?.state === "running"
+              ? "Database sandbox running"
+              : "Database sandbox prepared",
+          detail: `${idle}Database state does not prove that a rehearsal or application proof passed.`,
+          tone: "muted",
+        };
+      }
     case "not_ready":
       return {
         label: "Setup needs attention",
@@ -248,8 +274,12 @@ const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
       if (session)
         return { label: session.label, detail: session.detail, tone: "active" };
       return {
-        label: "Rehearsal in progress",
-        detail: "A project operation is currently running.",
+        label:
+          snapshot.activity?.operation?.kind === "run"
+            ? "Rehearsal command running"
+            : "Project command running",
+        detail:
+          "A Rehearsal command is active. Database lifecycle and completed proof are separate evidence.",
         tone: "active",
       };
     }
@@ -279,6 +309,13 @@ const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
         tone: "warning",
       };
     case "error":
+      if (snapshot.error?.code === "package_link_external")
+        return {
+          label: "Project package link needs repair",
+          detail:
+            "Rehearsal resolves outside this repository. Install a project-local copy, then refresh.",
+          tone: "warning",
+        };
       if (snapshot.error?.code === "platform_unsupported") {
         return {
           label: "Open this project in WSL 2",
@@ -305,8 +342,10 @@ const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
   }
 };
 
-const journeyFor = (snapshot: ProjectSnapshot): readonly JourneyStep[] =>
-  snapshot.availability === "loading"
+const journeyFor = (snapshot: ProjectSnapshot): readonly JourneyStep[] => {
+  const execution = workspaceExecutionState(snapshot);
+  const lastRun = execution.lastRun;
+  return snapshot.availability === "loading"
     ? [
         { label: "Set up", value: "Checking", state: "current" },
         { label: "Baseline", value: "Checking", state: "waiting" },
@@ -352,25 +391,32 @@ const journeyFor = (snapshot: ProjectSnapshot): readonly JourneyStep[] =>
           },
           {
             label: "Run",
-            value:
-              verifiedRuntimeState(snapshot) === "missing"
-                ? "Not created"
-                : (snapshot.runtime?.state ?? "Unknown"),
+            value: lastRun
+              ? `Last run ${lastRun.progress.state}`
+              : "No completed run evidence",
             state:
-              snapshot.runtime?.state === "running"
-                ? "current"
-                : verifiedRuntimeState(snapshot) === "available"
-                  ? "done"
+              lastRun?.progress.state === "completed"
+                ? "done"
+                : lastRun
+                  ? "current"
                   : "waiting",
           },
           {
             label: "Verify",
-            value: snapshot.configuration?.application.readinessUrl
-              ? "Proof configured · run to verify"
-              : "Configure application proof",
-            state: "waiting",
+            value:
+              execution.proof === "recorded_pass"
+                ? "CLI proof passed (recorded)"
+                : execution.proof === "recorded_failure"
+                  ? "Last CLI proof failed"
+                  : execution.proofConfigured === true
+                    ? "CLI proof configured · not yet proven"
+                    : execution.proofConfigured === false
+                      ? "CLI proof not configured"
+                      : "Proof evidence unavailable",
+            state: execution.proof === "recorded_pass" ? "done" : "waiting",
           },
         ];
+};
 
 const metric = (
   label: string,
@@ -506,6 +552,8 @@ const nextStepMarkup = (
   )
     return `<p>A configured environment is protected. Review its policy before a rehearsal, reset, or discard. Starting and stopping still preserve its data.</p>${actionGroup(navigationButton("runtime", "Review protected environments"))}`;
   if (snapshot.error) {
+    if (snapshot.error.code === "package_link_external")
+      return `<p>The workspace Rehearsal package resolves outside its repository. Install a project-local package copy or a reviewed packed candidate, then refresh.</p><ul class="recovery-list"><li>For a local source folder with npm, use <code>--install-links</code> to copy the package instead of creating an external symlink.</li><li>The repository safety boundary remains in place. No database change or editor reset is required.</li></ul>${actionGroup(actionButton(assets, "refresh", "Refresh after installing", "primary"), actionButton(assets, "showOutput", "Open diagnostics"))}`;
     if (snapshot.error.code === "platform_unsupported") {
       return `
         <p>${escapeHtml(snapshot.error.message)}</p>
@@ -571,8 +619,14 @@ const nextStepMarkup = (
     "Open sandbox",
     "primary",
   );
-  if (!open)
-    return `<p>Your database sandbox is prepared, but persistent application launch requires a configured application start command and readiness URL. Review application configuration; you can still verify the database.</p>${actionGroup(navigationButton("configuration", "Configure application launch"), availableActionButton(snapshot, assets, "verify", "Verify database"))}`;
+  if (!open) {
+    const execution = workspaceExecutionState(snapshot);
+    return `<p>${
+      execution.applicationMode === "database_only"
+        ? "Your sandbox is configured for database-only testing. Verify the database or inspect the reviewed migrations; no browser application is required."
+        : "Your database sandbox is prepared. Verify the database; application launch is optional and needs its own reviewed start command and readiness URL."
+    }</p>${actionGroup(availableActionButton(snapshot, assets, "verify", "Verify database", "primary"), navigationButton("migrations", "Review migrations"), ...(execution.applicationMode === "incomplete" ? [navigationButton("configuration", "Review application launch")] : []))}`;
+  }
   return `<p>Your project is ready. Open the sandbox for hands-on testing or review the detected project profile.</p>${actionGroup(open, navigationButton("setup", "Project profile"))}`;
 };
 
@@ -883,7 +937,7 @@ const configurationControlsMarkup = (
   return `<form id="configuration-controls" class="configuration-controls">
     <div class="form-grid">
       <label><span>Application URL</span><input name="applicationUrl" type="url" value="${escapeHtml(applicationUrl)}" required /><small>${escapeHtml(addressOrigin)} · HTTP(S) loopback only. Does not change the readiness endpoint or provider callback.</small></label>
-      <label><span>Baseline versions to retain</span><input name="retainBaselineGenerations" type="number" value="${snapshot.configuration?.cleanup.retainBaselineGenerations ?? 2}" min="1" max="100" /><small>The active baseline is always protected.</small></label>
+      <label><span>Baseline versions to retain</span><input name="retainBaselineGenerations" type="number" value="${snapshot.configuration?.cleanup?.retainBaselineGenerations ?? 2}" min="1" max="100" /><small>The active baseline is always protected.</small></label>
       <label><span>Application start command</span><input name="startCommand" type="text" value="${escapeHtml(startCommand)}" /><small>${escapeHtml(commandOrigin)}. Stored only after an exact diff and confirmation.</small></label>
       <label><span>Application proof command</span><input name="proofCommand" type="text" value="${escapeHtml(proofCommand)}" /><small>${escapeHtml(commandOrigin)}. Choose the project-owned proof for migration behavior.</small></label>
       <label><span>After a rehearsal run</span><select name="runPersistence"><option value="keep-until-stop"${snapshot.lifecycle?.run === "keep-until-stop" ? " selected" : ""}>Keep environment running</option><option value="stop-after-run"${snapshot.lifecycle?.run === "stop-after-run" ? " selected" : ""}>Stop after proof</option></select></label>
@@ -914,7 +968,7 @@ const configurationMarkup = (
     ],
     [
       "cleanup",
-      snapshot.configuration
+      snapshot.configuration?.cleanup
         ? `Retain ${snapshot.configuration.cleanup.retainBaselineGenerations} baseline versions`
         : "",
     ],
@@ -1098,7 +1152,7 @@ export const renderWorkspaceDocument = (
                   : "muted",
           ),
           metric(
-            "Runtime",
+            "Database",
             snapshot.runtime?.state ??
               (isLoading
                 ? "Checking…"
@@ -1111,7 +1165,7 @@ export const renderWorkspaceDocument = (
                 : snapshot.error
                   ? "Inspection did not reach this check"
                   : "Run the project check to continue"
-              : `${formatCount(targetCount)} local target${targetCount === 1 ? "" : "s"}`,
+              : `${formatCount(targetCount)} local target${targetCount === 1 ? "" : "s"} · database lifecycle, not command progress`,
             snapshot.runtime?.state === "running"
               ? "active"
               : isLoading
@@ -1260,7 +1314,7 @@ export const renderWorkspaceDocument = (
           <div class="breadcrumbs"><span>Rehearsal</span><b>/</b><strong>${safeName}</strong></div>
           <div class="topbar__actions">
             <span class="topbar__badge topbar__local">Local only</span>
-            <span class="topbar__badge">Core ${escapeHtml(isLoading && !snapshot.version ? "checking" : (snapshot.version ?? (snapshot.error?.code === "platform_unsupported" ? "not inspected" : "not installed")))}</span>
+            <span class="topbar__badge">Core ${escapeHtml(isLoading && !snapshot.version ? "checking" : (snapshot.version ?? (snapshot.error?.code === "platform_unsupported" ? "not inspected" : snapshot.error?.code === "package_link_external" ? "not resolved" : "not installed")))}</span>
             <a id="extension-version" class="topbar__badge topbar__version" href="${escapeHtml(assets.actionUris.checkUpdates)}" title="${escapeHtml(extensionRelease.title)}" data-state="${extensionRelease.state}"><span id="extension-version-label" role="status" aria-live="polite">${escapeHtml(extensionRelease.text)}</span></a>
             ${actionButton(assets, "refresh", "Refresh", "secondary")}
           </div>
@@ -1294,6 +1348,7 @@ export const renderWorkspaceDocument = (
             <article class="journey-card">
               <div class="card-heading"><span><small>Workflow</small><strong>From setup to proof</strong></span></div>
               ${journeyMarkup(guidanceSnapshot)}
+              <p class="control-note">Command results and CLI proof are recorded history, not verification of changed configuration or migrations. A database can keep running after its command completes.</p>
             </article>
           </div>
         </section>
@@ -1340,7 +1395,7 @@ export const renderWorkspaceDocument = (
               ${namedProfileControls(snapshot)}
               ${targetMarkup(snapshot)}
               ${snapshot.availability === "ready" ? (verifiedRuntimeState(snapshot) === "available" ? actionGroup(permittedAction("openSandbox", "Open sandbox", "primary"), permittedAction("startRuntime", "Start all targets"), permittedAction("verify", "Verify project"), permittedAction("stopRuntime", "Stop all targets")) : actionGroup(permittedAction("runRehearsal", "Create sandbox", "primary"), permittedAction("cleanupPreview", "Inspect local resources"))) : ""}
-              ${verifiedRuntimeState(snapshot) === "available" && !snapshot.configuration?.application.readinessUrl ? '<p class="control-note">Database inspection is available. To keep an application open, configure its start command and readiness URL first.</p>' + actionGroup(navigationButton("configuration", "Configure application launch")) : ""}
+              ${verifiedRuntimeState(snapshot) === "available" && workspaceExecutionState(snapshot).applicationMode === "database_only" ? '<p class="control-note">Database-only testing is configured. A browser application and HTTP readiness endpoint are not required for the CLI proof.</p>' : ""}
             </article>
             <article class="surface">
               <div class="surface-heading"><span><small>Application</small><h2>Local connection</h2></span></div>
@@ -1596,6 +1651,11 @@ export const renderWorkspaceDocument = (
         });
         document.addEventListener("click", (event) => {
           if (!(event.target instanceof Element)) return;
+          const failure = event.target.closest("[data-open-migration-failure]");
+          if (failure) {
+            vscode?.postMessage({type:"openMigrationFailure",operationId:failure.dataset.openMigrationFailure});
+            return;
+          }
           const control = event.target.closest("[data-rehearsal-page]");
           if (control) activate(control.dataset.rehearsalPage, control);
           else if (!event.target.closest(".sidebar")) setCompactNavigation(false);

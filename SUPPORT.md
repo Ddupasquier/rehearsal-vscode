@@ -12,6 +12,20 @@ the issue tracker; no purchase or account is required to use the extension.
 4. Remove anything you do not want to share. Never include credentials, environment files,
    raw database rows, or private source data.
 
+## Migration and tutorial recovery
+
+With core 1.0.2, **Activity & reports** shows recognized migration failure explanations
+and safe next steps after refresh. Unknown evidence remains unknown; do not infer rollback
+or retry automatically. **Open exact migration input** reads and verifies only the
+recorded local file before opening it in the native editor. If the file changed or is
+dirty, save/review your intended correction and obtain a fresh candidate plan instead of
+bypassing the refusal. Do not attach private SQL or raw provider output to a public issue.
+
+If the CLI tutorial works but the dashboard reports **Project package link needs repair**,
+install a project-local copy with npm's `--install-links` option, a reviewed tarball or
+the published package, then refresh. Preserve the same project, baseline and data; this
+package-link repair needs no database reset. See the [README recovery steps](README.md#what-the-workbench-shows).
+
 ## Automatic-update recovery
 
 The extension and CLI have independent, initially off opt-ins in

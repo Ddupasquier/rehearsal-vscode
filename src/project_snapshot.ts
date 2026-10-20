@@ -201,7 +201,7 @@ export interface ProjectSnapshot {
       readonly proofCommand: string;
       readonly readinessUrl: string | null;
     };
-    readonly cleanup: {
+    readonly cleanup?: {
       readonly retainBaselineGenerations: number;
     };
   };
@@ -304,6 +304,68 @@ const safeWorkspaceRelativePath = (
   return path;
 };
 
+/** Explain metadata is untrusted JSON; omitted legacy readiness is not explicit null. */
+const snapshotApplication = (
+  value: unknown,
+): NonNullable<ProjectSnapshot["configuration"]>["application"] | undefined => {
+  if (value === undefined) return undefined;
+  const invalid = (): never => {
+    throw new ContractError(
+      "Application configuration metadata is incomplete or unsafe. Refresh with a supported Rehearsal package.",
+    );
+  };
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return invalid();
+  const data = value as Record<string, unknown>;
+  const command = (source: unknown): string => {
+    if (
+      typeof source !== "string" ||
+      !source.trim() ||
+      source.length > 4096 ||
+      /[\x00-\x1f\x7f-\x9f\u2028\u2029]/u.test(source)
+    )
+      return invalid();
+    return source;
+  };
+  const startCommand = command(data.startCommand),
+    proofCommand = command(data.proofCommand);
+  if (!Object.hasOwn(data, "readiness")) return undefined;
+  if (data.readiness === null)
+    return { startCommand, proofCommand, readinessUrl: null };
+  if (
+    !data.readiness ||
+    typeof data.readiness !== "object" ||
+    Array.isArray(data.readiness)
+  )
+    return invalid();
+  const readiness = data.readiness as Record<string, unknown>;
+  if (
+    typeof readiness.url !== "string" ||
+    readiness.url.length > 4096 ||
+    /[\x00-\x20\x7f-\x9f\u2028\u2029]/u.test(readiness.url) ||
+    !Number.isSafeInteger(readiness.expectedStatus) ||
+    Number(readiness.expectedStatus) < 100 ||
+    Number(readiness.expectedStatus) > 599 ||
+    !Number.isSafeInteger(readiness.timeoutSeconds) ||
+    Number(readiness.timeoutSeconds) <= 0
+  )
+    return invalid();
+  let url: URL;
+  try {
+    url = new URL(readiness.url);
+  } catch {
+    return invalid();
+  }
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+    url.username ||
+    url.password
+  )
+    return invalid();
+  return { startCommand, proofCommand, readinessUrl: readiness.url };
+};
+
 const failureSnapshot = (
   workspaceName: string,
   workspaceRoot: string,
@@ -347,22 +409,31 @@ const failureSnapshot = (
       ...partialEvidence,
       error: {
         code: error.code,
-        message: error.message,
+        message:
+          error.code === "package_link_external"
+            ? "The workspace Rehearsal package resolves outside its repository. Install a project-local package copy before refreshing."
+            : error.message,
         suggestions:
-          error.code === "platform_unsupported"
+          error.code === "package_link_external"
             ? [
-                "Install Microsoft's WSL extension in VS Code and use a WSL 2 Linux distribution.",
-                "Keep this project in the distribution's Linux home, not a Windows-mounted drive.",
-                "Use WSL: Open Folder in WSL, then install Rehearsal DB in that WSL extension host.",
-                "Enable Docker Desktop integration for that distribution, or use its local Docker Engine.",
+                "Install the published @rehearsal-db/core package in this project, or install a reviewed packed .tgz candidate.",
+                "For a local source folder with npm, use --install-links to install a package copy instead of an external symlink.",
+                "Keep the repository boundary intact, then select Refresh. No database action is needed.",
               ]
-            : error.code === "timeout"
+            : error.code === "platform_unsupported"
               ? [
-                  "Retry the read-only inspection.",
-                  "Increase Rehearsal: Inspection Timeout Seconds for this workspace if the project needs longer.",
-                  "Run Rehearsal Doctor for a focused readiness check.",
+                  "Install Microsoft's WSL extension in VS Code and use a WSL 2 Linux distribution.",
+                  "Keep this project in the distribution's Linux home, not a Windows-mounted drive.",
+                  "Use WSL: Open Folder in WSL, then install Rehearsal DB in that WSL extension host.",
+                  "Enable Docker Desktop integration for that distribution, or use its local Docker Engine.",
                 ]
-              : [],
+              : error.code === "timeout"
+                ? [
+                    "Retry the read-only inspection.",
+                    "Increase Rehearsal: Inspection Timeout Seconds for this workspace if the project needs longer.",
+                    "Run Rehearsal Doctor for a focused readiness check.",
+                  ]
+                : [],
       },
     };
   }
@@ -817,6 +888,7 @@ export const inspectProject = async ({
     const states = new Set(
       statusTargets.map(({ runtimeStatus }) => runtimeStatus.state),
     );
+    const application = snapshotApplication(explain.result.data.application);
     return {
       workspaceName,
       workspaceRoot,
@@ -967,16 +1039,13 @@ export const inspectProject = async ({
       ...(explain.result.data.lifecycle
         ? { lifecycle: explain.result.data.lifecycle }
         : {}),
-      ...(explain.result.data.application && explain.result.data.cleanup
+      ...(application
         ? {
             configuration: {
-              application: {
-                startCommand: explain.result.data.application.startCommand,
-                proofCommand: explain.result.data.application.proofCommand,
-                readinessUrl:
-                  explain.result.data.application.readiness?.url ?? null,
-              },
-              cleanup: explain.result.data.cleanup,
+              application,
+              ...(explain.result.data.cleanup
+                ? { cleanup: explain.result.data.cleanup }
+                : {}),
             },
           }
         : {}),

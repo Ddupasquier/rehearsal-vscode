@@ -92,6 +92,8 @@ class ViewControl {
       );
   }
   closest(selector: string) {
+    if (selector === "[data-open-migration-failure]")
+      return this.dataset.openMigrationFailure ? this : null;
     if (selector === "[data-rehearsal-page]")
       return this.dataset.rehearsalPage ? this : null;
     if (selector === "#workspace-navigation")
@@ -419,6 +421,11 @@ const exerciseViewScript = (
       for (const listener of documentListeners.get("click") ?? [])
         listener({ target: control });
     },
+    openMigrationFailure: (operationId: string) => {
+      const control = new ViewControl({ openMigrationFailure: operationId });
+      for (const listener of documentListeners.get("click") ?? [])
+        listener({ target: control });
+    },
     state: () => state,
   };
 };
@@ -698,6 +705,184 @@ const readySnapshot = (): ProjectSnapshot => ({
       },
     },
   },
+});
+
+describe("truthful command, proof and next-step presentation", () => {
+  const databaseOnly = (): ProjectSnapshot => {
+    const original = readySnapshot();
+    return {
+      ...original,
+      candidates: { ...original.candidates!, count: 0, files: [] },
+      runtime: {
+        ...original.runtime!,
+        state: "running",
+        targets: original.runtime!.targets.map((target) => ({
+          ...target,
+          state: "running",
+          reason: null,
+        })),
+      },
+      configuration: {
+        application: {
+          startCommand: "node no-browser.cjs",
+          proofCommand: "node tutorial-proof.cjs",
+          readinessUrl: null,
+        },
+      },
+    };
+  };
+  const recordedPass = (): ProjectSnapshot => {
+    const current = databaseOnly();
+    const progress =
+      sandboxSnapshot("application-start").activity!.operation!.progress!;
+    return {
+      ...current,
+      activity: {
+        ...current.activity!,
+        recent: [
+          {
+            kind: "run",
+            rehearsalVersion: current.version!,
+            progress: {
+              ...progress,
+              state: "completed",
+              currentStage: null,
+              completedStages: [
+                {
+                  ...progress.currentStage!,
+                  phase: "application-proof",
+                  target: "primary",
+                  state: "completed",
+                  endedAt: progress.updatedAt,
+                },
+              ],
+              events: [],
+            },
+          },
+        ],
+      },
+    };
+  };
+  it("does not call a running database an active rehearsal or proof success", () => {
+    const html = renderWorkspaceDocument(databaseOnly(), assets);
+    const overview = html.match(
+      /<section id="overview"[\s\S]*?<\/section>/u,
+    )![0];
+    expect(overview).toContain("Database sandbox running");
+    expect(overview).toContain("No Rehearsal command is active");
+    expect(overview).toContain("No completed run evidence");
+    expect(overview).toContain("CLI proof configured · not yet proven");
+    expect(overview).not.toContain("Ready to rehearse");
+    expect(overview).not.toContain("CLI proof passed");
+    expect(overview).not.toContain(
+      "<strong>Run</strong><small>running</small>",
+    );
+  });
+  it("keeps the database-only tutorial on database verification instead of app-launch setup", () => {
+    const html = renderWorkspaceDocument(databaseOnly(), assets);
+    expect(html).toContain("configured for database-only testing");
+    expect(html).toContain("Verify database");
+    expect(html).toContain("CLI proof configured");
+    expect(html).not.toContain("Configure application launch");
+    expect(html).not.toContain("Configure application proof");
+    expect(html).not.toContain(
+      'href="command:rehearsal.workspaceAction?openSandbox"',
+    );
+    expect(html).toContain(
+      "HTTP readiness endpoint are not required for the CLI proof",
+    );
+  });
+  it("shows configured and recorded successful CLI proof independently of HTTP readiness", () => {
+    const html = renderWorkspaceDocument(recordedPass(), assets);
+    const overview = html.match(
+      /<section id="overview"[\s\S]*?<\/section>/u,
+    )![0];
+    expect(overview).toContain("Last rehearsal completed");
+    expect(overview).toContain("Last run completed");
+    expect(overview).toContain("CLI proof passed (recorded)");
+    expect(overview).toContain("No Rehearsal command is active");
+    expect(overview).toContain(
+      "not verification of changed configuration or migrations",
+    );
+    expect(overview).not.toContain("Configure application proof");
+    expect(overview).not.toContain("Rehearsal command running");
+    const changed = recordedPass();
+    const changedHtml = renderWorkspaceDocument(
+      {
+        ...changed,
+        candidates: { ...changed.candidates!, count: 1 },
+        configuration: {
+          application: {
+            ...changed.configuration!.application,
+            proofCommand: "node changed-proof.cjs",
+          },
+        },
+      },
+      assets,
+    );
+    expect(changedHtml).toContain("CLI proof passed (recorded)");
+    expect(changedHtml).toContain(
+      "not verification of changed configuration or migrations",
+    );
+    expect(changedHtml).toContain("Review your pending migration");
+  });
+  it("does not advertise recorded proof as current success during an unsafe activity state", () => {
+    const current = recordedPass();
+    const html = renderWorkspaceDocument(
+      {
+        ...current,
+        availability: "operation_attention",
+        activity: { ...current.activity!, state: "stale" },
+      },
+      assets,
+    );
+    expect(html).not.toContain("Last rehearsal completed");
+    expect(html).not.toContain("CLI proof passed (recorded)");
+    expect(html).toContain("Operation needs review");
+  });
+  it("delegates a newly inserted migration failure control using only its operation ID", () => {
+    const view = exerciseViewScript(
+      renderWorkspaceDocument(readySnapshot(), assets),
+    );
+    const operationId = "d".repeat(64);
+    view.openMigrationFailure(operationId);
+    expect(view.messages).toContainEqual({
+      type: "openMigrationFailure",
+      operationId,
+    });
+    expect(
+      view.messages.filter(
+        (message) =>
+          (message as { type?: string }).type === "openMigrationFailure",
+      ),
+    ).toHaveLength(1);
+  });
+  it("uses the dedicated external-link reason without mislabeling other invalid packages", () => {
+    const broken: ProjectSnapshot = {
+      workspaceName: "Local checkout",
+      workspaceRoot: "/private/not-displayed",
+      availability: "error",
+      error: {
+        code: "package_link_external",
+        message: "/private/raw-provider-message",
+        suggestions: ["private-untrusted-suggestion"],
+      },
+    };
+    const html = renderWorkspaceDocument(broken, assets);
+    expect(html).toContain("Project package link needs repair");
+    expect(html).toContain("Core not resolved");
+    expect(html).not.toContain("Core not installed");
+    expect(html).toContain("--install-links");
+    expect(html).toContain("Refresh after installing");
+    expect(html).not.toContain("/private/raw-provider-message");
+    expect(html).not.toContain("private-untrusted-suggestion");
+    const other = renderWorkspaceDocument(
+      { ...broken, error: { ...broken.error!, code: "package_invalid" } },
+      assets,
+    );
+    expect(other).not.toContain("Project package link needs repair");
+    expect(other).not.toContain("--install-links");
+  });
 });
 
 describe("not-ready configured target rendering", () => {
@@ -1166,7 +1351,7 @@ describe("workspace control state and truthful actions", () => {
     expect(suggested).toContain("review the project script before saving");
     expect(suggested).not.toContain("Saved &amp; validated browser address");
   });
-  it("offers application configuration instead of an unsupported sandbox launch", () => {
+  it("offers database verification without treating unknown application evidence as missing proof configuration", () => {
     const original = readySnapshot();
     const snapshot = {
       ...original,
@@ -1177,10 +1362,10 @@ describe("workspace control state and truthful actions", () => {
     expect(html).not.toContain(
       'href="command:rehearsal.workspaceAction?openSandbox"',
     );
-    expect(html).toContain("Configure application launch");
+    expect(html).not.toContain("Configure application launch");
     expect(html).toContain("Verify database");
     expect(html).not.toContain("App connected");
-    expect(html).toContain("Configure application proof");
+    expect(html).toContain("Proof evidence unavailable");
     expect(html).not.toContain(
       'href="command:rehearsal.workspaceAction?identityConnect"',
     );

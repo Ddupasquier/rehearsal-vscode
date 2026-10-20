@@ -291,6 +291,14 @@ Manifest reads are bounded to 1 MiB through a regular-file handle. The executabl
 canonical path must remain inside the canonical package root; a symlink cannot redirect
 inspection to an unrelated program. Internal package-manager links remain supported.
 
+A local-directory npm install can instead create a symlink whose canonical package root
+is outside the containing repository. That specific refusal is `package_link_external`,
+not a missing-package result or a diagnosis of every invalid manifest/bin. The dashboard
+uses fixed recovery guidance: install a project-local package copy or reviewed packed
+candidate, then refresh. For npm source-directory installs, `--install-links` requests a
+copy instead of that external link. The canonical repository boundary is unchanged;
+recovery does not require a database action or clearing editor state.
+
 The extension requires `@rehearsal-db/core@0.1.0-rc.4` or newer for the versioned
 activity/runtime inspection contract. Older projects stop after the package version
 check: no unsupported command is attempted. The workspace and Tree View show an update
@@ -323,6 +331,48 @@ the public `activity` contract before inspecting the project and again after the
 read-only queries. When an operation is busy, stale, or invalid, the view omits project
 details that could be inconsistent and presents only the safe activity state. Runtime
 state comes exclusively from `status.data.runtimeStatus` for each configured target.
+
+Overview keeps current command activity, database liveness and recorded rehearsal/proof
+outcomes separate. The Run workflow row uses the latest unambiguous core `run` receipt,
+not a running database or an editor dispatch receipt. A passed CLI-proof label additionally
+requires a completed primary `application-proof` stage in that completed run. A newer
+failed/cancelled run does not borrow an older success; busy, unsafe or unavailable
+inspection cannot promote retained history into current success. These labels explicitly
+describe history: public receipts do not bind proof to current configuration, baseline or
+candidate bytes. Activity & reports retains the exact timestamps and stage evidence.
+
+CLI-proof configuration comes from validated `application.proofCommand`, independently
+of HTTP readiness. Optional cleanup metadata does not erase validated application fields.
+An explicit null readiness endpoint is a database-only configuration, not incomplete
+application launch. Its next step is database verification/migration inspection; it does
+not require a browser app or suggest configuring one. Missing legacy configuration stays
+unknown rather than being guessed database-only or successfully proved. Readiness must
+be explicitly null for that classification; malformed command/readiness metadata refuses
+inspection rather than becoming a database-only default.
+
+Core may additionally expose up to 20 `activity.recentFailures` entries, each bound by
+operation ID to an existing failed recent receipt. This additive top-level field keeps
+the exact existing progress and recent-receipt schemas unchanged for older clients.
+`migration_failure.ts` validates the fixed versioned provider/SQLSTATE classification,
+summary and remediation mapping; it does not parse SQL or provider output. Arbitrary
+text, unknown fields, duplicates and diagnoses without a matching failed receipt are
+refused. Activity & reports renders the escaped explanation after the normal refresh.
+Only core's private, project-bound receipt stores it; the editor does not copy it to
+Memento, parse terminal output, retry SQL, or infer rollback/cleanup from a failure.
+
+An optional closed `diagnostic.source` identifies only the attempted migration input:
+baseline/candidate kind, reviewed filename, exact SHA-256 and, when safe, a project-relative
+path. It does not establish the actual SQL origin, and line/column remain null. Core
+supplies no project-local link for baseline inputs; Supabase batch or otherwise
+ambiguous attribution stays unknown.
+`migration_failure_source.ts` validates that projection and reads at most 2 MiB of an
+exact project-local regular file, rejecting symlink redirects, identity drift, changed
+bytes and invalid UTF-8. The Activity button sends only an operation ID, never a path.
+The host resolves it against the current failed receipt and rechecks trust, workspace,
+panel identity, file identity and both on-disk/document hashes before showing the file.
+A dirty document or changed source refuses with fixed guidance; no SQL is executed and
+no position is guessed. SQL text is shown only in the explicitly opened native editor,
+never copied into webview HTML, diagnostics, exports or Memento.
 
 Baseline privacy review is also target-bound: both explain scope and independently
 inspected baseline scope must name the target's reviewed provider. A contradiction

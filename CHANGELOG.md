@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.22 — Actionable migration failures and a clearer tutorial handoff
+
+- Show core-owned, redacted migration failure explanations and recovery suggestions
+  in Activity after refresh or reopening the dashboard. Distinguish recognized syntax,
+  schema, constraint, permission and connection failures from genuinely unknown causes;
+  do not parse terminal output or expose SQL, row values or provider details.
+- Open an exactly matching, project-local attempted migration input from its failed
+  receipt. Recheck trust, file identity and bytes; refuse changed or dirty files and
+  symlink redirects. An attempted input is not a proven SQL error location, and no line
+  or column is guessed. SQL is shown only in the native editor, not copied into reports.
+- Explain external npm package links with a specific repair action instead of a generic
+  project-check failure. Install a project-local copy with `--install-links` or a reviewed
+  package, then refresh; do not reset the baseline or weaken the repository boundary.
+- Separate active Rehearsal commands, recorded run/proof outcomes and a database that
+  simply remains running. Historical proof is not fresh verification of current bytes.
+- Give database-only tutorial projects database verification/review next steps rather
+  than requiring an application launch. Recognize configured CLI proof independently
+  from HTTP readiness, and retain unknown, failed and unconfigured states honestly.
+- Target core 1.0.2 for the new diagnostic receipts and tutorial failure/fix guidance.
+  Older supported cores retain their existing contract and cannot supply those new
+  details. macOS/Linux support and the Windows WSL 2 compatibility-preview boundary
+  are unchanged; native Windows database execution is not newly supported.
+
 ## 0.1.21 — Native Windows dispatch correction
 
 - Refuse foreground project commands on native Windows before terminal creation or

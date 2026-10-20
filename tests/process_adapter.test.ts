@@ -6,6 +6,7 @@ import {
   symlink,
   unlink,
   realpath,
+  rename,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -308,6 +309,67 @@ console.log(JSON.stringify({name:"@rehearsal-db/core",version:"8.8.8"}));
     await expect(resolveWorkspaceRehearsal(root)).rejects.toMatchObject({
       code: "package_invalid",
     });
+  });
+
+  it("identifies an external package link without executing it or exposing its path", async () => {
+    const external = await workspace(`console.log("{}");`);
+    const canary = join(external, "PRIVATE_EXECUTION_CANARY");
+    const externalPackage = join(external, "node_modules/@rehearsal-db/core");
+    await writeFile(
+      join(externalPackage, "cli.mjs"),
+      `import { writeFileSync } from "node:fs";
+writeFileSync(${JSON.stringify(canary)}, "must not execute");
+console.log(JSON.stringify({name:"@rehearsal-db/core",version:"9.9.9"}));`,
+    );
+    const consumer = await mkdtemp(
+      join(tmpdir(), "rehearsal-vscode-consumer-"),
+    );
+    roots.push(consumer);
+    await mkdir(join(consumer, "node_modules/@rehearsal-db"), {
+      recursive: true,
+    });
+    await symlink(
+      externalPackage,
+      join(consumer, "node_modules/@rehearsal-db/core"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const expected = {
+      code: "package_link_external",
+      message:
+        "The workspace Rehearsal package resolves outside its repository. Install a project-local package copy before refreshing.",
+    };
+    await expect(resolveWorkspaceRehearsal(consumer)).rejects.toMatchObject(
+      expected,
+    );
+    if (process.platform !== "win32")
+      await expect(runVersion(consumer)).rejects.toMatchObject(expected);
+    await expect(readFile(canary)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("accepts a package-root link contained by the same repository", async () => {
+    const repository = await workspace(
+      `console.log(JSON.stringify({name:"@rehearsal-db/core",version:"9.9.9"}));`,
+    );
+    await mkdir(join(repository, ".git"));
+    await mkdir(join(repository, "packages"));
+    const packageRoot = join(repository, "packages/core");
+    const installed = join(repository, "node_modules/@rehearsal-db/core");
+    await rename(installed, packageRoot);
+    await symlink(
+      packageRoot,
+      installed,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const nested = join(repository, "projects/app");
+    await mkdir(nested, { recursive: true });
+    await expect(resolveWorkspaceRehearsal(nested)).resolves.toMatchObject({
+      packageRoot: await realpath(packageRoot),
+      version: "9.9.9",
+    });
+    if (process.platform !== "win32")
+      await expect(runVersion(nested)).resolves.toMatchObject({
+        version: "9.9.9",
+      });
   });
 
   it("accepts package-internal CLI links through their verified canonical path", async () => {

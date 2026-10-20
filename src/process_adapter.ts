@@ -23,6 +23,7 @@ const MAXIMUM_MANIFEST_BYTES = 1024 * 1024;
 export type AdapterFailureCode =
   | "platform_unsupported"
   | "package_missing"
+  | "package_link_external"
   | "package_invalid"
   | "config_outside_workspace"
   | "process_failed"
@@ -219,8 +220,8 @@ export const resolveWorkspaceRehearsal = async (
   const packageRoot = await realpath(declaredPackageRoot);
   if (!inside(boundary, packageRoot)) {
     throw new AdapterError(
-      "package_invalid",
-      "The workspace Rehearsal package resolves outside its repository.",
+      "package_link_external",
+      "The workspace Rehearsal package resolves outside its repository. Install a project-local package copy before refreshing.",
     );
   }
   const manifestPath = join(packageRoot, "package.json");

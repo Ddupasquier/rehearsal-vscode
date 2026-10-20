@@ -14,6 +14,19 @@ environment files, project source, or workspace paths.
 - Optional update-check consent, check/defer times and skipped release versions, keyed by
   a workspace hash. These records are local, not Settings Sync or telemetry.
 
+Migration failure explanations come from bounded, redacted core receipts. They may
+include a classification, SQLSTATE, fixed recovery guidance and an exact attempted-input
+filename, digest and safe project-relative path. They exclude SQL, row values, connection
+strings and raw provider details. The extension displays them without copying the raw
+CLI response or diagnosis into its own saved activity receipts.
+
+Passive inspection does not scan migration contents. If you explicitly choose **Open
+exact migration input**, the extension reads at most 2 MiB of that selected project-local
+file to verify its UTF-8 bytes, identity and recorded digest before opening it in the
+native editor. Changed or dirty files and symlink redirects are refused. SQL stays in
+that local file/editor; it is not added to the webview, diagnostic report, saved editor
+state or any upload. An attempted input does not establish an exact SQL error location.
+
 Use **Rehearsal: Reset Saved Editor State** to remove view preferences and activity
 receipts for a project. Update consent is separate: use **Rehearsal: Configure Update
 Checks → Disable Automatic Checks** to stop optional checks. Uninstalling the extension

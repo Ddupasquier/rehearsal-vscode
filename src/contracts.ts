@@ -8,8 +8,10 @@ import {
   parseOperationVersion,
   parseOperationProgressSnapshot,
   parseRecentOperationProgress,
+  parseRecentOperationFailures,
   type OperationProgressSnapshot,
   type RecentOperationProgress,
+  type RecentOperationFailure,
 } from "./operation_progress.js";
 
 export const RESULT_SCHEMA_VERSION = 1 as const;
@@ -210,6 +212,7 @@ export interface ActivityData {
     readonly progress?: OperationProgressSnapshot | null;
   } | null;
   readonly recent?: readonly RecentOperationProgress[] | null;
+  readonly recentFailures?: readonly RecentOperationFailure[] | null;
 }
 
 export interface ResourceInventoryData {
@@ -838,13 +841,22 @@ export const parseActivityData = (value: unknown): ActivityData => {
     value.recent === undefined
       ? {}
       : { recent: parseRecentOperationProgress(value.recent) };
+  const failures =
+    value.recentFailures === undefined
+      ? {}
+      : {
+          recentFailures: parseRecentOperationFailures(
+            value.recentFailures,
+            recent.recent,
+          ),
+        };
   if (state === "idle" || state === "invalid") {
     if (value.operation !== null) {
       throw new ContractError(
         "Inactive activity must not include an operation.",
       );
     }
-    return { schemaVersion: 1, state, operation: null, ...recent };
+    return { schemaVersion: 1, state, operation: null, ...recent, ...failures };
   }
   if (!isRecord(value.operation)) {
     throw new ContractError("Active activity is missing its operation.");
@@ -875,6 +887,7 @@ export const parseActivityData = (value: unknown): ActivityData => {
       ...(progress !== undefined ? { progress } : {}),
     },
     ...recent,
+    ...failures,
   };
 };
 
