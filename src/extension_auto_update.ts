@@ -1,0 +1,164 @@
+import { createHash, randomUUID } from "node:crypto";
+import {
+  mkdir,
+  open,
+  readFile,
+  unlink,
+  rmdir,
+  mkdtemp,
+  lstat,
+} from "node:fs/promises";
+import { join } from "node:path";
+import * as vscode from "vscode";
+import {
+  comparePublishedVersions,
+  isPublishedVersion,
+} from "./update_advisory.js";
+import { downloadVerifiedExtensionUpdate } from "./extension_update_artifact.js";
+
+export class AutomaticExtensionInstaller implements vscode.Disposable {
+  private disposed = false;
+  private readonly installed = new Set<string>();
+  private readonly running = new Map<string, Promise<boolean>>();
+  private readonly aborts = new Set<AbortController>();
+  constructor(
+    private readonly options: {
+      storagePath: string;
+      loadedVersion: string;
+      preview: boolean;
+      download?: typeof downloadVerifiedExtensionUpdate;
+    },
+  ) {}
+
+  install(
+    version: string,
+    permissionCurrent: () => boolean,
+    whenIdle: () => Promise<boolean>,
+  ): Promise<boolean> {
+    if (
+      this.disposed ||
+      !isPublishedVersion(version) ||
+      comparePublishedVersions(version, this.options.loadedVersion) !== 1 ||
+      (!this.options.preview && version.includes("-"))
+    )
+      return Promise.resolve(false);
+    if (this.installed.has(version)) return Promise.resolve(true);
+    const existing = this.running.get(version);
+    if (existing) return existing;
+    const pending = this.perform(version, permissionCurrent, whenIdle).finally(
+      () => this.running.delete(version),
+    );
+    this.running.set(version, pending);
+    return pending;
+  }
+
+  private async perform(
+    version: string,
+    permissionCurrent: () => boolean,
+    whenIdle: () => Promise<boolean>,
+  ): Promise<boolean> {
+    const allowed = () => !this.disposed && permissionCurrent();
+    if (!allowed() || !(await whenIdle()) || !allowed()) return false;
+    await mkdir(this.options.storagePath, { recursive: true, mode: 0o700 });
+    if (!allowed()) return false;
+    // Exclusive cross-window lock. Never steal an update whose completion is unknown.
+    const lockPath = join(this.options.storagePath, "extension-update.lock");
+    let lock;
+    try {
+      lock = await open(lockPath, "wx", 0o600);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+      throw error;
+    }
+    const abort = new AbortController();
+    this.aborts.add(abort);
+    const ownedLock = await lock.stat();
+    const ownsLock = async () => {
+      try {
+        const current = await lstat(lockPath);
+        return (
+          current.isFile() &&
+          !current.isSymbolicLink() &&
+          current.dev === ownedLock.dev &&
+          current.ino === ownedLock.ino
+        );
+      } catch {
+        return false;
+      }
+    };
+    let temporary: string | undefined;
+    try {
+      await lock.writeFile(
+        JSON.stringify({ pid: process.pid, token: randomUUID(), version }),
+      );
+      if (!allowed() || !(await whenIdle()) || !allowed()) return false;
+      const verified = await (
+        this.options.download ?? downloadVerifiedExtensionUpdate
+      )(version, abort.signal, {
+        vscodeVersion: vscode.version,
+        nodeVersion: process.versions.node,
+      });
+      if (!allowed() || !(await whenIdle()) || !allowed()) return false;
+      const current = vscode.extensions.getExtension("rehearsal-db.rehearsal")
+        ?.packageJSON.version as unknown;
+      if (typeof current !== "string") return false;
+      if (typeof current === "string") {
+        const comparison = comparePublishedVersions(current, version);
+        if (comparison === 0 || comparison === 1) return true;
+        if (comparison === null) return false;
+      }
+      temporary = await mkdtemp(
+        join(this.options.storagePath, "verified-update-"),
+      );
+      const target = join(temporary, `rehearsal-${version}.vsix`);
+      const file = await open(target, "wx", 0o600);
+      try {
+        await file.writeFile(verified.bytes);
+        await file.chmod(0o400);
+      } finally {
+        await file.close();
+      }
+      if (
+        createHash("sha256")
+          .update(await readFile(target))
+          .digest("hex") !== verified.sha256
+      )
+        throw new Error("Verified update file changed.");
+      if (!allowed() || !(await whenIdle()) || !allowed()) return false;
+      if (
+        createHash("sha256")
+          .update(await readFile(target))
+          .digest("hex") !== verified.sha256
+      )
+        throw new Error("Verified update file changed before installation.");
+      if (!allowed() || !(await ownsLock()) || !allowed()) return false;
+      await vscode.commands.executeCommand(
+        "workbench.extensions.installExtension",
+        vscode.Uri.file(target),
+      );
+      this.installed.add(version);
+      if (allowed())
+        void vscode.window.showInformationMessage(
+          `Rehearsal ${version} was accepted by VS Code's installer. Your current extension remains loaded until VS Code restarts it; restart when convenient. No sandbox was restarted.`,
+        );
+      return true;
+    } finally {
+      abort.abort();
+      this.aborts.delete(abort);
+      if (temporary) {
+        await unlink(join(temporary, `rehearsal-${version}.vsix`)).catch(
+          () => {},
+        );
+        await rmdir(temporary).catch(() => {});
+      }
+      await lock.close();
+      if (await ownsLock()) await unlink(lockPath).catch(() => {});
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    for (const abort of this.aborts) abort.abort();
+    this.aborts.clear();
+  }
+}

@@ -18,7 +18,10 @@ identity, Storage, restore, or cleanup behavior.
   update uses the project's package manager and may contact its configured registry.
 - Optional update advisories are a separate, consent-gated exception to network-free
   passive inspection: fixed public npm/GitHub metadata URLs, no credentials/cookies or
-  project data, no redirects, bounded response/time limits and no idle polling. Unknown,
+  project data, no metadata redirects and bounded response/time limits. Metadata-only
+  daily checks run at project opening. An independent automatic-update opt-in also
+  enables daily release checks while the editor stays open; disabling both automatic
+  options stops that timer. No runtime polling or separate daemon is installed. Unknown,
   offline, candidate/custom or drifting installations never grant install authority.
 - Treat unknown JSON versions, fields required by the current view, oversized output,
   timeouts, and malformed results as unavailable state—not permission to guess.
@@ -50,12 +53,23 @@ before it can affect a runtime.
 
 Freshness does not change the minimum compatibility contract. A newer public version
 may be offered without labeling the installed compatible version broken. Exact-version
-core updates still need native approval, current trust, unchanged installation metadata
-and an idle public activity result before terminal execution. Proven npm updates preserve
-the existing dependency group and exact pin. Unsupported/ambiguous installation
-provenance and new compatibility series stay manual-only; inspection never overwrites
-them. Saved-consent drift cancels review, without claiming atomic cross-window locking. Extension
-updates open the fixed reviewed GitHub release; no global extension installation runs.
+core updates need explicit approval or a current, separate automatic CLI-update opt-in
+in machine-scoped user settings. Project settings cannot supply that consent. Both routes
+recheck trust, unchanged installation metadata and idle public activity before terminal
+execution. Proven npm updates preserve the existing dependency group and exact pin.
+Automatic CLI updates also disable install scripts, refuse dirty dependency documents
+and require confirmed shell execution plus project-scoped cross-window coordination.
+Unsupported/ambiguous provenance and new compatibility series stay manual-only;
+inspection never overwrites them. Revoked consent cancels queued automatic work.
+
+Manual extension updates open the fixed reviewed GitHub release. The independent
+automatic extension-update opt-in permits downloading its official VSIX and checksum,
+with only the allowlisted GitHub HTTPS release-asset redirect. Bounded archive checks,
+SHA-256, embedded publisher/name/version and engine compatibility are verified before
+VS Code receives the private local file. An exclusive cross-window installation lock,
+fresh idle checks and revocable consent guard dispatch. A checksum from the same release
+is integrity evidence, not independent publisher authentication. No force reload or
+database operation is requested; VS Code may require a later restart to load the update.
 
 Report security concerns through the private process in the core repository's
 [`SECURITY.md`](https://github.com/Ddupasquier/rehearsal-db/blob/main/SECURITY.md).

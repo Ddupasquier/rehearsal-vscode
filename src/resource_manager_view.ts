@@ -79,6 +79,12 @@ const action = (
   disabled = false,
 ): string =>
   `<button class="button button--${action === "discardRuntime" ? "danger" : "secondary"}" type="button" data-resource-target="${html(target)}" data-resource-action="${action}"${disabled ? " disabled" : ""}>${label}</button>`;
+export const resourcePaginationMarkup = (
+  kind: string,
+  label: string,
+  prefix: "resource" | "summary" = "resource",
+): string =>
+  `<p id="${prefix}-${kind}-empty" class="empty-state" hidden>No ${html(label.toLowerCase())} match this view.</p><nav id="${prefix}-${kind}-pagination" class="resource-pagination" data-${prefix}-pagination="${kind}" aria-label="${html(label)} pages"><span id="${prefix}-${kind}-range" class="resource-pagination__range" role="status" aria-live="polite" aria-atomic="true"></span><div class="resource-pagination__controls"><button id="${prefix}-${kind}-previous" class="button button--secondary" type="button" data-${prefix}-page-kind="${kind}" data-${prefix}-page-action="previous" aria-label="Previous page of ${html(label.toLowerCase())}">Previous</button><button id="${prefix}-${kind}-next" class="button button--secondary" type="button" data-${prefix}-page-kind="${kind}" data-${prefix}-page-action="next" aria-label="Next page of ${html(label.toLowerCase())}">Next</button></div></nav>`;
 export const resourceManagerMarkup = (
   inventory: ResourceInventoryData,
   preferences: WorkspacePreferences,
@@ -98,6 +104,7 @@ export const resourceManagerMarkup = (
     value: string,
   ) =>
     `<label><span>${html(name)}</span><select id="resource-${name.toLowerCase()}">${options.map(([key, label]) => `<option value="${key}"${value === key ? " selected" : ""}>${label}</option>`).join("")}</select></label>`;
+  const pagination = resourcePaginationMarkup;
   return `<div class="local-resource-manager">
     ${observedCatalog === null ? '<div class="empty-state"><strong>Docker is stopped; resource contents are not checked.</strong><span>You can still review environment names and protection. Start your engine explicitly, then refresh to inspect images and volume attachments.</span></div>' : ""}
     <p id="resource-preview-notice" class="control-note" role="status" hidden></p>
@@ -163,9 +170,10 @@ export const resourceManagerMarkup = (
         ],
         preferences.resourceSort,
       )}
+      <label><span>Rows per list</span><select id="resource-page-size"><option value="5" selected>5</option><option value="10">10</option><option value="25">25</option></select></label>
     </div>
     <div class="resource-summary"><span id="resource-visible-count" role="status"></span><button id="resource-largest" class="button button--secondary" type="button">Show largest first</button></div>
-    <section class="resource-section" aria-labelledby="resource-environments-heading"><div class="surface-heading"><span><small>Environments</small><h3 id="resource-environments-heading">Your project sandboxes</h3></span><span class="state-chip">${inventory.environments.length}</span></div><div class="resource-list">${inventory.environments
+    <section class="resource-section" data-resource-section="environment" aria-labelledby="resource-environments-heading"><div class="surface-heading"><span><small>Environments</small><h3 id="resource-environments-heading">Your project sandboxes</h3></span><span class="state-chip">${inventory.environments.length}</span></div><div class="resource-list" data-resource-list="environment">${inventory.environments
       .map(
         (
           entry,
@@ -187,10 +195,10 @@ export const resourceManagerMarkup = (
       <div class="action-group">${action(entry.target, "startRuntime", "Start", !["stopped"].includes(entry.state))}${action(entry.target, "stopRuntime", "Stop", !["running", "mixed"].includes(entry.state))}${action(entry.target, "discardRuntime", "Review discard", entry.protected || ["absent", "unavailable"].includes(entry.state))}</div>
     </article>`,
       )
-      .join("")}</div></section>
-    <section class="resource-section" aria-labelledby="resource-volumes-heading"><div class="surface-heading"><span><small>Data volumes</small><h3 id="resource-volumes-heading">Database and Storage data</h3></span><span class="state-chip">Individual deletion disabled</span></div><p class="surface-copy">Volumes hold persistent data. Attached includes mounts on stopped containers. Remove project data only through its owning environment’s reviewed discard.</p><div class="resource-list">${catalog.volumes.map((volume) => `<article class="resource-card" ${attributes("volume", volume.name, `${volume.state}${volume.protected ? " protected" : ""}`, volume.ownership === "project" ? "project" : "other", volume.bytes, volume.createdAt, volume.lastActivityAt, volume.ownership === "project" ? volume.target : null)}><div class="resource-card__heading"><strong><code>${html(volume.name)}</code></strong><span class="state-chip">${html(volume.state)}${volume.protected ? " · protected" : ""}</span></div><p>${html(volume.purpose === "unknown" ? "Purpose not proven" : volume.purpose)} · ${size(volume.bytes)} · ${volume.containerCount} container references</p><p>Owner: ${html(volume.target ?? "Other / unknown")} · Last observable use: ${html(time(volume.lastActivityAt))}</p><p class="resource-reason">${html(volume.reason)}</p>${volume.target && volume.ownership === "project" ? `<div class="action-group">${action(volume.target, "discardRuntime", "Review owning environment", volume.protected)}</div>` : ""}</article>`).join("") || '<p class="empty-state">No volumes were observed.</p>'}</div></section>
-    <section class="resource-section" aria-labelledby="resource-images-heading"><div class="surface-heading"><span><small>Images</small><h3 id="resource-images-heading">Reusable service software</h3></span><span class="state-chip">${catalog.images.length} images</span></div><p class="surface-copy">Images are templates, not mounted data. Running and stopped container references prevent cleanup. The newest cached service version is retained.</p><div class="resource-list">${catalog.images.map((image) => `<article class="resource-card" ${attributes("image", `${image.service} ${image.id} ${image.tags.join(" ")}`, image.state, "shared", image.bytes, image.createdAt, null)}><div class="resource-card__heading"><label class="resource-image-label"><input type="checkbox" data-image-id="${html(image.id)}" data-image-bytes="${image.bytes}"${image.state !== "candidate" ? " disabled" : ""} aria-label="Select ${html(image.service)} ${html(image.tags[0] ?? image.id)} for image cleanup" /><strong>${html(image.service)}</strong></label><span class="state-chip">${html(image.state === "candidate" ? "Safe cleanup candidate" : image.state.replaceAll("-", " "))}</span></div><p>${size(image.bytes)} · Created ${html(image.createdAt)}</p><div class="resource-tags">${image.tags.map((tag) => `<code>${html(tag)}</code>`).join("") || "No tags"}</div><p class="resource-reason">${html(image.reason)}</p><details><summary>Exact identity and references</summary><code>${html(image.id)}</code>${image.digests.map((digest) => `<code>${html(digest)}</code>`).join("")}<ul>${image.references.map((ref) => `<li>${html(ref.name)} · ${ref.running ? "running" : "stopped"} · ${ref.ownership === "project" ? "this project" : "other project"}</li>`).join("") || "<li>No container references</li>"}</ul></details></article>`).join("") || '<p class="empty-state">No images were observed.</p>'}</div><div class="image-cleanup-review"><p id="image-selection-summary" role="status">Select eligible images to estimate cleanup.</p><p class="control-note">Estimated image size is an upper bound: shared layers may reduce recovered space. This action selects zero containers, data volumes, or baselines.</p><div class="action-group"><button id="select-eligible-images" type="button" class="button button--secondary">Select visible safe candidates</button><button id="clear-image-selection" type="button" class="button button--secondary">Clear selection</button><button id="review-image-cleanup" type="button" class="button button--danger" disabled>Review selected image cleanup</button></div></div></section>
-    <section class="resource-section" aria-labelledby="resource-others-heading"><div class="surface-heading"><span><small>Other local resources</small><h3 id="resource-others-heading">Other projects on this engine</h3></span><span class="state-chip">Read only</span></div><p class="surface-copy">These contribute to shared capacity. Rehearsal cannot modify them; manage them through their owning project.</p><div class="resource-list">${catalog.otherContainers.map((container) => `<article class="resource-card" ${attributes("other", `${container.name} ${container.id}`, container.running ? "running" : "stopped", "other", null, null, null)}><div class="resource-card__heading"><strong>${html(container.name)}</strong><span class="state-chip">${container.running ? "running" : "stopped"}</span></div><p class="resource-reason">${html(container.reason)}</p><details><summary>Container ID</summary><code>${html(container.id)}</code></details></article>`).join("") || '<p class="empty-state">No other containers were observed.</p>'}</div></section>
+      .join("")}</div>${pagination("environment", "Environments")}</section>
+    <section class="resource-section" data-resource-section="volume" aria-labelledby="resource-volumes-heading"><div class="surface-heading"><span><small>Data volumes</small><h3 id="resource-volumes-heading">Database and Storage data</h3></span><span class="state-chip">Individual deletion disabled</span></div><p class="surface-copy">Volumes hold persistent data. Attached includes mounts on stopped containers. Remove project data only through its owning environment’s reviewed discard.</p><div class="resource-list" data-resource-list="volume">${catalog.volumes.map((volume) => `<article class="resource-card" ${attributes("volume", volume.name, `${volume.state}${volume.protected ? " protected" : ""}`, volume.ownership === "project" ? "project" : "other", volume.bytes, volume.createdAt, volume.lastActivityAt, volume.ownership === "project" ? volume.target : null)}><div class="resource-card__heading"><strong><code>${html(volume.name)}</code></strong><span class="state-chip">${html(volume.state)}${volume.protected ? " · protected" : ""}</span></div><p>${html(volume.purpose === "unknown" ? "Purpose not proven" : volume.purpose)} · ${size(volume.bytes)} · ${volume.containerCount} container references</p><p>Owner: ${html(volume.target ?? "Other / unknown")} · Last observable use: ${html(time(volume.lastActivityAt))}</p><p class="resource-reason">${html(volume.reason)}</p>${volume.target && volume.ownership === "project" ? `<div class="action-group">${action(volume.target, "discardRuntime", "Review owning environment", volume.protected)}</div>` : ""}</article>`).join("")}</div>${pagination("volume", "Data volumes")}</section>
+    <section class="resource-section" data-resource-section="image" aria-labelledby="resource-images-heading"><div class="surface-heading"><span><small>Images</small><h3 id="resource-images-heading">Reusable service software</h3></span><span class="state-chip">${catalog.images.length} images</span></div><p class="surface-copy">Images are templates, not mounted data. Running and stopped container references prevent cleanup. The newest cached service version is retained.</p><div class="resource-list" data-resource-list="image">${catalog.images.map((image) => `<article class="resource-card" ${attributes("image", `${image.service} ${image.id} ${image.tags.join(" ")}`, image.state, "shared", image.bytes, image.createdAt, null)}><div class="resource-card__heading"><label class="resource-image-label"><input type="checkbox" data-image-id="${html(image.id)}" data-image-bytes="${image.bytes}"${image.state !== "candidate" ? " disabled" : ""} aria-label="Select ${html(image.service)} ${html(image.tags[0] ?? image.id)} for image cleanup" /><strong>${html(image.service)}</strong></label><span class="state-chip">${html(image.state === "candidate" ? "Safe cleanup candidate" : image.state.replaceAll("-", " "))}</span></div><p>${size(image.bytes)} · Created ${html(image.createdAt)}</p><div class="resource-tags">${image.tags.map((tag) => `<code>${html(tag)}</code>`).join("") || "No tags"}</div><p class="resource-reason">${html(image.reason)}</p><details><summary>Exact identity and references</summary><code>${html(image.id)}</code>${image.digests.map((digest) => `<code>${html(digest)}</code>`).join("")}<ul>${image.references.map((ref) => `<li>${html(ref.name)} · ${ref.running ? "running" : "stopped"} · ${ref.ownership === "project" ? "this project" : "other project"}</li>`).join("") || "<li>No container references</li>"}</ul></details></article>`).join("")}</div>${pagination("image", "Images")}<div class="image-cleanup-review"><p id="image-selection-summary" role="status">Select eligible images to estimate cleanup.</p><p class="control-note">Estimated image size is an upper bound: shared layers may reduce recovered space. This action selects zero containers, data volumes, or baselines.</p><div class="action-group"><button id="select-eligible-images" type="button" class="button button--secondary">Select visible safe candidates</button><button id="clear-image-selection" type="button" class="button button--secondary">Clear selection</button><button id="review-image-cleanup" type="button" class="button button--danger" disabled>Review selected image cleanup</button></div></div></section>
+    <section class="resource-section" data-resource-section="other" aria-labelledby="resource-others-heading"><div class="surface-heading"><span><small>Other local resources</small><h3 id="resource-others-heading">Other projects on this engine</h3></span><span class="state-chip">Read only</span></div><p class="surface-copy">These contribute to shared capacity. Rehearsal cannot modify them; manage them through their owning project.</p><div class="resource-list" data-resource-list="other">${catalog.otherContainers.map((container) => `<article class="resource-card" ${attributes("other", `${container.name} ${container.id}`, container.running ? "running" : "stopped", "other", null, null, null)}><div class="resource-card__heading"><strong>${html(container.name)}</strong><span class="state-chip">${container.running ? "running" : "stopped"}</span></div><p class="resource-reason">${html(container.reason)}</p><details><summary>Container ID</summary><code>${html(container.id)}</code></details></article>`).join("")}</div>${pagination("other", "Other containers")}</section>
     <p id="resources-empty" class="empty-state" hidden>No resources match these filters. Clear the search or choose All resources.</p>
   </div>`;
 };
@@ -209,6 +217,29 @@ const resourceKind = document.querySelector('#resource-kind');
 const resourceState = document.querySelector('#resource-state');
 const resourceOwnership = document.querySelector('#resource-ownership');
 const resourceSort = document.querySelector('#resource-sort');
+const resourcePageSize = document.querySelector('#resource-page-size');
+const resourceKinds = ['environment','volume','image','other'];
+const resourceLabels = {environment:'environments',volume:'data volumes',image:'images',other:'other containers'};
+const summaryKinds=['targets','resource-targets','baselines','baseline-evidence'];
+const resourcePaging = {
+  pageSize: [5,10,25].includes(savedUi.resourcePageSize) ? savedUi.resourcePageSize : 5,
+  pages: Object.fromEntries(resourceKinds.map(kind=>[kind,Number.isSafeInteger(savedUi.resourcePages?.[kind]) && savedUi.resourcePages[kind]>=0 ? Math.min(1000000,savedUi.resourcePages[kind]) : 0])),
+  summaryPages: Object.fromEntries(summaryKinds.map(kind=>[kind,Number.isSafeInteger(savedUi.resourceSummaryPages?.[kind]) && savedUi.resourceSummaryPages[kind]>=0 ? Math.min(1000000,savedUi.resourceSummaryPages[kind]) : 0]))
+};
+let updateSummaryResourceView=()=>{};
+if(resourcePageSize) resourcePageSize.value=String(resourcePaging.pageSize);
+const resourceCollections = resourceKinds.map(kind=>({
+  kind,
+  rows:resourceRows.filter(row=>row.dataset.kind===kind),
+  list:document.querySelector('[data-resource-list="'+kind+'"]'),
+  section:document.querySelector('[data-resource-section="'+kind+'"]'),
+  pager:document.querySelector('#resource-'+kind+'-pagination'),
+  range:document.querySelector('#resource-'+kind+'-range'),
+  empty:document.querySelector('#resource-'+kind+'-empty'),
+  previous:document.querySelector('#resource-'+kind+'-previous'),
+  next:document.querySelector('#resource-'+kind+'-next')
+}));
+let resourceFilterIdentity=null;
 const updateResourceView = () => {
   const query = resourceSearch?.value.trim().toLowerCase() ?? '';
   const kind = resourceKind?.value ?? 'all';
@@ -217,27 +248,63 @@ const updateResourceView = () => {
   const sort = resourceSort?.value ?? 'name';
   document.querySelectorAll('[data-resource-kind]').forEach(control=>control.setAttribute('aria-pressed',String(control.dataset.resourceKind===kind)));
   const scope = currentViewScope();
-  resourceRows.forEach(row => { const scoped = row.dataset.viewTarget ? scope.targets.includes(row.dataset.viewTarget) : !scope.onlyProjectOwned; row.hidden = !(scoped && row.dataset.name.includes(query) && (kind==='all'||row.dataset.kind===kind) && (state==='all'||row.dataset.state.split(' ').includes(state)) && (ownership==='all'||row.dataset.ownership===ownership)); });
-  document.querySelectorAll('.resource-list').forEach(list => {
-    const rows = [...list.querySelectorAll('[data-resource-row]')];
-    rows.sort((a,b) => sort==='size' ? Number(b.dataset.size)-Number(a.dataset.size) : sort==='age' ? (Number(a.dataset.created)||Infinity)-(Number(b.dataset.created)||Infinity) : sort==='activity' ? Number(b.dataset.last)-Number(a.dataset.last) : a.dataset.name.localeCompare(b.dataset.name));
-    rows.forEach(row=>list.appendChild(row));
+  const identity=JSON.stringify([query,kind,state,ownership,sort,scope.targets,scope.onlyProjectOwned]);
+  if(resourceFilterIdentity!==null && identity!==resourceFilterIdentity) resourceKinds.forEach(key=>resourcePaging.pages[key]=0);
+  resourceFilterIdentity=identity;
+  let matched=0;
+  resourceCollections.forEach(collection => {
+    const matches=collection.rows.filter(row=>{
+      const scoped=row.dataset.viewTarget ? scope.targets.includes(row.dataset.viewTarget) : !scope.onlyProjectOwned;
+      return scoped && row.dataset.name.includes(query) && (kind==='all'||row.dataset.kind===kind) && (state==='all'||row.dataset.state.split(' ').includes(state)) && (ownership==='all'||row.dataset.ownership===ownership);
+    });
+    matches.sort((a,b) => sort==='size' ? Number(b.dataset.size)-Number(a.dataset.size) : sort==='age' ? (Number(a.dataset.created)||Infinity)-(Number(b.dataset.created)||Infinity) : sort==='activity' ? Number(b.dataset.last)-Number(a.dataset.last) : a.dataset.name.localeCompare(b.dataset.name));
+    matched+=matches.length;
+    const pages=Math.max(1,Math.ceil(matches.length/resourcePaging.pageSize));
+    const page=Math.min(resourcePaging.pages[collection.kind],pages-1);
+    resourcePaging.pages[collection.kind]=page;
+    const start=page*resourcePaging.pageSize;
+    const visibleRows=matches.slice(start,start+resourcePaging.pageSize);
+    const visibleSet=new Set(visibleRows);
+    collection.rows.forEach(row=>row.hidden=!visibleSet.has(row));
+    if(collection.list && (collection.list.children.length!==visibleRows.length || visibleRows.some((row,index)=>collection.list.children[index]!==row))) collection.list.replaceChildren(...visibleRows);
+    if(collection.section) collection.section.hidden=(kind!=='all' && kind!==collection.kind) || (kind==='all' && resourceRows.length>0 && matches.length===0);
+    if(collection.pager) collection.pager.hidden=matches.length===0;
+    if(collection.range) collection.range.textContent=matches.length ? (start+1)+'–'+(start+visibleRows.length)+' of '+matches.length+' '+resourceLabels[collection.kind]+' · Page '+(page+1)+' of '+pages : '0 '+resourceLabels[collection.kind];
+    if(collection.empty) {
+      collection.empty.hidden=matches.length>0;
+      collection.empty.textContent=collection.rows.length ? 'No '+resourceLabels[collection.kind]+' match these filters. Clear the search or change the selected view.' : 'No '+resourceLabels[collection.kind]+' were observed.';
+    }
+    if(collection.previous) { collection.previous.disabled=page===0; collection.previous.parentElement.hidden=pages<=1; }
+    if(collection.next) collection.next.disabled=page>=pages-1;
   });
-  document.querySelectorAll('.resource-section').forEach(section=>{ section.hidden = resourceRows.length > 0 && ![...section.querySelectorAll('[data-resource-row]')].some(row=>!row.hidden); });
   const visible = resourceRows.filter(row=>!row.hidden).length;
-  const count = document.querySelector('#resource-visible-count'); if(count)count.textContent = visible+' of '+resourceRows.length+' resources shown';
-  const empty = document.querySelector('#resources-empty'); if(empty)empty.hidden = visible > 0;
+  const count = document.querySelector('#resource-visible-count'); if(count)count.textContent = visible+' shown on current pages · '+matched+' of '+resourceRows.length+' resources match';
+  const empty = document.querySelector('#resources-empty'); if(empty)empty.hidden = matched > 0;
   preferences.resourceQuery=query; preferences.resourceKind=kind; preferences.resourceState=state; preferences.resourceOwnership=ownership; preferences.resourceSort=sort; savePreferences();
+  updateSummaryResourceView();
   updateImageSelection();
 };
 resourceSearch?.addEventListener('input',updateResourceView);
 [resourceKind,resourceState,resourceOwnership,resourceSort].forEach(control=>control?.addEventListener('change',updateResourceView));
 document.querySelectorAll('[data-resource-kind]').forEach(control=>control.addEventListener('click',()=>{if(resourceKind)resourceKind.value=control.dataset.resourceKind;updateResourceView();}));
 document.querySelector('#resource-largest')?.addEventListener('click',()=>{if(resourceSort)resourceSort.value='size';updateResourceView();});
+resourcePageSize?.addEventListener('change',()=>{
+  const value=Number(resourcePageSize.value);
+  resourcePaging.pageSize=[5,10,25].includes(value) ? value : 5;
+  resourcePageSize.value=String(resourcePaging.pageSize);
+  resourceKinds.forEach(kind=>resourcePaging.pages[kind]=0);
+  updateResourceView();
+});
+document.querySelectorAll('[data-resource-page-action]').forEach(control=>control.addEventListener('click',()=>{
+  const kind=control.dataset.resourcePageKind;
+  if(control.disabled || !resourceKinds.includes(kind)) return;
+  resourcePaging.pages[kind]=Math.max(0,resourcePaging.pages[kind]+(control.dataset.resourcePageAction==='next' ? 1 : -1));
+  updateResourceView();
+}));
 const imageCheckboxes = [...document.querySelectorAll('[data-image-id]')];
 const restoredImageIds = new Set(reconcileImageSelection(savedUi.images,imageCheckboxes.filter(input=>!input.disabled).map(input=>input.dataset.imageId)));
 imageCheckboxes.forEach(input=>{input.checked=!input.disabled&&restoredImageIds.has(input.dataset.imageId);});
-const updateImageSelection = () => { const selected=imageCheckboxes.filter(input=>input.checked&&!input.disabled); const bytes=selected.reduce((total,input)=>total+Number(input.dataset.imageBytes),0);const hidden=selected.filter(input=>input.closest('[data-resource-row]').hidden).length;const summary=document.querySelector('#image-selection-summary');if(summary)summary.textContent=selected.length+' images selected'+(hidden?' ('+hidden+' outside current filters)':'')+' · up to '+(bytes/1024**3).toFixed(2)+' GiB · zero data volumes'+(selected.length>100?' · Select at most 100 images per review':''); const review=document.querySelector('#review-image-cleanup');if(review)review.disabled=selected.length===0||selected.length>100; rememberUi(); };
+const updateImageSelection = () => { const selected=imageCheckboxes.filter(input=>input.checked&&!input.disabled); const bytes=selected.reduce((total,input)=>total+Number(input.dataset.imageBytes),0);const hidden=selected.filter(input=>input.closest('[data-resource-row]').hidden).length;const summary=document.querySelector('#image-selection-summary');if(summary)summary.textContent=selected.length+' images selected'+(hidden?' ('+hidden+' outside current page or filters)':'')+' · up to '+(bytes/1024**3).toFixed(2)+' GiB · zero data volumes'+(selected.length>100?' · Select at most 100 images per review':''); const review=document.querySelector('#review-image-cleanup');if(review)review.disabled=selected.length===0||selected.length>100; rememberUi(); };
 imageCheckboxes.forEach(input=>input.addEventListener('change',updateImageSelection));
 document.querySelector('#select-eligible-images')?.addEventListener('click',()=>{let remaining=100-imageCheckboxes.filter(input=>input.checked&&!input.disabled).length;imageCheckboxes.forEach(input=>{if(!input.disabled&&!input.checked&&!input.closest('[data-resource-row]').hidden&&remaining>0){input.checked=true;remaining--;}});updateImageSelection();});
 document.querySelector('#clear-image-selection')?.addEventListener('click',()=>{imageCheckboxes.forEach(input=>input.checked=false);updateImageSelection();});
@@ -245,4 +312,50 @@ document.querySelector('#review-image-cleanup')?.addEventListener('click',()=>{p
 document.querySelectorAll('[data-resource-action]').forEach(control=>control.addEventListener('click',()=>{postResourceMessage({type:'resourceAction',target:control.dataset.resourceTarget,action:control.dataset.resourceAction});}));
 document.querySelectorAll('.resource-environment-form').forEach(form=>form.addEventListener('submit',event=>{event.preventDefault();postResourceMessage({type:'reviewResourceConfiguration',target:form.dataset.resourceTarget,values:{environmentName:form.elements.environmentName.value,protectEnvironment:form.elements.protectEnvironment.checked}});}));
 updateResourceView(); updateImageSelection();
+`;
+
+/** Supplemental Environments lists share row size, not resource filters or operation scope. */
+export const SUMMARY_LIST_SCRIPT = `
+const summaryRows=[...document.querySelectorAll('[data-summary-row]')];
+const summaryLabels={targets:'database targets','resource-targets':'target resource summaries',baselines:'baseline versions','baseline-evidence':'baseline versions'};
+const summaryLists=summaryKinds.map(kind=>({
+  kind,
+  rows:summaryRows.filter(row=>row.dataset.summaryRow===kind),
+  list:document.querySelector('[data-summary-list="'+kind+'"]'),
+  pager:document.querySelector('#summary-'+kind+'-pagination'),
+  range:document.querySelector('#summary-'+kind+'-range'),
+  empty:document.querySelector('#summary-'+kind+'-empty'),
+  previous:document.querySelector('#summary-'+kind+'-previous'),
+  next:document.querySelector('#summary-'+kind+'-next')
+}));
+let summaryScopeIdentity=null;
+updateSummaryResourceView=()=>{
+  const scope=currentViewScope();
+  const identity=JSON.stringify([scope.targets,scope.onlyProjectOwned,resourcePaging.pageSize]);
+  if(summaryScopeIdentity!==null && summaryScopeIdentity!==identity) summaryKinds.forEach(kind=>resourcePaging.summaryPages[kind]=0);
+  summaryScopeIdentity=identity;
+  summaryLists.forEach(collection=>{
+    const matches=collection.rows.filter(row=>!row.dataset.summaryTarget || scope.targets.includes(row.dataset.summaryTarget));
+    const pages=Math.max(1,Math.ceil(matches.length/resourcePaging.pageSize));
+    const page=Math.min(resourcePaging.summaryPages[collection.kind],pages-1);
+    resourcePaging.summaryPages[collection.kind]=page;
+    const start=page*resourcePaging.pageSize;
+    const visibleRows=matches.slice(start,start+resourcePaging.pageSize);
+    const visible=new Set(visibleRows);
+    collection.rows.forEach(row=>row.hidden=!visible.has(row));
+    if(collection.list && (collection.list.children.length!==visibleRows.length || visibleRows.some((row,index)=>collection.list.children[index]!==row))) collection.list.replaceChildren(...visibleRows);
+    if(collection.pager) collection.pager.hidden=matches.length===0;
+    if(collection.range) collection.range.textContent=matches.length ? (start+1)+'–'+(start+visibleRows.length)+' of '+matches.length+' '+summaryLabels[collection.kind]+' · Page '+(page+1)+' of '+pages : '0 '+summaryLabels[collection.kind];
+    if(collection.empty) collection.empty.hidden=matches.length>0;
+    if(collection.previous) {collection.previous.disabled=page===0;collection.previous.parentElement.hidden=pages<=1;}
+    if(collection.next) collection.next.disabled=page>=pages-1;
+  });
+};
+document.querySelectorAll('[data-summary-page-action]').forEach(control=>control.addEventListener('click',()=>{
+  const kind=control.dataset.summaryPageKind;
+  if(control.disabled || !summaryKinds.includes(kind)) return;
+  resourcePaging.summaryPages[kind]=Math.max(0,resourcePaging.summaryPages[kind]+(control.dataset.summaryPageAction==='next' ? 1 : -1));
+  updateSummaryResourceView();rememberUi();
+}));
+updateSummaryResourceView();rememberUi();
 `;

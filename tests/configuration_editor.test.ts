@@ -428,6 +428,133 @@ describe("configuration proposals", () => {
     );
     expect(result.source).toContain("// runtime: { protected: false }");
   });
+  it.each(["'", '"'])(
+    "counts only actual environment-field changes with %s-quoted names and preserves unchanged literals",
+    (quote) => {
+      const original = `export default { runtime: { protected: false, displayName: ${quote}Manual sandbox${quote}, projectId: 'immutable-rehearsal' } }; // protected: true, displayName: 'not the owner'`;
+      for (const { name, protection, expected } of [
+        {
+          name: "Renamed sandbox",
+          protection: false,
+          expected: ["runtime.displayName"],
+        },
+        {
+          name: "Manual sandbox",
+          protection: true,
+          expected: ["runtime.protected"],
+        },
+        {
+          name: "Renamed sandbox",
+          protection: true,
+          expected: ["runtime.displayName", "runtime.protected"],
+        },
+        { name: "Manual sandbox", protection: false, expected: [] },
+      ]) {
+        const result = applyConfigurationProposal({
+          source: original,
+          proposal: { environmentName: name, protectEnvironment: protection },
+        });
+        expect(result.changedFields).toEqual(expected);
+        expect(result.source).toContain("projectId: 'immutable-rehearsal'");
+        expect(result.source).toContain(
+          "// protected: true, displayName: 'not the owner'",
+        );
+        if (!expected.includes("runtime.displayName"))
+          expect(result.source).toContain(
+            `displayName: ${quote}Manual sandbox${quote}`,
+          );
+        if (expected.length === 0) expect(result.source).toBe(original);
+      }
+    },
+  );
+  it("counts a missing environment literal as one insertion without adding unproposed fields", () => {
+    for (const { source, proposal, expected, absent } of [
+      {
+        source:
+          "export default { runtime: { displayName: 'Manual sandbox', projectId: 'immutable-rehearsal' } };",
+        proposal: {
+          environmentName: "Manual sandbox",
+          protectEnvironment: false,
+        },
+        expected: ["runtime.protected"],
+        absent: undefined,
+      },
+      {
+        source:
+          "export default { runtime: { protected: false, projectId: 'immutable-rehearsal' } };",
+        proposal: {
+          environmentName: "Manual sandbox",
+          protectEnvironment: false,
+        },
+        expected: ["runtime.displayName"],
+        absent: undefined,
+      },
+      {
+        source:
+          "export default { runtime: { projectId: 'immutable-rehearsal' } };",
+        proposal: { environmentName: "Manual sandbox" },
+        expected: ["runtime.displayName"],
+        absent: "protected:",
+      },
+      {
+        source:
+          "export default { runtime: { projectId: 'immutable-rehearsal' } };",
+        proposal: { protectEnvironment: false },
+        expected: ["runtime.protected"],
+        absent: "displayName:",
+      },
+    ]) {
+      const result = applyConfigurationProposal({ source, proposal });
+      expect(result.changedFields).toEqual(expected);
+      expect(result.source).toContain("projectId: 'immutable-rehearsal'");
+      if (absent) expect(result.source).not.toContain(absent);
+    }
+  });
+  it("preserves escaped equal environment names when only protection changes", () => {
+    const original = String.raw`export default {runtime:{displayName: 'Dylan\u0027s\x20sandbox', protected: false, projectId: 'immutable-rehearsal'}};`;
+    const result = applyConfigurationProposal({
+      source: original,
+      proposal: {
+        environmentName: "Dylan's sandbox",
+        protectEnvironment: true,
+      },
+    });
+    expect(result.changedFields).toEqual(["runtime.protected"]);
+    expect(result.source).toBe(
+      original.replace("protected: false", "protected: true"),
+    );
+  });
+  it("keeps inline field comments and whitespace when an unchanged name accompanies a protection edit", () => {
+    const original = `export default { runtime: {
+      displayName: /* label rationale */ 'Manual sandbox',
+      protected: /* data policy */ false,
+      projectId: 'immutable-rehearsal',
+    } };`;
+    const result = applyConfigurationProposal({
+      source: original,
+      proposal: { environmentName: "Manual sandbox", protectEnvironment: true },
+    });
+    expect(result.changedFields).toEqual(["runtime.protected"]);
+    expect(result.source).toBe(
+      original.replace("/* data policy */ false", "/* data policy */ true"),
+    );
+  });
+  it("does not bypass ambiguous environment fields when another proposed value matches", () => {
+    for (const runtime of [
+      "{ protected: false, displayName: getLabel(), projectId: 'stable' }",
+      "{ protected: !false, displayName: 'Manual sandbox', projectId: 'stable' }",
+      "{ protected: false, displayName: 'Manual sandbox', displayName: 'Other', projectId: 'stable' }",
+    ])
+      expect(() =>
+        applyConfigurationProposal({
+          source: `export default { runtime: ${runtime} };`,
+          proposal: {
+            environmentName: "Manual sandbox",
+            protectEnvironment: false,
+          },
+        }),
+      ).toThrow();
+  });
   it("refuses complex or duplicate resource fields instead of guessing a config edit", () => {
     for (const runtime of [
       "{ ...settings, projectId: 'stable' }",

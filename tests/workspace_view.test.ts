@@ -175,6 +175,7 @@ const exerciseViewScript = (
   });
   imageControl.disabled = imageDisabled;
   imageControl.owner = resourceRows[2]!;
+  let imageAttached = true;
   const runtimeRows = migrationRows.map(
     (row) => new ViewControl({ displayTarget: row.dataset.target! }),
   );
@@ -205,6 +206,33 @@ const exerciseViewScript = (
     "select-eligible-images",
     "clear-image-selection",
   ].forEach((id) => ids.set("#" + id, new ViewControl()));
+  for (const id of ["application-url", "active-application-url"]) {
+    const field = new RegExp(`<input id="${id}"[^>]*value="([^"]*)"`).exec(
+      html,
+    );
+    if (!field) continue;
+    const control = new ViewControl();
+    control.id = id;
+    control.value = field[1]!;
+    ids.set("#" + id, control);
+  }
+  for (const id of ["open-custom-application", "open-active-application"]) {
+    if (html.includes(`id="${id}"`)) ids.set("#" + id, new ViewControl());
+  }
+  const sessionNodes = Object.fromEntries(
+    ["label", "detail", "guidance"].map((kind) => [
+      kind,
+      [
+        ...html.matchAll(
+          new RegExp(`<[^>]+ data-sandbox-session-${kind}[^>]*>([^<]*)<`, "gu"),
+        ),
+      ].map((match) => {
+        const node = new ViewControl();
+        node.textContent = match[1]!;
+        return node;
+      }),
+    ]),
+  ) as Record<"label" | "detail" | "guidance", ViewControl[]>;
   ids.get("#migration-search")!.value = "";
   ids.get("#resource-search")!.value = "";
   ids.get("#workspace-profile")!.value = "full";
@@ -266,6 +294,8 @@ const exerciseViewScript = (
     string,
     ((event: { target: ViewControl }) => void)[]
   >();
+  const windowMessages: ((event: { data: unknown }) => void)[] = [];
+  let activeElement: ViewControl | null = null;
   const scrolls: { top: number; left?: number; behavior?: string }[] = [];
   const scrolling = {
     scrollTop: 0,
@@ -277,6 +307,9 @@ const exerciseViewScript = (
     },
   };
   const all = (selector: string) => {
+    for (const kind of ["label", "detail", "guidance"] as const)
+      if (selector === `[data-sandbox-session-${kind}]`)
+        return sessionNodes[kind];
     if (selector === ".workspace-page") return [...pages.values()];
     if (selector === "[data-rehearsal-page]") return navigation;
     if (
@@ -292,7 +325,8 @@ const exerciseViewScript = (
     if (selector === "[data-migration-review]:checked")
       return reviewControls.filter((control) => control.checked);
     if (selector === "[data-resource-row]") return resourceRows;
-    if (selector === "[data-image-id]") return [imageControl];
+    if (selector === "[data-image-id]")
+      return imageAttached ? [imageControl] : [];
     if (selector === "[data-display-target]") return runtimeRows;
     if (selector === "#workspace-scope-summary,[data-scope-summary]")
       return [ids.get("#workspace-scope-summary")!];
@@ -312,6 +346,7 @@ const exerciseViewScript = (
       HTMLElement: ViewControl,
       Element: ViewControl,
       URL,
+      TextEncoder,
       queueMicrotask,
       FormData: class {
         constructor(private readonly form: ViewControl) {}
@@ -320,7 +355,9 @@ const exerciseViewScript = (
         }
       },
       document: {
-        activeElement: null,
+        get activeElement() {
+          return activeElement;
+        },
         querySelector: (selector: string) => ids.get(selector) ?? null,
         querySelectorAll: all,
         addEventListener: (
@@ -338,7 +375,12 @@ const exerciseViewScript = (
       },
       window: {
         matchMedia: () => ({ matches: false, addEventListener: () => {} }),
-        addEventListener: () => {},
+        addEventListener: (
+          name: string,
+          listener: (event: { data: unknown }) => void,
+        ) => {
+          if (name === "message") windowMessages.push(listener);
+        },
       },
     },
     { timeout: 1000 },
@@ -350,7 +392,23 @@ const exerciseViewScript = (
     runtimeRows,
     reviewControls,
     imageControl,
+    detachImage: () => {
+      imageAttached = false;
+      resourceRows[2]!.hidden = true;
+    },
+    rememberView: () => {
+      for (const listener of documentListeners.get("change") ?? [])
+        listener({ target: imageControl });
+    },
     messages,
+    sessionNodes,
+    receive: (data: unknown) =>
+      windowMessages.forEach((listener) => listener({ data })),
+    focus: (control: ViewControl) => {
+      activeElement = control;
+      control.focus();
+    },
+    activeElement: () => activeElement,
     pages,
     scrolling,
     scrolls,
@@ -377,6 +435,52 @@ const assets = {
   ) as Record<WorkspaceActionId, string>,
   scriptNonce: "test-navigation-nonce",
 };
+
+const sandboxSnapshot = (
+  phase:
+    | "application-start"
+    | "interactive-session"
+    | "cleanup"
+    | null = "interactive-session",
+): ProjectSnapshot => ({
+  workspaceName: "Active project",
+  workspaceRoot: "/synthetic",
+  availability: "operation_active",
+  version: "1.0.0",
+  activity: {
+    schemaVersion: 1,
+    state: "busy",
+    operation: {
+      kind: "open",
+      startedAt: "2026-10-18T22:00:00.000Z",
+      rehearsalVersion: "1.0.0",
+      ...(phase
+        ? {
+            progress: {
+              schemaVersion: 1,
+              operationId: "a".repeat(64),
+              state: "running",
+              startedAt: "2026-10-18T22:00:00.000Z",
+              updatedAt: "2026-10-18T22:00:01.000Z",
+              elapsedMilliseconds: 1000,
+              currentStage: {
+                id: 1,
+                phase,
+                target: null,
+                state: "running",
+                startedAt: "2026-10-18T22:00:00.000Z",
+                endedAt: null,
+                durationMilliseconds: 1000,
+              },
+              completedStages: [],
+              events: [],
+              truncated: { stages: false, events: false },
+            },
+          }
+        : {}),
+    },
+  },
+});
 
 const readySnapshot = (): ProjectSnapshot => ({
   workspaceName: "Example project",
@@ -1323,6 +1427,20 @@ describe("workspace control state and truthful actions", () => {
     expect(controller.state()).toMatchObject({ view: { images: [] } });
   });
 
+  it("persists cached image selections when pagination detaches their card", () => {
+    const imageId = `sha256:${"c".repeat(64)}`;
+    const controller = exerciseViewScript(
+      renderWorkspaceDocument(readySnapshot(), assets, "runtime"),
+      { images: [imageId], resourcePageSize: 10, resourcePages: { image: 2 } },
+    );
+    expect(controller.imageControl.checked).toBe(true);
+    controller.detachImage();
+    controller.rememberView();
+    expect(controller.state()).toMatchObject({
+      view: { images: [imageId], resourcePageSize: 10 },
+    });
+  });
+
   it("filters created, long-running-review and incompatible resource states through preferences only", () => {
     const controller = exerciseViewScript(
       renderWorkspaceDocument(readySnapshot(), assets, "runtime"),
@@ -1451,16 +1569,192 @@ describe("Rehearsal workspace document", () => {
     expect(html).toContain(
       "Your sandbox session stays open for hands-on testing.",
     );
-    expect(html).toContain("When the application is ready");
-    expect(html).toContain("You do not need to wait for the session to end.");
+    expect(html).toContain("Application readiness is not confirmed");
+    expect(html).toContain("you do not need to wait for the session to end.");
     expect(html).toContain("View operation progress");
     expect(html).not.toContain("Let the active operation finish");
-    expect(html).toContain(
-      "Close the owning session when you want a fresh project check.",
+    expect(html).toContain("This does not pause your application.");
+  });
+  it.each([
+    ["application-start", "Opening sandbox"],
+    ["interactive-session", "Sandbox running"],
+    ["cleanup", "Closing sandbox"],
+    [null, "Sandbox session open"],
+  ] as const)(
+    "describes open session phase %s without inventing project facts",
+    (phase, label) => {
+      const html = renderWorkspaceDocument(sandboxSnapshot(phase), assets);
+      const overview = html.match(
+        /<section id="overview"[\s\S]*?<\/section>/u,
+      )?.[0];
+      expect(overview).toContain(label);
+      expect(overview).toContain("Project inspection is on hold");
+      expect(overview).toContain('id="active-application-url"');
+      expect(overview).toContain('id="open-active-application"');
+      expect(overview).not.toContain("Paused");
+      if (phase !== "interactive-session")
+        expect(overview).not.toContain("Sandbox running");
+      for (const action of [
+        "runRehearsal",
+        "reset",
+        "startRuntime",
+        "openSandbox",
+      ])
+        expect(overview).not.toContain(
+          `command:rehearsal.workspaceAction?${action}`,
+        );
+    },
+  );
+  it("does not label failed or stale interactive telemetry as a running sandbox", () => {
+    const active = sandboxSnapshot();
+    const operation = active.activity!.operation!;
+    for (const state of ["failed", "cancelled", "completed"] as const) {
+      const html = renderWorkspaceDocument(
+        {
+          ...active,
+          activity: {
+            ...active.activity!,
+            operation: {
+              ...operation,
+              progress: { ...operation.progress!, state },
+            },
+          },
+        },
+        assets,
+      );
+      expect(
+        html.match(/<section id="overview"[\s\S]*?<\/section>/u)?.[0],
+      ).not.toContain("Sandbox running");
+    }
+    const stale = renderWorkspaceDocument(
+      {
+        ...active,
+        availability: "operation_attention",
+        activity: { ...active.activity!, state: "stale" },
+      },
+      assets,
     );
+    const overview = stale.match(
+      /<section id="overview"[\s\S]*?<\/section>/u,
+    )?.[0];
+    expect(overview).toContain("Operation needs review");
+    expect(overview).not.toContain("Sandbox running");
+    expect(overview).not.toContain('id="open-active-application"');
+  });
+  it.each([
+    "",
+    "https://example.com:43340/",
+    "http://user:secret@localhost:43340/",
+    "http://localhost:43340/?token=private",
+  ])(
+    "never preloads stale, unsafe or guessed addresses during an open session: %s",
+    (applicationUrl) => {
+      const html = renderWorkspaceDocument(
+        {
+          ...sandboxSnapshot(),
+          configPath: "rehearsal.config.mjs",
+          applicationUrl: "http://localhost:62222/",
+        },
+        assets,
+        "overview",
+        { ...DEFAULT_WORKSPACE_PREFERENCES, applicationUrl },
+      );
+      expect(html).toContain('id="active-application-url" type="url" value=""');
+      expect(html).toContain('id="application-url" type="url" value=""');
+      expect(html).not.toContain("http://localhost:62222/");
+      expect(html).not.toContain("http://localhost:5175");
+      if (applicationUrl) expect(html).not.toContain(applicationUrl);
+    },
+  );
+  it("uses only the user's validated loopback preference in both active address inputs", () => {
+    const address = "http://127.0.0.1:43340/app";
+    const html = renderWorkspaceDocument(
+      sandboxSnapshot(),
+      assets,
+      "overview",
+      {
+        ...DEFAULT_WORKSPACE_PREFERENCES,
+        applicationUrl: address,
+      },
+    );
+    expect(html).toContain(
+      `id="active-application-url" type="url" value="${address}"`,
+    );
+    expect(html).toContain(
+      `id="application-url" type="url" value="${address}"`,
+    );
+    const ids = [
+      ...html.split("<script nonce=")[0]!.matchAll(/\sid="([^"]+)"/gu),
+    ].map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+  it("persists and opens the explicitly typed active address without starting a project operation", () => {
+    const view = exerciseViewScript(
+      renderWorkspaceDocument(sandboxSnapshot(), assets),
+    );
+    const address = "http://localhost:43340/";
+    const input = view.ids.get("#active-application-url")!;
+    input.value = address;
+    view.messages.splice(0);
+    view.ids.get("#open-active-application")!.click();
+    expect(view.messages).toContainEqual({
+      type: "openApplication",
+      url: address,
+    });
+    expect(view.messages).toContainEqual(
+      expect.objectContaining({
+        type: "preferences",
+        preferences: expect.objectContaining({ applicationUrl: address }),
+      }),
+    );
+    expect(view.ids.get("#application-url")?.value).toBe(address);
+    expect(view.messages).toHaveLength(2);
+    view.ids.get("#application-url")!.change("http://[::1]:43341/");
+    expect(input.value).toBe("http://[::1]:43341/");
+  });
+  it("patches session presentation in place without replacing typed input, focus or navigation", () => {
+    const view = exerciseViewScript(
+      renderWorkspaceDocument(sandboxSnapshot("application-start"), assets),
+    );
+    const input = view.ids.get("#active-application-url")!;
+    input.value = "http://localhost:43340/draft";
+    view.navigate("runtime");
+    view.focus(input);
+    view.scrolling.scrollTop = 310;
+    expect(view.sessionNodes.label.length).toBeGreaterThan(0);
+    for (const [state, label] of [
+      ["interactive", "Sandbox running"],
+      ["closing", "Closing sandbox"],
+      ["unknown", "Sandbox session open"],
+    ]) {
+      view.receive({
+        type: "operationProgressUpdated",
+        html: "<article><p>Progress</p></article>",
+        sandboxSessionState: state,
+      });
+      expect(
+        view.sessionNodes.label.every((node) => node.textContent === label),
+      ).toBe(true);
+      expect(view.ids.get("#active-application-url")).toBe(input);
+      expect(input.value).toBe("http://localhost:43340/draft");
+      expect(view.activeElement()).toBe(input);
+      expect(view.pages.get("runtime")!.hidden).toBe(false);
+      expect(view.scrolling.scrollTop).toBe(310);
+    }
+    view.receive({
+      type: "operationProgressUpdated",
+      html: "<article><p>Progress</p></article>",
+      sandboxSessionState: "<unsafe>",
+    });
+    expect(
+      view.sessionNodes.label.every(
+        (node) => node.textContent === "Sandbox session open",
+      ),
+    ).toBe(true);
+    expect(input.focusCalls).toHaveLength(1);
   });
   it.each(["open", "run", "reset"])(
-    "marks omitted project facts paused rather than missing setup during %s",
+    "marks project inspection on hold rather than pausing the application during %s",
     (kind) => {
       const html = renderWorkspaceDocument(
         {
@@ -1484,8 +1778,15 @@ describe("Rehearsal workspace document", () => {
         /<section id="overview"[\s\S]*?<\/section>/u,
       )?.[0];
       expect(overview).toBeDefined();
-      expect(overview?.match(/<strong>Paused<\/strong>/gu)).toHaveLength(4);
-      expect(overview).toContain("Verification waits for the active operation");
+      expect(overview?.match(/<strong>On hold<\/strong>/gu)).toHaveLength(3);
+      expect(overview).not.toContain("Paused");
+      expect(overview).toContain("Inspection on hold");
+      expect(overview).toContain(
+        "Baseline inspection resumes after the active operation",
+      );
+      expect(overview).toContain(
+        "Database status is not inspected during the active operation",
+      );
       expect(overview).toContain("View operation progress");
       expect(overview).not.toContain("Not verified");
       expect(overview).not.toContain("Create or verify a baseline");
@@ -1533,7 +1834,9 @@ describe("Rehearsal workspace document", () => {
     const html = renderWorkspaceDocument(readySnapshot(), assets, "activity");
     expect(html).toContain('<div id="operation-progress" tabindex="-1">');
     expect(html).toContain("const applyOperationProgressUpdate =");
-    expect(html).toContain("applyOperationProgressUpdate(document,event.data)");
+    expect(html).toContain(
+      "applyOperationProgressUpdate(document,{type:event.data.type,html:event.data.html})",
+    );
     expect(html).not.toContain("document.documentElement.innerHTML");
     expect(html).not.toContain("location.reload");
   });
@@ -1631,6 +1934,81 @@ describe("Rehearsal workspace document", () => {
     expect(html).toContain("Choose Rehearsal page. Current page: Environments");
     expect(html).toContain("2.50% CPU");
     expect(html).toContain("0.1 GiB memory");
+  });
+
+  it("groups all local-resource actions together while keeping stop guidance outside the control row", () => {
+    const html = renderWorkspaceDocument(
+      {
+        ...readySnapshot(),
+        configurationMetadata: {
+          schemaVersion: 1,
+          path: "rehearsal.config.mjs",
+          sourceSha256: "a".repeat(64),
+          fields: [],
+          profiles: [],
+          pathResolution: "Project root",
+          manualFields: "Manual review",
+        },
+      },
+      assets,
+      "runtime",
+    );
+    const resourceSurface = html
+      .split('<article class="surface environment-resources">')[1]!
+      .split('<article class="surface environment-versions">')[0]!;
+    const groups = [
+      ...resourceSurface.matchAll(
+        /<div class="action-group">([\s\S]*?)<\/div>/gu,
+      ),
+    ].map((match) => match[1]!);
+    const stopGroups = groups.filter((group) =>
+      group.includes('id="review-stale-stop"'),
+    );
+    expect(stopGroups).toHaveLength(1);
+    expect(stopGroups[0]).toContain("Refresh inventory");
+    expect(stopGroups[0]).toContain("Preview safe cleanup");
+    expect(stopGroups[0]).toContain("Review long-running environments");
+    expect(stopGroups[0]!.match(/<(?:a|button)\b/gu)).toHaveLength(3);
+    expect(stopGroups[0]).not.toContain("Uses your configured stale cutoff");
+    expect(resourceSurface).toContain(
+      '<p class="control-note">Uses your configured stale cutoff.',
+    );
+
+    const withoutMetadata = renderWorkspaceDocument(
+      readySnapshot(),
+      assets,
+      "runtime",
+    );
+    expect(withoutMetadata).not.toContain('id="review-stale-stop"');
+    expect(withoutMetadata).toContain("Refresh inventory");
+    expect(withoutMetadata).toContain("Preview safe cleanup");
+  });
+
+  it("uses singular and plural retained-baseline counts in the Environments heading", () => {
+    const current = readySnapshot();
+    const single = renderWorkspaceDocument(
+      {
+        ...current,
+        baseline: {
+          ...current.baseline!,
+          generations: current.baseline!.generations!.slice(0, 1),
+        },
+      },
+      assets,
+      "runtime",
+    );
+    const multiple = renderWorkspaceDocument(current, assets, "runtime");
+    const versionsHeading = (html: string) =>
+      html
+        .split('<article class="surface environment-versions">')[1]!
+        .split("</div>")[0]!;
+    expect(versionsHeading(single)).toContain(
+      '<span class="state-chip">1 version</span>',
+    );
+    expect(versionsHeading(single)).not.toContain("1 versions");
+    expect(versionsHeading(multiple)).toContain(
+      '<span class="state-chip">2 versions</span>',
+    );
   });
 
   it("creates an unprepared sandbox instead of offering an open action that must fail", () => {

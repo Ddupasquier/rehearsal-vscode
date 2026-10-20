@@ -1,6 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { constants as filesystemConstants } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+interface CapturedReview {
+  readonly title: string;
+  readonly description: string;
+  readonly workspaceName: string;
+  readonly workspaceKey?: string;
+  readonly path?: string;
+  readonly detail: string;
+  readonly format: "diff" | "text";
+  readonly changedFields?: readonly string[];
+  readonly canApply: () => void;
+  readonly onApply: () => Promise<void | boolean>;
+  readonly onReturn?: () => void;
+}
 
 const editor = vi.hoisted(() => {
   const uri = (path: string) => ({
@@ -26,6 +41,7 @@ const editor = vi.hoisted(() => {
   const unlink = vi.fn(async () => {});
   const rmdir = vi.fn(async () => {});
   const replace = vi.fn();
+  const openFile = vi.fn();
   const canonical = vi.fn(async (path: string) => path);
   const fileStat = vi.fn(async (path: string) => ({
     dev: 1,
@@ -35,16 +51,18 @@ const editor = vi.hoisted(() => {
     isSymbolicLink: (): boolean => false,
   }));
   const folderListeners = new Set<() => void>();
-  const contentProviders: {
-    readonly scheme: string;
-    readonly provider: {
-      provideTextDocumentContent(value: ReturnType<typeof uri>): string;
-      onDidChange(listener: (value: ReturnType<typeof uri>) => void): {
-        dispose(): unknown;
-      };
-    };
-    readonly dispose: ReturnType<typeof vi.fn>;
-  }[] = [];
+  const reviewApproval = vi.fn();
+  const reviewOptions: CapturedReview[] = [];
+  const releaseReviewWorkspace = vi.fn();
+  const disposeReviews = vi.fn();
+  const review = vi.fn(async (options: CapturedReview) => {
+    reviewOptions.push(options);
+    options.canApply();
+    const approval = await reviewApproval(options);
+    if (approval !== "Apply Changes" && approval !== true) return false;
+    options.canApply();
+    return (await options.onApply()) !== false;
+  });
   function createPanel() {
     let html = "";
     let disposed = false;
@@ -111,9 +129,14 @@ const editor = vi.hoisted(() => {
     unlink,
     rmdir,
     replace,
+    openFile,
     canonical,
     fileStat,
-    contentProviders,
+    reviewApproval,
+    reviewOptions,
+    review,
+    releaseReviewWorkspace,
+    disposeReviews,
     notifyFolderChange: () => {
       for (const listener of folderListeners) listener();
     },
@@ -167,16 +190,6 @@ const editor = vi.hoisted(() => {
           folderListeners.add(listener);
           return { dispose: () => folderListeners.delete(listener) };
         },
-        registerTextDocumentContentProvider: vi.fn(
-          (
-            scheme: string,
-            provider: (typeof contentProviders)[number]["provider"],
-          ) => {
-            const dispose = vi.fn();
-            contentProviders.push({ scheme, provider, dispose });
-            return { dispose };
-          },
-        ),
       },
       window: {
         createWebviewPanel: vi.fn(() => {
@@ -200,6 +213,13 @@ vi.mock("../src/process_adapter.js", () => ({
   runRehearsalJson: editor.read,
   resolveWorkspaceRehearsal: editor.resolvePackage,
 }));
+vi.mock("../src/review_panel.js", () => ({
+  RehearsalReviewPanels: class {
+    review = editor.review;
+    releaseWorkspace = editor.releaseReviewWorkspace;
+    dispose = editor.disposeReviews;
+  },
+}));
 vi.mock("node:fs/promises", async (original) => ({
   ...(await original<typeof import("node:fs/promises")>()),
   mkdtemp: editor.temporary,
@@ -208,6 +228,7 @@ vi.mock("node:fs/promises", async (original) => ({
   rmdir: editor.rmdir,
   realpath: editor.canonical,
   lstat: editor.fileStat,
+  open: editor.openFile,
 }));
 
 import { RehearsalWorkspacePanels } from "../src/workspace_panel.js";
@@ -215,7 +236,6 @@ import { parseActivityData } from "../src/contracts.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 import { configurationFingerprint } from "../src/configuration_editor.js";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
-import { ConfigurationReviewDocuments } from "../src/configuration_review_documents.js";
 
 class Events<Value> {
   readonly listeners = new Set<(value: Value) => void>();
@@ -285,7 +305,6 @@ const busy = (seconds = 1, operationId = "a".repeat(64)): ProjectSnapshot => ({
 });
 
 const owners: RehearsalWorkspacePanels[] = [];
-const reviewOwners: ConfigurationReviewDocuments[] = [];
 const ownedDirectories: string[] = [];
 const harness = (initial = ready(), selectedKey = key) => {
   let current = initial;
@@ -333,9 +352,9 @@ const harness = (initial = ready(), selectedKey = key) => {
 
 afterEach(async () => {
   for (const owner of owners.splice(0)) owner.dispose();
-  for (const owner of reviewOwners.splice(0)) owner.dispose();
   editor.panels.splice(0);
-  editor.contentProviders.splice(0);
+  editor.reviewOptions.splice(0);
+  editor.reviewApproval.mockReset();
   editor.module.workspace.isTrusted = true;
   editor.module.workspace.workspaceFolders = [editor.folder];
   editor.module.workspace.openTextDocument.mockReset();
@@ -346,6 +365,7 @@ afterEach(async () => {
   editor.module.workspace.fs.writeFile.mockReset().mockResolvedValue(undefined);
   editor.read.mockReset();
   editor.resolvePackage.mockReset();
+  editor.openFile.mockReset();
   editor.canonical.mockReset().mockImplementation(async (path: string) => path);
   editor.fileStat.mockReset().mockImplementation(async (path: string) => ({
     dev: 1,
@@ -601,6 +621,7 @@ const reviewHarness = (
   };
   const workspaceKey = editor.uri(root).toString();
   const fixture = harness(snapshot, workspaceKey);
+  let diskText = source;
   const document = {
     uri: editor.uri(join(root, configPath)),
     isDirty: false,
@@ -612,10 +633,30 @@ const reviewHarness = (
       return this.text;
     },
     save: vi.fn(async () => {
+      diskText = document.text;
       document.isDirty = false;
       return true;
     }),
   };
+  editor.openFile.mockImplementation(async () => ({
+    stat: async () => ({
+      dev: 1,
+      ino: 501,
+      size: Buffer.byteLength(diskText),
+      isFile: () => true,
+    }),
+    read: async (
+      buffer: Buffer,
+      offset: number,
+      length: number,
+      position: number,
+    ) => {
+      const bytes = Buffer.from(diskText).subarray(position, position + length);
+      bytes.copy(buffer, offset);
+      return { bytesRead: bytes.byteLength, buffer };
+    },
+    close: async () => {},
+  }));
   const idle = {
     result: { data: { schemaVersion: 1, state: "idle", operation: null } },
   };
@@ -655,23 +696,9 @@ const reviewHarness = (
       },
     },
   };
-  editor.module.workspace.openTextDocument.mockImplementation(
-    async (request) =>
-      request?.toString().includes("rehearsal-configuration-review:")
-        ? {
-            uri: request,
-            isUntitled: false,
-            isDirty: false,
-            languageId: "diff",
-            getText: () =>
-              editor.contentProviders
-                .at(-1)!
-                .provider.provideTextDocumentContent(request),
-          }
-        : document,
-  );
+  editor.module.workspace.openTextDocument.mockResolvedValue(document);
   editor.module.window.showTextDocument.mockResolvedValue(undefined);
-  editor.module.window.showWarningMessage.mockResolvedValue("Apply Changes");
+  editor.reviewApproval.mockResolvedValue("Apply Changes");
   editor.resolvePackage.mockResolvedValue({
     configurationReviewSchema: modern ? 1 : null,
   });
@@ -699,6 +726,13 @@ const reviewHarness = (
     validation,
     metadata,
     workspaceKey,
+    persistDocument: () => {
+      diskText = document.text;
+      document.isDirty = false;
+    },
+    setDiskText: (value: string) => {
+      diskText = value;
+    },
     review: () =>
       (
         fixture.owner as unknown as {
@@ -738,6 +772,9 @@ const filesystemReview = async (configPath = "rehearsal.config.mjs") => {
     { name: "Independent fixture", uri: editor.uri(root) },
   ];
   const fixture = reviewHarness(false, root, configPath);
+  editor.openFile.mockImplementation((path: string, flags: string | number) =>
+    fs.open(path, flags),
+  );
   return {
     ...fixture,
     fs,
@@ -749,105 +786,112 @@ const filesystemReview = async (configPath = "rehearsal.config.mjs") => {
   };
 };
 
-describe("read-only configuration review documents", () => {
-  const documents = (
-    allowed: (workspaceKey: string) => boolean = () => true,
-  ) => {
-    const owner = new ConfigurationReviewDocuments(allowed);
-    reviewOwners.push(owner);
-    return owner;
-  };
-
-  it("uses opaque custom URIs and retains at most sixteen independent reviews", () => {
-    const owner = documents();
-    const changed = vi.fn();
-    owner.onDidChange(changed);
-    const uris = Array.from({ length: 17 }, (_, index) =>
-      owner.create("private-workspace-key", `Reviewed proposal ${index}`),
+describe("in-product configuration reviews", () => {
+  it("keeps a verified save successful when the subsequent project refresh rejects", async () => {
+    const fixture = reviewHarness(true);
+    fixture.projects.refreshWorkspace.mockRejectedValueOnce(
+      new Error("private refresh diagnostic"),
     );
-    expect(new Set(uris.map((uri) => uri.toString())).size).toBe(17);
-    for (const uri of uris) {
-      expect(uri.toString()).toMatch(
-        /rehearsal-configuration-review:\/[a-f0-9]{32}\/configuration-review\.diff$/u,
-      );
-      expect(uri.toString()).not.toContain("private-workspace-key");
-    }
-    expect(owner.provideTextDocumentContent(uris[0]!)).toContain("expired");
-    expect(owner.provideTextDocumentContent(uris[1]!)).toBe(
-      "Reviewed proposal 1",
-    );
-    expect(changed).toHaveBeenCalledWith(uris[0]);
-    expect(
-      owner.provideTextDocumentContent(editor.uri("unregistered") as never),
-    ).toContain("expired");
-    expect(editor.write).not.toHaveBeenCalled();
-  });
-
-  it("bounds individual UTF-8 bytes and retained bytes without clearing unrelated small reviews", () => {
-    const owner = documents();
-    expect(() => owner.create(key, "é".repeat(1024 * 1024 + 1))).toThrow(
-      "too large",
-    );
-    const first = owner.create("first", "a".repeat(2 * 1024 * 1024));
-    for (let index = 0; index < 4; index++)
-      owner.create(`remaining-${index}`, "b".repeat(2 * 1024 * 1024));
-    expect(owner.provideTextDocumentContent(first)).toContain("expired");
-    const small = owner.create("small", "Small independent review");
-    expect(owner.provideTextDocumentContent(small)).toBe(
-      "Small independent review",
-    );
-  });
-
-  it("isolates project removal, rejects revoked trust and disposes its registered provider", () => {
-    let trusted = true;
-    const owner = documents(() => trusted);
-    const first = owner.create("first", "First review");
-    const second = owner.create("second", "Second review");
-    const changed = vi.fn();
-    owner.onDidChange(changed);
-    owner.releaseWorkspace("first");
-    expect(changed).toHaveBeenCalledWith(first);
-    expect(owner.provideTextDocumentContent(first)).toContain("expired");
-    expect(owner.provideTextDocumentContent(second)).toBe("Second review");
-    trusted = false;
-    expect(owner.provideTextDocumentContent(second)).toContain("expired");
-    expect(() => owner.create("second", "Refused")).toThrow("trusted");
-    owner.dispose();
-    expect(changed).toHaveBeenCalledWith(second);
-    expect(editor.contentProviders.at(-1)!.dispose).toHaveBeenCalledOnce();
-    trusted = true;
-    expect(() => owner.create("second", "Disposed")).toThrow("trusted");
-    expect(owner.provideTextDocumentContent(second)).toContain("expired");
-  });
-
-  it("opens a read-only diff without an editable untitled document or file write", async () => {
-    const fixture = reviewHarness();
-    editor.module.window.showWarningMessage.mockResolvedValue(undefined);
     await fixture.owner.open(key);
     await fixture.review();
-    const review = editor.module.window.showTextDocument.mock.calls[0]![0];
-    expect(review.isUntitled).toBe(false);
-    expect(review.isDirty).toBe(false);
-    expect(review.languageId).toBe("diff");
-    expect(review.getText()).toContain("http://localhost:5176");
+
+    expect(await editor.review.mock.results[0]!.value).toBe(true);
+    expect(fixture.document.save).toHaveBeenCalledOnce();
+    expect(fixture.document.isDirty).toBe(false);
+    expect(fixture.document.text).toContain("http://localhost:5176");
+    expect(editor.module.workspace.applyEdit).toHaveBeenCalledOnce();
+    expect(fixture.projects.refreshWorkspace).toHaveBeenCalledOnce();
+    expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+    expect(editor.module.window.showInformationMessage).toHaveBeenCalledWith(
+      "Applied the reviewed Rehearsal configuration changes.",
+    );
+    expect(editor.module.window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("Configuration changes were saved"),
+    );
+    expect(editor.module.window.showWarningMessage).toHaveBeenCalledWith(
+      expect.stringContaining("do not apply the same proposal again"),
+    );
+    expect(
+      JSON.stringify(editor.module.window.showWarningMessage.mock.calls),
+    ).not.toContain("private refresh diagnostic");
+  });
+
+  it("invalidates pre-save form drafts on return even when inspection metadata remains stale", async () => {
+    const fixture = reviewHarness(true);
+    const staleMetadata = parseConfigurationMetadata(fixture.metadata);
+    fixture.update({
+      ...fixture.snapshot,
+      configurationMetadata: staleMetadata,
+    });
+    await fixture.owner.open(key);
+    const dashboard = editor.panels[0]!;
+    const draftIdentity = () =>
+      /const formDraftIdentity = "([a-f0-9]{64})";/u.exec(
+        dashboard.webview.html,
+      )?.[1];
+    const before = draftIdentity();
+    expect(before).toMatch(/^[a-f0-9]{64}$/u);
+    dashboard.changeVisibility(false);
+    const hiddenAssignments = dashboard.assignments.length;
+
+    // The maintained refresh resolves without replacing its pre-save snapshot.
+    await fixture.review();
+    expect(await editor.review.mock.results[0]!.value).toBe(true);
+    expect(fixture.document.save).toHaveBeenCalledOnce();
+    expect(
+      fixture.projects.snapshotFor(key)?.configurationMetadata?.sourceSha256,
+    ).toBe(staleMetadata.sourceSha256);
+    // Hidden webviews are deliberately not rerendered. The new revision must be
+    // reflected when Return to project makes the dashboard visible again.
+    expect(dashboard.assignments).toHaveLength(hiddenAssignments);
+    expect(draftIdentity()).toBe(before);
+
+    editor.reviewOptions[0]!.onReturn?.();
+    dashboard.changeVisibility(true);
+    expect(dashboard.reveal).toHaveBeenCalledWith(1, false);
+    const afterReturn = draftIdentity();
+    expect(afterReturn).toMatch(/^[a-f0-9]{64}$/u);
+    expect(draftIdentity()).not.toBe(before);
+    fixture.update(fixture.projects.snapshotFor(key)!);
+    expect(draftIdentity()).toBe(afterReturn);
+    expect(fixture.projects.refreshWorkspace).toHaveBeenCalledOnce();
+    expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("opens an in-product diff without an editable document, native modal or file write on cancel", async () => {
+    const fixture = reviewHarness();
+    editor.reviewApproval.mockResolvedValue(undefined);
+    await fixture.owner.open(key);
+    const dashboard = editor.panels[0]!;
+    const html = dashboard.webview.html;
+    const assignments = dashboard.assignments.length;
+    await fixture.review();
+    const review = editor.reviewOptions[0]!;
+    expect(review.format).toBe("diff");
+    expect(review.path).toBe("rehearsal.config.mjs");
+    expect(review.detail).toContain("http://localhost:5176");
+    expect(review.changedFields).toEqual(["runtime.applicationUrl"]);
+    expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+    expect(editor.module.window.showWarningMessage).not.toHaveBeenCalled();
+    expect(dashboard.webview.html).toBe(html);
+    expect(dashboard.assignments).toHaveLength(assignments);
     for (const [request] of editor.module.workspace.openTextDocument.mock.calls)
       expect(request).not.toHaveProperty("content");
     expect(editor.write).not.toHaveBeenCalled();
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
     expect(fixture.document.save).not.toHaveBeenCalled();
   });
 
   it.each(["trust", "folder", "panel"] as const)(
-    "expires visible review content after its %s boundary is removed",
+    "releases an in-product review after its %s boundary is removed",
     async (change) => {
       const fixture = reviewHarness();
-      editor.module.window.showWarningMessage.mockResolvedValue(undefined);
+      editor.reviewApproval.mockResolvedValue(undefined);
       await fixture.owner.open(key);
       await fixture.review();
-      const review = editor.module.window.showTextDocument.mock.calls[0]![0];
-      const provider = editor.contentProviders.at(-1)!.provider;
-      const changed = vi.fn();
-      provider.onDidChange(changed);
-      expect(review.getText()).toContain("http://localhost:5176");
+      expect(editor.reviewOptions[0]!.detail).toContain(
+        "http://localhost:5176",
+      );
       if (change === "trust") {
         editor.module.workspace.isTrusted = false;
         fixture.update(fixture.snapshot);
@@ -855,13 +899,32 @@ describe("read-only configuration review documents", () => {
         editor.module.workspace.workspaceFolders = [];
         editor.notifyFolderChange();
       } else editor.panels[0]!.dispose();
-      expect(changed).toHaveBeenCalledWith(review.uri);
-      expect(provider.provideTextDocumentContent(review.uri)).toContain(
-        "expired",
-      );
+      expect(editor.releaseReviewWorkspace).toHaveBeenCalledWith(key);
       expect(editor.write).not.toHaveBeenCalled();
+      expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps the dashboard draft guard after cancelling an in-product configuration review", async () => {
+    const fixture = reviewHarness();
+    editor.reviewApproval.mockResolvedValue(undefined);
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    panel.receive({ type: "editing", editing: true });
+    const assignments = panel.assignments.length;
+    await fixture.review();
+    fixture.update({
+      ...fixture.snapshot,
+      readiness: { state: "READY", passed: 4, failed: 0, checks: [] },
+    });
+    expect(panel.assignments).toHaveLength(assignments);
+    expect(panel.webview.postMessage).toHaveBeenCalledWith({
+      type: "inspectionUpdated",
+      loading: false,
+    });
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+  });
 });
 
 describe("configuration review filesystem boundary", () => {
@@ -901,7 +964,7 @@ describe("configuration review filesystem boundary", () => {
       await fixture.fs.writeFile(fixture.path, fixture.source);
       await fixture.owner.open(fixture.workspaceKey);
       let approve: ((value: string) => void) | undefined;
-      editor.module.window.showWarningMessage.mockImplementationOnce(
+      editor.reviewApproval.mockImplementationOnce(
         () =>
           new Promise((done) => {
             approve = done;
@@ -997,7 +1060,7 @@ describe("asynchronous configuration review authority", () => {
     expect(editor.module.workspace.openTextDocument).not.toHaveBeenCalled();
     expect(editor.read).not.toHaveBeenCalled();
     expect(editor.resolvePackage).not.toHaveBeenCalled();
-    expect(editor.module.window.showWarningMessage).not.toHaveBeenCalled();
+    expect(editor.review).not.toHaveBeenCalled();
     expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
     expect(fixture.document.save).not.toHaveBeenCalled();
     expect(editor.write).not.toHaveBeenCalled();
@@ -1041,7 +1104,7 @@ describe("asynchronous configuration review authority", () => {
       const fixture = reviewHarness();
       await fixture.owner.open(key);
       let approve: ((value: string | undefined) => void) | undefined;
-      editor.module.window.showWarningMessage.mockImplementationOnce(
+      editor.reviewApproval.mockImplementationOnce(
         () =>
           new Promise((done) => {
             approve = done;
@@ -1052,7 +1115,7 @@ describe("asynchronous configuration review authority", () => {
       const reads = editor.read.mock.calls.length;
       await fixture.review();
       expect(editor.read).toHaveBeenCalledTimes(reads);
-      expect(editor.module.window.showWarningMessage).toHaveBeenCalledOnce();
+      expect(editor.reviewApproval).toHaveBeenCalledOnce();
       expect(editor.module.window.showInformationMessage).toHaveBeenCalledWith(
         "Another configuration review is already in progress for this project. Finish or dismiss it before starting another.",
       );
@@ -1096,7 +1159,7 @@ describe("asynchronous configuration review authority", () => {
       const reads = editor.read.mock.calls.length;
       await fixture.review();
       expect(editor.read).toHaveBeenCalledTimes(reads);
-      expect(editor.module.window.showWarningMessage).toHaveBeenCalledOnce();
+      expect(editor.reviewApproval).toHaveBeenCalledOnce();
       release!();
       await first;
       expect(editor.module.workspace.applyEdit).toHaveBeenCalledOnce();
@@ -1160,7 +1223,7 @@ describe("asynchronous configuration review authority", () => {
     });
     await fixture.owner.open(key);
     fixture.document.save.mockImplementation(async () => {
-      fixture.document.isDirty = false;
+      fixture.persistDocument();
       fixture.update({
         ...fixture.snapshot,
         configurationMetadata: parseConfigurationMetadata({
@@ -1178,6 +1241,175 @@ describe("asynchronous configuration review authority", () => {
     expect(fixture.document.save).toHaveBeenCalledOnce();
     expect(fixture.projects.refreshWorkspace).toHaveBeenCalledWith(key);
     expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+  });
+
+  it("confirms an exact save even when VS Code closes its hidden TextDocument", async () => {
+    const fixture = reviewHarness(true);
+    await fixture.owner.open(key);
+    fixture.document.save.mockImplementation(async () => {
+      fixture.persistDocument();
+      fixture.document.isClosed = true;
+      return true;
+    });
+    await fixture.review();
+    expect(fixture.document.save).toHaveBeenCalledOnce();
+    expect(editor.openFile).toHaveBeenCalledOnce();
+    expect(fixture.projects.refreshWorkspace).toHaveBeenCalledWith(key);
+    expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+    expect(editor.module.window.showInformationMessage).toHaveBeenCalledWith(
+      "Applied the reviewed Rehearsal configuration changes.",
+    );
+  });
+
+  it.each([false, true])(
+    "accepts only exact editor auto-save metadata after its approved edit (closed: %s)",
+    async (closed) => {
+      const fixture = reviewHarness(true);
+      fixture.update({
+        ...fixture.snapshot,
+        configurationMetadata: parseConfigurationMetadata(fixture.metadata),
+      });
+      await fixture.owner.open(key);
+      const apply = editor.module.workspace.applyEdit.getMockImplementation()!;
+      editor.module.workspace.applyEdit.mockImplementationOnce(async () => {
+        await apply();
+        fixture.persistDocument();
+        fixture.document.isClosed = closed;
+        fixture.update({
+          ...fixture.snapshot,
+          configurationMetadata: parseConfigurationMetadata({
+            ...fixture.metadata,
+            sourceSha256: configurationFingerprint(fixture.document.text),
+          }),
+        });
+        return true;
+      });
+      await fixture.review();
+      expect(editor.openFile).toHaveBeenCalledOnce();
+      expect(fixture.document.save).toHaveBeenCalledTimes(closed ? 0 : 1);
+      expect(fixture.projects.refreshWorkspace).toHaveBeenCalledWith(key);
+      expect(editor.module.window.showErrorMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["stale", "formatted", "different"] as const)(
+    "does not confirm a closed document when disk bytes are %s instead of the exact review",
+    async (change) => {
+      const fixture = reviewHarness(true);
+      await fixture.owner.open(key);
+      fixture.document.save.mockImplementation(async () => {
+        if (change === "formatted")
+          fixture.setDiskText(`${fixture.document.text}\n`);
+        if (change === "different")
+          fixture.setDiskText(fixture.document.text.replace("5176", "5177"));
+        fixture.document.isDirty = false;
+        fixture.document.isClosed = true;
+        return true;
+      });
+      await fixture.review();
+      expect(fixture.document.save).toHaveBeenCalledOnce();
+      expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+      expect(
+        editor.module.window.showInformationMessage,
+      ).not.toHaveBeenCalled();
+      expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+        expect.stringContaining("changed while saving"),
+      );
+    },
+  );
+
+  it("refuses changed file identity after a successful save without reading the replacement", async () => {
+    const fixture = reviewHarness(true);
+    await fixture.owner.open(key);
+    fixture.document.save.mockImplementation(async () => {
+      fixture.persistDocument();
+      editor.fileStat.mockImplementation(async (path: string) => ({
+        dev: 1,
+        ino: 999,
+        isFile: () => path.endsWith(".mjs"),
+        isDirectory: () => !path.endsWith(".mjs"),
+        isSymbolicLink: () => false,
+      }));
+      return true;
+    });
+    await fixture.review();
+    expect(editor.openFile).not.toHaveBeenCalled();
+    expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+    expect(editor.module.window.showInformationMessage).not.toHaveBeenCalled();
+    expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("file identity changed"),
+    );
+  });
+
+  it("refuses a different file opened after its reviewed path was checked", async () => {
+    const fixture = reviewHarness(true);
+    await fixture.owner.open(key);
+    const opened = await editor.openFile();
+    const read = vi.fn(opened.read);
+    const close = vi.fn(opened.close);
+    editor.openFile.mockResolvedValue({
+      ...opened,
+      stat: async () => ({
+        dev: 1,
+        ino: 999,
+        size: Buffer.byteLength(fixture.document.text),
+        isFile: () => true,
+      }),
+      read,
+      close,
+    });
+    await fixture.review();
+    expect(read).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+    expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("saved configuration could not be confirmed"),
+    );
+  });
+
+  it("opens without following links or blocking on a replaced non-regular file", async () => {
+    const fixture = reviewHarness(true);
+    await fixture.owner.open(key);
+    const opened = await editor.openFile();
+    editor.openFile.mockClear();
+    const read = vi.fn(opened.read);
+    const close = vi.fn(opened.close);
+    editor.openFile.mockResolvedValue({
+      ...opened,
+      stat: async () => ({ dev: 1, ino: 501, size: 0, isFile: () => false }),
+      read,
+      close,
+    });
+    await fixture.review();
+    const flags = editor.openFile.mock.calls[0]![1] as number;
+    expect(flags & filesystemConstants.O_NONBLOCK).toBe(
+      filesystemConstants.O_NONBLOCK,
+    );
+    expect(flags & filesystemConstants.O_NOFOLLOW).toBe(
+      filesystemConstants.O_NOFOLLOW,
+    );
+    expect(read).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+    expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+    expect(editor.module.window.showErrorMessage).toHaveBeenCalled();
+  });
+
+  it("rechecks dirty editor changes and authority after reading saved bytes", async () => {
+    const fixture = reviewHarness(true);
+    await fixture.owner.open(key);
+    const opened = await editor.openFile();
+    editor.openFile.mockResolvedValue({
+      ...opened,
+      close: async () => {
+        fixture.document.isDirty = true;
+      },
+    });
+    await fixture.review();
+    expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+    expect(editor.module.window.showInformationMessage).not.toHaveBeenCalled();
+    expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining("changed while confirming the save"),
+    );
   });
 
   it("does not accept unrelated metadata changes as its own completed save", async () => {
@@ -1238,7 +1470,7 @@ describe("asynchronous configuration review authority", () => {
       const fixture = reviewHarness(true);
       await fixture.owner.open(key);
       let approve: ((value: string) => void) | undefined;
-      editor.module.window.showWarningMessage.mockImplementationOnce(
+      editor.reviewApproval.mockImplementationOnce(
         () =>
           new Promise((done) => {
             approve = done;
@@ -1246,7 +1478,7 @@ describe("asynchronous configuration review authority", () => {
       );
       const reviewing = fixture.review();
       await vi.waitFor(() =>
-        expect(editor.module.window.showWarningMessage).toHaveBeenCalledOnce(),
+        expect(editor.reviewApproval).toHaveBeenCalledOnce(),
       );
       const reads = editor.read.mock.calls.length;
       if (change === "trust") editor.module.workspace.isTrusted = false;
@@ -1438,6 +1670,86 @@ describe("live workspace progress presentation", () => {
       'id="activity" class="workspace-page workspace-page--active"',
     );
     expect(panel.webview.html).toContain("3/3");
+  });
+
+  it("patches an opening sandbox into interactive and cleanup guidance without replacing its document", async () => {
+    const open = (
+      seconds: number,
+      phase: "application-start" | "interactive-session" | "cleanup",
+    ): ProjectSnapshot => {
+      const value = busy(seconds);
+      return {
+        ...value,
+        activity: {
+          ...value.activity!,
+          operation: {
+            ...value.activity!.operation!,
+            kind: "open",
+            progress: {
+              ...value.activity!.operation!.progress!,
+              currentStage: {
+                ...value.activity!.operation!.progress!.currentStage!,
+                phase,
+              },
+            },
+          },
+        },
+      };
+    };
+    const fixture = harness(open(1, "application-start"));
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    panel.receive({ type: "navigate", page: "runtime" });
+    for (const [seconds, phase, state] of [
+      [2, "interactive-session", "interactive"],
+      [3, "interactive-session", "interactive"],
+      [4, "cleanup", "closing"],
+    ] as const) {
+      fixture.update(open(seconds, phase));
+      expect(panel.assignments).toHaveLength(1);
+      expect(panel.webview.postMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          type: "operationProgressUpdated",
+          sandboxSessionState: state,
+        }),
+      );
+    }
+  });
+
+  it("opens an explicit loopback address during a sandbox session without a CLI or terminal", async () => {
+    const fixture = harness(busy());
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    panel.receive({ type: "openApplication", url: "http://127.0.0.1:43340/" });
+    await vi.waitFor(() =>
+      expect(editor.module.env.openExternal).toHaveBeenCalledTimes(1),
+    );
+    expect(
+      editor.module.env.openExternal.mock.calls[0]?.[0]?.toString(),
+    ).toContain("127.0.0.1:43340");
+    expect(editor.read).not.toHaveBeenCalled();
+    expect(fixture.projects.refreshWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("refuses unsafe local-address requests and requests after trust or workspace loss", async () => {
+    const fixture = harness(busy());
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    for (const url of [
+      "https://example.com:43340/",
+      "http://user:secret@127.0.0.1:43340/",
+      "http://localhost:43340/?token=x",
+      "http://127.0.0.1:80/",
+    ])
+      panel.receive({ type: "openApplication", url });
+    editor.module.workspace.isTrusted = false;
+    panel.receive({ type: "openApplication", url: "http://127.0.0.1:43340/" });
+    editor.module.workspace.isTrusted = true;
+    editor.module.workspace.workspaceFolders = [];
+    panel.receive({ type: "openApplication", url: "http://127.0.0.1:43340/" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(editor.module.env.openExternal).not.toHaveBeenCalled();
+    expect(editor.read).not.toHaveBeenCalled();
   });
 
   it("removes stale editable controls on the first unsafe busy transition", async () => {
@@ -1673,6 +1985,7 @@ describe("live workspace progress presentation", () => {
     expect(panel.webview.postMessage).toHaveBeenCalledWith({
       type: "operationProgressUpdated",
       html: expect.stringContaining("Phase evidence is unavailable"),
+      sandboxSessionState: null,
     });
   });
 

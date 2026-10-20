@@ -2,21 +2,22 @@
 
 ## Product identity
 
-| Decision      | Product-candidate contract                                                |
-| ------------- | ------------------------------------------------------------------------- |
-| Repository    | Separate sibling repository: `rehearsal-vscode`                           |
-| Visibility    | Public repository and reviewed GitHub VSIX prereleases                    |
-| Display name  | Rehearsal                                                                 |
-| Extension ID  | `rehearsal-db.rehearsal`                                                  |
-| Publisher     | `rehearsal-db` is reserved in metadata; no Marketplace account is assumed |
-| Product owner | Rehearsal project, administered by Ddupasquier                            |
-| License       | Free Starter for included features; Rehearsal core remains MIT            |
-| Version       | Owned by `package.json`; each released VSIX identifies its exact version  |
+| Decision      | Product-candidate contract                                                 |
+| ------------- | -------------------------------------------------------------------------- |
+| Repository    | Separate sibling repository: `rehearsal-vscode`                            |
+| Visibility    | Public repository and reviewed GitHub VSIX prereleases                     |
+| Display name  | Rehearsal                                                                  |
+| Extension ID  | `rehearsal-db.rehearsal`                                                   |
+| Publisher     | Registered Marketplace publisher `rehearsal-db`, administered by the owner |
+| Product owner | Rehearsal project, administered by Ddupasquier                             |
+| License       | Free Starter for included features; Rehearsal core remains MIT             |
+| Version       | Owned by `package.json`; each released VSIX identifies its exact version   |
 
-Public GitHub source and VSIX prereleases do not establish a Marketplace listing or paid
-launch. Each artifact still follows its reviewed release decision. Marketplace publication,
-publisher/account creation, public pricing, payment setup and a paid launch require their
-own approval; repository visibility is not that approval.
+Public GitHub source and VSIX previews do not establish a Marketplace listing or paid
+launch. Each artifact still follows its reviewed release decision and publisher/account
+controls. The [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/)
+owns the current distribution channels; a registered publisher alone is not a listed
+extension. Public pricing, payment setup and a paid launch require separate approval.
 The manifest's `private: true` prevents npm publication; it does not describe GitHub
 repository visibility or prevent reviewed VSIX packaging.
 
@@ -54,6 +55,9 @@ repository visibility or prevent reviewed VSIX packaging.
   Activity spacing separates summary, comparison/export,
   command, and history sections. Nested cards do not add their own outer margins;
   comparison and export cards align in wide views and stack in compact views.
+- Related inventory actions share one wrapping action group so row gaps are retained
+  at intermediate card widths. Baseline identifier backgrounds fit their content,
+  bounded by the card width, rather than stretching into unused space.
 - Page and card container queries own content layout independently of the window's
   navigation breakpoint. Two-column pages stack when their actual usable width is
   insufficient; migration filters become two columns or one column inside their card.
@@ -77,18 +81,27 @@ repository visibility or prevent reviewed VSIX packaging.
 - Activity places cancellation before progress and historical receipts, and offers it
   only for an operation started by this extension. The host still checks ownership and
   asks for confirmation before closing its terminal.
-- Configuration reviews use opaque, read-only in-memory documents, not editable Untitled
-  files. Retention is bounded to 16 reviews, 2 MiB each and 8 MiB total; evicted or closed
-  project reviews show expiry guidance. Trust, workspace and canonical file identity are
+- Configuration, image-cleanup and stale-stop reviews share a non-modal, escaped,
+  read-only review webview. Details remain visible before explicit Apply; configuration
+  saves do not cover the diff with a native modal. Destructive resource operations retain
+  their concise final native confirmation and core-owned exact digest checks. Retention
+  is bounded to 16 reviews, 2 MiB each and 8 MiB total; excess reviews fail closed rather
+  than evicting an active review. Trust, workspace and canonical file identity are
   rechecked throughout approval and before saving. Diffs align unchanged suffixes so a
   single insertion does not mislabel all later settings as changes.
+  After an approved edit, editor auto-save may publish only the exact reviewed source
+  fingerprint through those guards. Success additionally requires a bounded byte-exact
+  read from the original canonical regular file; a hidden editor document closing after
+  save is not itself a failure. Changed bytes, file identity, trust or project state still
+  fail closed, with no automatic retry or overwrite.
 - Guided actions remain available from the keyboard. Read-only refreshes stay inside the
   adapter; approved operations open their exact public command in a project-scoped
   integrated terminal.
 - English is the only reviewed prototype language. User-facing strings must remain easy
   to extract before a public localization commitment.
-- Development checkouts update through Git; packaged GitHub prereleases update through
-  explicit VSIX installation. No automatic extension-update channel is installed.
+- Development checkouts update through Git. Packaged GitHub prereleases support explicit
+  manual VSIX installation or separately opted-in verified automatic installation. Core
+  npm-package automatic updates have an independent user choice.
 
 ## Runtime boundary
 
@@ -121,8 +134,38 @@ activity before launch. Saved-preference drift cancels an in-flight advisory; Me
 checks are not cross-window atomic locking, a filesystem lock or artifact-integrity
 certification. Existing
 watchers retire obsolete compatibility warnings after external dependency updates.
-Extension advice opens a fixed GitHub release with reviewed VSIX/checksum assets, never
-a package-supplied URL or a global installer. Offline/unsafe metadata stays unknown.
+Manual extension advice opens a fixed GitHub release with reviewed VSIX/checksum assets,
+never a package-supplied URL. Automatic installation requires the separate user opt-in
+and artifact/coordination checks below. Offline/unsafe metadata stays unknown.
+
+The update prompt is a non-modal webview with independent extension and CLI checkboxes,
+initially off. Only an explicit Save preferences or eligible Update choice saves changed
+flags to machine-scoped `rehearsal.automaticUpdates` user configuration. Repository and
+workspace overrides are not consent. Configure Update Checks exposes the same controls
+without requiring a new release. Closing, Later and Skip do not save checkbox drafts.
+Existing metadata-check consent alone never grants installation authority.
+
+Automatic extension updates use fixed official GitHub tag/asset URLs, bounded HTTPS
+downloads and an allowlisted GitHub-to-release-assets redirect. SHA-256, bounded ZIP
+contents, embedded publisher/name/version and supported engine ranges are verified before
+VS Code's documented installExtension command receives the private local file. The
+checksum is integrity evidence from the same trusted GitHub release, not independent
+publisher authentication. A cross-window exclusive installation lock, fresh idle activity
+and revocable user consent precede dispatch. No force reload is requested; the loaded
+version badge remains truthful while VS Code may require a later restart. Interrupted,
+unknown lock ownership fails closed instead of being stolen.
+
+The CLI opt-in retains registry/npm provenance, exact manifest/lock identity, dependency
+group and compatibility-series checks. It skips repeated install approval only while the
+separate user opt-in remains current, adds --ignore-scripts/--no-audit/--no-fund, and refuses
+dirty dependency documents or active/unknown terminal execution. Automatic installs have
+project-scoped cross-window coordination and never fall back to an unobserved shell.
+Queued idle deferrals resume on project evidence changes, not a runtime polling timer.
+A bounded daily metadata scheduler runs only while either automatic option is enabled;
+disabling both or disposing the host clears it, with no overlapping scheduler callbacks.
+Metadata-only advisory opt-ins retain their project-opening cadence.
+Dispatch is not completion: terminal exit and fresh inspection supply the actual outcome.
+Neither update path runs migrations or database lifecycle commands.
 
 The Environments page reads `environments --json` only when the installed package
 declares `rehearsalContracts.resourceInventory: 1`. Core owns Docker inspection,
@@ -138,6 +181,20 @@ search/sort/filter state is harmless editor preference data; environment labels 
 protection remain core-owned configuration fields. The configuration editor can insert or
 replace only those two literal fields in one plain runtime object and refuses ambiguous
 or expression-based forms.
+
+Resource lists independently paginate the validated inventory, defaulting to five
+cards with a shared 5/10/25 page-size control. Search, sorting and target/profile
+filters apply before slicing; changed filters reset pages and refreshed inventories
+clamp stale page indexes. Target summaries and retained baseline lists have separate
+cached rows and independent page state, including the Data & auth baseline list.
+Off-page cards are detached from the live document while
+their bounded cached nodes retain form drafts, expanded details and eligible image
+selections. Page state belongs only to the webview recovery state, not core settings.
+Image-selection persistence uses the complete cached checkbox collection, not just
+the mounted page. Bulk selection affects only visible current-page safe candidates;
+selected off-page images remain explicit in the count and the existing 100-image
+limit, exact preview and host/core revalidation remain unchanged. Paging requests no
+new inventory, runs no command and cannot broaden resource ownership or deletion.
 
 Each inventory environment may supply optional provenance schema 1. It projects only
 bounded, target-local runtime receipt fields: the recorded restore-writer Rehearsal version,
@@ -264,9 +321,11 @@ idle-operation evidence, then offers retry, timeout settings, Doctor, diagnostic
 support. Unknown values remain honest, but never become a dead end.
 
 Operational actions do not create a second runtime engine. The extension builds only an
-allowlisted public command, previews the exact command in a modal for every terminal action,
-adds stronger language for dependency writes and risky runtime changes, then runs it in a
-workspace-scoped integrated terminal. Activity cancellation closes only an owned terminal;
+allowlisted public command and previews user-triggered terminal actions with explicit
+approval, adding stronger language for dependency writes and risky runtime changes.
+Compatible automatic CLI updates use the independent saved consent and repeated guards
+described above instead of another install prompt. Both routes use a workspace-scoped
+integrated terminal. Activity cancellation closes only an owned terminal;
 it never signals an operation merely discovered through core's activity contract. Rehearsal core
 continues to own exact-plan digests, confirmation flags, operation locks, local-only
 validation, cancellation, rollback, and cleanup. Candidate execution is bound to the
@@ -298,6 +357,23 @@ Without shell integration, later execution events supply no exit evidence; closi
 the terminal retains an unverified receipt, including after a reload. Repeated
 cancellation requests share one approval/cleanup observation, and approval is
 followed by a fresh ownership, workspace-presence and trust check.
+New terminals wait at most five seconds for shell integration and dispatch immediately
+when it arrives. The current integration is re-read after final asynchronous
+authorization, avoiding a needless compatibility fallback if it arrived meanwhile.
+Diagnostics identify integration versus compatibility dispatch and distinguish running
+owned/manual commands, fallback/unknown completion, and a pending completion refresh.
+No command arguments, environment values or terminal contents are logged for this check.
+Each extension-host session reuses its own project terminal only after confirmed shell
+completion and an exact local workspace-directory check. A live owned action, manual
+foreground shell execution, unknown exit, or pending completion refresh blocks another
+dispatch and focuses the terminal with recovery guidance. Core activity reporting idle
+does not establish shell completion. Closed/removed terminals lose ownership immediately;
+an altered or unreported directory requires a new terminal rather than sending a command
+to an uncertain project. Launch reservations precede asynchronous receipt writes and
+directory/trust/ownership checks repeat before dispatch. Cancellation approval is bound
+to the captured activity ID and exact execution, not just a reusable terminal object, so
+an older dialog cannot close a newer command. Previously opened or user-created terminals
+are never adopted, and disposal does not kill retained user processes.
 Legacy unknown-exit receipts retain their unverified outcome; their old terminal-close
 timestamp is not completion evidence. While cleanup observation is pending, guard
 rechecks abort the owned read on trust/workspace loss and prevent further CLI reads.
@@ -308,13 +384,36 @@ It gives startup at most 30 seconds to expose a busy operation; absence or timeo
 does not mean success. Busy/stale views discard potentially inconsistent project
 details and render only strict public activity. Busy-to-idle triggers one full
 actual refresh. Terminal end, removal, trust loss, disposal and deadline abort the
-owned read and timers. No daemon or idle workspace polling exists; long sessions
-use explicit Refresh after the bounded monitor ends. Cancellation completion uses
+owned read and timers. If an observed busy session reaches the five-minute limit,
+one normal read-only inspection reconciles actual state. The monitoring deadline
+alone never becomes a project-check failure or a successful completion. This does
+not extend the polling budget; real inspection failures remain actionable errors.
+No daemon or idle workspace polling exists; later samples in long sessions use
+explicit Refresh or the exact owned terminal-completion event. Cancellation completion uses
 its separate 30-second observer only after active monitoring is disposed.
+A newer validated active/attention sample retires an older full inspection;
+abandoned bootstrap/read results cannot overwrite it or clear a newer refresh's
+loading state. Unknown or malformed observations do not authorize stale project facts.
+
+An active `open` session is distinct from a background mutation. Only busy public
+activity with a running `interactive-session` phase identifies a ready hands-on
+sandbox; missing phase evidence remains an open session of unknown readiness.
+Startup, interactive use and cleanup have separate dashboard and Projects labels.
+Readiness, baseline and migration inspection are explicitly on hold, not described
+as a paused application. The active Overview offers an explicit loopback-address
+input using the existing browser message and endpoint validator. Public activity
+contains no application address: the input starts blank unless the user saved a
+valid custom address; it is a browser preference, not current configuration evidence.
+No stale configuration, guessed port,
+terminal-output parsing, extra locked project query or health claim fills that gap.
+Opening an address starts no CLI command and changes no project configuration.
+The host rechecks trust and workspace presence before opening the browser.
+Semantic session-state changes patch fixed text nodes alongside progress, without
+replacing the address input, navigation, focus or document on each sample.
 
 An active operation gets one full safety render to remove potentially stale project
-details. Further samples of that same operation patch only the bounded, escaped progress
-region in place; elapsed-time ticks do not replace the dashboard document. Navigation,
+details. Further samples of that same operation patch the bounded, escaped progress
+region and fixed session-state text in place; elapsed-time ticks do not replace the dashboard document. Navigation,
 keyboard focus, scroll position and expanded evidence remain stable. Operation identity,
 workspace/configuration, inspection mode or safety-state changes invalidate that partial
 path. Failed message delivery falls back only for the still-current document, and a
@@ -327,7 +426,7 @@ ordinary document restoration retains its existing saved-scroll behavior.
 Known literal configuration fields may be edited through the workbench. The editor accepts
 only bounded loopback URLs, commands, lifecycle enums, and retention counts; requires one
 unambiguous literal per field; shows an exact diff; refuses dirty or concurrently changed
-documents; and asks for modal approval before applying and saving. It does not parse or
+documents; and asks for explicit Apply in its non-modal review tab before saving. It does not parse or
 rewrite arbitrary JavaScript expressions. Core remains the authority that validates the
 complete file before any later operation.
 The simple form proposes only semantic changes from its initial displayed values; untouched
@@ -336,6 +435,11 @@ guard after the browser reset, while edits in other forms remain protected.
 Structured review also checks public activity before review and immediately before save.
 Busy, stale, and invalid states refuse the edit. Unsaved forms survive ordinary
 inspection updates; users review or explicitly discard them before the view refreshes.
+Switching to a review tab retains bounded drafts and opener focus in the existing webview
+state, not global storage. Restoration requires an unchanged primary-source fingerprint
+and known form controls; password/file/hidden fields and independently sourced secondary
+configuration forms are excluded. Saving expires the old draft identity. Unsafe project
+states still take precedence over drafts.
 The browser address and application readiness endpoint are independent reviewed fields.
 Changing the browser URL preserves the health-check URL. Change its origin or path only
 through an explicit structured proposal or manual configuration edit. The provider's

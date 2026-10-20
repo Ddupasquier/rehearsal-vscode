@@ -1,5 +1,6 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import type { WorkspaceActionId } from "./action_catalog.js";
+import { openSandboxSessionState } from "./operation_progress.js";
 
 export interface OverviewItem {
   readonly id: string;
@@ -100,18 +101,26 @@ export const overviewItems = (
   }
   if (snapshot.activity) {
     const operation = snapshot.activity.operation;
-    const label = {
-      idle: "No Rehearsal operation in progress",
-      busy: "Rehearsal operation in progress",
-      stale: "Previous Rehearsal operation needs review",
-      invalid: "Rehearsal operation state needs review",
-    }[snapshot.activity.state];
+    const sandboxState = openSandboxSessionState(snapshot);
+    const label = sandboxState
+      ? {
+          interactive: "Sandbox running",
+          opening: "Opening sandbox",
+          closing: "Closing sandbox",
+          unknown: "Sandbox session open",
+        }[sandboxState]
+      : {
+          idle: "No Rehearsal operation in progress",
+          busy: "Rehearsal operation in progress",
+          stale: "Previous Rehearsal operation needs review",
+          invalid: "Rehearsal operation state needs review",
+        }[snapshot.activity.state];
     const tooltip =
       operation === null
         ? snapshot.activity.state === "idle"
           ? "This workspace has no active Rehearsal mutation."
           : "Rehearsal found an invalid operation lock and did not change it. Run activity, status, doctor, and verify in the terminal before retrying a mutation."
-        : `${operation.kind} · started ${operation.startedAt}${operation.rehearsalVersion ? ` · Rehearsal ${operation.rehearsalVersion}` : ""}`;
+        : `${operation.kind} · started ${operation.startedAt}${operation.rehearsalVersion ? ` · Rehearsal ${operation.rehearsalVersion}` : ""}${sandboxState ? "\nProject inspection waits for this session to close; this does not pause the application. Open the dashboard for the local-address control." : ""}`;
     items.push({
       id: "activity",
       label,

@@ -113,6 +113,127 @@ summary {
   transform: translateY(0);
 }
 
+/* Review details remain readable before any save or final destructive approval. */
+.review-panel__main {
+  width: min(100%, 1100px);
+  min-width: 0;
+  margin: 0 auto;
+  padding: clamp(16px, 4vw, 40px);
+  padding-bottom: 0;
+}
+
+.review-panel__header h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(24px, 4vw, 36px);
+  line-height: 1.2;
+  letter-spacing: -0.03em;
+}
+
+.review-panel__header p,
+.review-panel__diff-statistics {
+  color: var(--rh-muted);
+}
+
+.review-panel__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-left: 20px;
+}
+
+.review-panel__fields li {
+  min-width: 0;
+}
+
+.review-panel__detail-region {
+  min-width: 0;
+  margin: 20px 0;
+}
+
+.review-panel__detail {
+  max-width: 100%;
+  margin: 0;
+  padding: 16px;
+  border: 1px solid var(--rh-border);
+  border-radius: 10px;
+  background: var(--rh-surface-soft);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.review-panel__detail code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  white-space: inherit;
+}
+
+.review-panel__line--added {
+  background: var(
+    --vscode-diffEditor-insertedTextBackground,
+    var(--rh-accent-soft)
+  );
+}
+
+.review-panel__line--removed {
+  background: var(
+    --vscode-diffEditor-removedTextBackground,
+    color-mix(in srgb, var(--rh-error-text) 15%, transparent)
+  );
+}
+
+.review-panel__line--header {
+  color: var(--rh-muted);
+}
+
+.review-panel__actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 16px 0;
+  border-top: 1px solid var(--rh-border);
+  background: var(--vscode-editor-background, #0b1217);
+}
+
+.review-panel__actions .action-group {
+  margin: 0;
+}
+
+.review-panel__actions button {
+  min-height: 36px;
+}
+
+.review-panel__actions p {
+  margin: 0 0 12px;
+}
+
+.review-panel__actions [role="alert"] {
+  color: var(--rh-error-text);
+}
+
+.update-preference {
+  margin: 20px 0;
+}
+
+.update-release-list {
+  margin-bottom: 20px;
+}
+
+.update-preference .resource-protection {
+  align-items: flex-start;
+  gap: 10px;
+  font-size: var(--vscode-font-size, 13px);
+}
+
+.update-preference .control-note {
+  margin: 8px 0 0;
+  line-height: 1.65;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
@@ -1470,6 +1591,10 @@ summary {
   font-size: 10px;
 }
 
+.empty-state > .button {
+  margin-top: 12px;
+}
+
 .empty-state--panel {
   padding: 40px;
   border: 1px dashed var(--rh-border);
@@ -1825,6 +1950,48 @@ summary {
   display: grid;
   gap: 12px;
   margin-top: 14px;
+}
+
+.resource-pagination {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--rh-border);
+}
+
+.resource-pagination__range {
+  flex: 1 1 180px;
+  min-width: 0;
+  color: var(--rh-muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.resource-pagination__controls {
+  display: flex;
+  flex: 0 1 180px;
+  min-width: 0;
+  max-width: 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.resource-pagination__controls .button {
+  flex: 1 1 82px;
+  min-width: 0;
+  min-height: 34px;
+}
+
+#resource-page-size {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .resource-card {
@@ -2192,6 +2359,8 @@ input::placeholder {
 }
 
 .version-row code {
+  width: fit-content;
+  max-width: 100%;
   margin-top: 4px;
   overflow-wrap: anywhere;
 }

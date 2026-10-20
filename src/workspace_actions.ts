@@ -1,5 +1,13 @@
-import { relative, resolve, sep } from "node:path";
-import { randomUUID } from "node:crypto";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  unlink,
+  type FileHandle,
+} from "node:fs/promises";
 import * as vscode from "vscode";
 import { runRehearsalJson } from "./process_adapter.js";
 import { parseActivityData } from "./contracts.js";
@@ -16,6 +24,8 @@ import {
   type WorkspaceActionId,
 } from "./action_catalog.js";
 import type { RehearsalTreeProvider } from "./tree_provider.js";
+import type { RehearsalReviewPanels } from "./review_panel.js";
+import type { ProjectSnapshot } from "./project_snapshot.js";
 import {
   activityStorageKey,
   reconcileActivityHistory,
@@ -34,15 +44,101 @@ const inside = (root: string, target: string): boolean => {
   return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
 };
 
+interface PackageUpdateLease {
+  readonly path: string;
+  readonly handle: FileHandle;
+}
+
+const ownsPackageUpdateLease = async (
+  lease: PackageUpdateLease,
+): Promise<boolean> => {
+  try {
+    const [held, current] = await Promise.all([
+      lease.handle.stat(),
+      lstat(lease.path),
+    ]);
+    return (
+      held.dev === current.dev && held.ino === current.ino && current.isFile()
+    );
+  } catch {
+    return false;
+  }
+};
+
+// The file is deliberately not reclaimed by age or PID. An interrupted editor
+// cannot prove that the package manager it launched has stopped modifying files.
+const releasePackageUpdateLease = async (
+  lease: PackageUpdateLease,
+): Promise<void> => {
+  try {
+    const [held, current] = await Promise.all([
+      lease.handle.stat(),
+      lstat(lease.path),
+    ]);
+    if (
+      held.dev === current.dev &&
+      held.ino === current.ino &&
+      current.isFile()
+    )
+      await unlink(lease.path);
+  } catch {
+    // Missing, replaced or unavailable coordination storage must not be removed.
+  } finally {
+    await lease.handle.close().catch(() => {});
+  }
+};
+
+const acquirePackageUpdateLease = async (
+  directory: string,
+  projectRoot: string,
+): Promise<PackageUpdateLease | undefined> => {
+  let lease: PackageUpdateLease | undefined;
+  try {
+    if (!isAbsolute(directory) || resolve(directory) === sep) return;
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const root = await realpath(directory);
+    const ownerDirectory = join(root, "package-update-leases");
+    await mkdir(ownerDirectory, { mode: 0o700 }).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code !== "EEXIST") throw error;
+      },
+    );
+    const owner = await lstat(ownerDirectory);
+    if (!owner.isDirectory() || owner.isSymbolicLink()) return;
+    const project = await realpath(projectRoot);
+    const key = createHash("sha256").update(project).digest("hex");
+    const path = join(ownerDirectory, `${key}.lock`);
+    const handle = await open(path, "wx", 0o600);
+    lease = { path, handle };
+    await handle.writeFile(JSON.stringify({ version: 1, token: randomUUID() }));
+    await handle.sync();
+    return lease;
+  } catch {
+    if (lease) await releasePackageUpdateLease(lease);
+    return;
+  }
+};
+
 export class RehearsalWorkspaceActions implements vscode.Disposable {
   private disposed = false;
   private readonly subscriptions: vscode.Disposable[] = [];
   private readonly terminalWorkspaces = new Map<vscode.Terminal, string>();
   private readonly terminalActivities = new Map<vscode.Terminal, string>();
+  private readonly packageUpdateLeases = new Map<
+    vscode.Terminal,
+    { readonly id: string; readonly lease: PackageUpdateLease }
+  >();
   private readonly terminalExecutions = new Map<
     vscode.Terminal,
     vscode.TerminalShellExecution
   >();
+  private readonly shellExecutions = new Map<
+    vscode.Terminal,
+    vscode.TerminalShellExecution
+  >();
+  private readonly settlingTerminals = new Set<vscode.Terminal>();
+  private readonly unverifiedTerminals = new Set<vscode.Terminal>();
+  private readonly fallbackTerminals = new Set<vscode.Terminal>();
   private readonly pendingCancellations = new Set<string>();
   private readonly workspaceTokens = new Map<string, string>();
   private readonly completionObservers = new Map<
@@ -65,24 +161,53 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     private readonly projects: RehearsalTreeProvider,
     private readonly output: vscode.LogOutputChannel,
     private readonly workspaceState: vscode.Memento,
+    private readonly reviews?: RehearsalReviewPanels,
   ) {
     this.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(({ removed }) => {
         for (const folder of removed) {
           const key = folder.uri.toString();
+          this.reviews?.releaseWorkspace(key);
           this.completionObservers.get(key)?.dispose();
           this.completionObservers.delete(key);
           this.activeMonitors.get(key)?.observer.dispose();
           this.activeMonitors.delete(key);
+          for (const [terminal, owner] of this.terminalWorkspaces) {
+            if (owner !== key) continue;
+            this.terminalWorkspaces.delete(terminal);
+            this.terminalActivities.delete(terminal);
+            this.terminalExecutions.delete(terminal);
+            this.shellExecutions.delete(terminal);
+            this.unverifiedTerminals.delete(terminal);
+            this.fallbackTerminals.delete(terminal);
+          }
         }
       }),
       vscode.window.onDidCloseTerminal((terminal) => {
+        void this.releaseTerminalPackageLease(terminal);
         const workspaceKey = this.terminalWorkspaces.get(terminal);
         if (!workspaceKey) return;
         this.terminalWorkspaces.delete(terminal);
+        this.shellExecutions.delete(terminal);
+        this.unverifiedTerminals.delete(terminal);
         void this.finishTerminalAction(terminal, workspaceKey, null);
       }),
+      vscode.window.onDidStartTerminalShellExecution((event) => {
+        if (this.terminalWorkspaces.has(event.terminal))
+          this.shellExecutions.set(event.terminal, event.execution);
+      }),
       vscode.window.onDidEndTerminalShellExecution((event) => {
+        const trackedShell =
+          this.shellExecutions.get(event.terminal) === event.execution;
+        const trackedAction =
+          this.terminalExecutions.get(event.terminal) === event.execution;
+        if (trackedShell) this.shellExecutions.delete(event.terminal);
+        if (
+          event.exitCode === undefined &&
+          (trackedShell || trackedAction) &&
+          this.terminalWorkspaces.has(event.terminal)
+        )
+          this.unverifiedTerminals.add(event.terminal);
         const workspaceKey = this.terminalWorkspaces.get(event.terminal);
         if (
           !workspaceKey ||
@@ -288,7 +413,16 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     this.terminalWorkspaces.clear();
     this.workspaceTokens.clear();
     this.terminalActivities.clear();
+    // Closing the editor is not proof that its npm child has exited. Keep the
+    // exclusive file, but do not retain descriptors after disposal.
+    for (const { lease } of this.packageUpdateLeases.values())
+      void lease.handle.close().catch(() => {});
+    this.packageUpdateLeases.clear();
     this.terminalExecutions.clear();
+    this.shellExecutions.clear();
+    this.settlingTerminals.clear();
+    this.unverifiedTerminals.clear();
+    this.fallbackTerminals.clear();
     this.pendingCancellations.clear();
     for (const observer of this.completionObservers.values())
       observer.dispose();
@@ -307,85 +441,184 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     version: string,
     verifyIdentity: () => Promise<boolean>,
     group: import("./update_advisory.js").DependencyGroup,
-  ): Promise<void> {
+    options?: {
+      readonly automatic?: boolean;
+      readonly coordinationDirectory?: string;
+    },
+  ): Promise<boolean> {
+    const automatic = options?.automatic === true;
+    if (automatic && !options?.coordinationDirectory) return false;
     if (
       !isEligibleCoreUpdate(installedVersion, version) ||
       !["dependencies", "devDependencies", "optionalDependencies"].includes(
         group,
       )
     )
-      return;
+      return false;
     const folder = vscode.workspace.workspaceFolders?.find(
       ({ uri }) => uri.toString() === workspaceKey,
     );
     const snapshot = this.projects.snapshotFor(workspaceKey);
-    if (!folder || !snapshot || snapshot.version !== installedVersion) return;
-    const allowed = async () => {
-      if (
-        this.disposed ||
-        !vscode.workspace.isTrusted ||
-        this.projects.snapshotFor(workspaceKey) !== snapshot ||
-        !vscode.workspace.workspaceFolders?.some(
-          ({ uri }) => uri.toString() === workspaceKey,
-        ) ||
-        !(await verifyIdentity())
+    if (!folder || !snapshot || snapshot.version !== installedVersion)
+      return false;
+    const manager = snapshot.discovery?.profile.detected.find(
+      (item) => item.id === "package.manager",
+    )?.value;
+    if (
+      automatic &&
+      (folder.uri.scheme !== "file" ||
+        (manager !== undefined && manager !== "npm"))
+    )
+      return false;
+    if (
+      automatic &&
+      [...this.terminalWorkspaces.entries()].some(
+        ([terminal, owner]) =>
+          owner === workspaceKey &&
+          terminal.exitStatus === undefined &&
+          (this.terminalActivities.has(terminal) ||
+            this.shellExecutions.has(terminal) ||
+            this.unverifiedTerminals.has(terminal) ||
+            this.settlingTerminals.has(terminal)),
       )
-        return false;
+    ) {
+      this.output.info(
+        "Automatic Rehearsal package update deferred: the project's terminal is not idle and verified.",
+      );
+      return false;
+    }
+    const dependencyFiles = new Set(
+      [
+        "package.json",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "node_modules/.package-lock.json",
+        "node_modules/@rehearsal-db/core/package.json",
+      ].map((path) => resolve(folder.uri.fsPath, path)),
+    );
+    const contextCurrent = () =>
+      !this.disposed &&
+      vscode.workspace.isTrusted &&
+      this.projects.snapshotFor(workspaceKey) === snapshot &&
+      Boolean(
+        vscode.workspace.workspaceFolders?.some(
+          ({ uri }) =>
+            uri.toString() === workspaceKey && uri.fsPath === folder.uri.fsPath,
+        ),
+      ) &&
+      (!automatic ||
+        !(vscode.workspace.textDocuments ?? []).some(
+          (document) =>
+            document.isDirty &&
+            document.uri.scheme === "file" &&
+            dependencyFiles.has(resolve(document.uri.fsPath)),
+        ));
+    // For automatic calls this callback proves the separate, currently persisted
+    // package-update opt-in as well as registry provenance and exact installation.
+    const allowed = async () => {
       try {
+        if (!contextCurrent() || !(await verifyIdentity()) || !contextCurrent())
+          return false;
         const activity = await runRehearsalJson<unknown>({
           workspaceRoot: folder.uri.fsPath,
           command: ["activity"],
           expectedCommand: "activity",
           ...(snapshot.configPath ? { configPath: snapshot.configPath } : {}),
         });
-        return (
-          !this.disposed &&
-          vscode.workspace.isTrusted &&
-          this.projects.snapshotFor(workspaceKey) === snapshot &&
-          (await verifyIdentity()) &&
-          !this.disposed &&
-          vscode.workspace.isTrusted &&
-          this.projects.snapshotFor(workspaceKey) === snapshot &&
-          Boolean(
-            vscode.workspace.workspaceFolders?.some(
-              ({ uri }) => uri.toString() === workspaceKey,
-            ),
-          ) &&
-          parseActivityData(activity.result.data).state === "idle"
-        );
+        if (
+          !contextCurrent() ||
+          parseActivityData(activity.result.data).state !== "idle"
+        )
+          return false;
+        return (await verifyIdentity()) && contextCurrent();
       } catch {
         return false;
       }
     };
     if (!(await allowed())) {
-      void vscode.window.showInformationMessage(
-        "A safe, idle, unchanged package installation could not be confirmed. No update was run; review the current project before retrying.",
-      );
-      return;
+      if (automatic)
+        this.output.info(
+          "Automatic Rehearsal package update deferred: permission, package identity, idle activity or saved dependency files could not be confirmed.",
+        );
+      else
+        void vscode.window.showInformationMessage(
+          "A safe, idle, unchanged package installation could not be confirmed. No update was run; review the current project before retrying.",
+        );
+      return false;
     }
-    const args = exactPackageUpdateArguments(version, group);
-    const choice = await vscode.window.showWarningMessage(
-      `Update Rehearsal in ${folder.name} from ${installedVersion} to ${version}?`,
-      {
-        modal: true,
-        detail: `This updates this project's manifest, lockfile and dependencies through its configured package manager/registry. Review the dependency diff afterward. No runtime or data cleanup is requested.\n\nCommand: ${shellCommand(args)}`,
-      },
-      "Update Exact Version",
-    );
-    if (choice !== "Update Exact Version") return;
+    const args = [
+      ...exactPackageUpdateArguments(version, group),
+      ...(automatic
+        ? [
+            "--ignore-scripts",
+            "--no-audit",
+            "--no-fund",
+            "--registry=https://registry.npmjs.org",
+            "--@rehearsal-db:registry=https://registry.npmjs.org",
+          ]
+        : []),
+    ];
+    if (!automatic) {
+      const choice = await vscode.window.showWarningMessage(
+        `Update Rehearsal in ${folder.name} from ${installedVersion} to ${version}?`,
+        {
+          modal: true,
+          detail: `This updates this project's manifest, lockfile and dependencies through its configured package manager/registry. Review the dependency diff afterward. No runtime or data cleanup is requested.\n\nCommand: ${shellCommand(args)}`,
+        },
+        "Update Exact Version",
+      );
+      if (choice !== "Update Exact Version") return false;
+    }
     if (!(await allowed())) {
-      void vscode.window.showInformationMessage(
-        "The project, trust or operation changed during review. No update was run; check again before installing.",
-      );
-      return;
+      if (automatic)
+        this.output.info(
+          "Automatic Rehearsal package update deferred: its permission or project state changed before installation.",
+        );
+      else
+        void vscode.window.showInformationMessage(
+          "The project, trust or operation changed during review. No update was run; check again before installing.",
+        );
+      return false;
     }
-    await this.runInTerminal(
-      folder,
-      workspaceKey,
-      "Update Rehearsal",
-      args,
-      allowed,
-    );
+    const coordinated =
+      automatic || options?.coordinationDirectory !== undefined;
+    const lease = coordinated
+      ? await acquirePackageUpdateLease(
+          options!.coordinationDirectory!,
+          folder.uri.fsPath,
+        )
+      : undefined;
+    if (coordinated && !lease) {
+      this.output.info(
+        "Rehearsal package update deferred: exclusive project coordination is unavailable or another update owns it.",
+      );
+      return false;
+    }
+    let dispatched = false;
+    const authorizeDispatch = async () => {
+      if (!(await allowed())) return false;
+      if (lease && !(await ownsPackageUpdateLease(lease))) return false;
+      return (!lease || (await verifyIdentity())) && contextCurrent();
+    };
+    try {
+      return await this.runInTerminal(
+        folder,
+        workspaceKey,
+        "Update Rehearsal",
+        args,
+        authorizeDispatch,
+        !automatic,
+        automatic,
+        lease
+          ? (terminal, id) => {
+              this.packageUpdateLeases.set(terminal, { id, lease });
+              dispatched = true;
+            }
+          : undefined,
+      );
+    } finally {
+      if (lease && !dispatched) await releasePackageUpdateLease(lease);
+    }
   }
 
   activityFor(workspaceKey: string): readonly WorkspaceActivityRecord[] {
@@ -400,6 +633,43 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
           }),
       ),
     );
+  }
+
+  /** Retained display evidence is not permission after its workspace or source changes. */
+  private resourceReviewGuard(
+    workspaceKey: string,
+    folder: vscode.WorkspaceFolder,
+    snapshot: ProjectSnapshot,
+    eligible: (current: ProjectSnapshot) => boolean,
+  ): () => void {
+    const configPath = snapshot.configPath;
+    const sourceSha256 = snapshot.configurationMetadata?.sourceSha256;
+    const version = snapshot.version;
+    const resources = snapshot.resources;
+    return () => {
+      const current = this.projects.snapshotFor(workspaceKey);
+      if (
+        this.disposed ||
+        !vscode.workspace.isTrusted ||
+        !current ||
+        current !== snapshot ||
+        current.configPath !== configPath ||
+        current.configurationMetadata?.sourceSha256 !== sourceSha256 ||
+        current.version !== version ||
+        current.resources !== resources ||
+        (current.activity !== undefined && current.activity.state !== "idle") ||
+        !vscode.workspace.workspaceFolders?.some(
+          (entry) =>
+            entry.uri.toString() === workspaceKey &&
+            entry.uri.scheme === folder.uri.scheme &&
+            entry.uri.fsPath === folder.uri.fsPath,
+        ) ||
+        !eligible(current)
+      )
+        throw new Error(
+          "The reviewed resource context changed. Refresh and start a new review.",
+        );
+    };
   }
 
   async cleanupImages(workspaceKey: string, rawIds: unknown): Promise<void> {
@@ -430,13 +700,33 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       )
     )
       return;
-    const ids = rawIds as string[];
+    if (!this.reviews) {
+      void vscode.window.showInformationMessage(
+        "The Rehearsal resource review is unavailable. Reopen the project dashboard and start a fresh review; no removal was requested.",
+      );
+      return;
+    }
+    const ids = [...rawIds] as string[];
+    const configPath = snapshot.configPath;
     const command = [
       "cleanup",
       "--images-only",
       ...ids.map((id) => `--image-id=${id}`),
     ];
+    const canApply = this.resourceReviewGuard(
+      workspaceKey,
+      folder,
+      snapshot,
+      (current) =>
+        ids.every(
+          (id) =>
+            current.resources?.catalog?.images.some(
+              (image) => image.id === id && image.state === "candidate",
+            ) === true,
+        ),
+    );
     try {
+      canApply();
       const result = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
@@ -464,33 +754,59 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
           }
         },
       );
+      canApply();
       const review = parseImageCleanupReview(result.result.data, ids);
-      const selected = await vscode.window.showWarningMessage(
-        `Remove ${review.images.length} selected unused image${review.images.length === 1 ? "" : "s"}?`,
-        {
-          modal: true,
-          detail: `Core rechecked the exact images below against every running and stopped container.\n\n${review.images.map((image) => `${image.tags.join(", ")}\n${image.id}\n${image.bytes.toLocaleString()} bytes`).join("\n\n")}\n\nEstimated upper bound: ${(review.bytes / 1024 ** 3).toFixed(2)} GiB. Shared layers may reduce recovery.\nContainers: 0\nData volumes: 0\nBaselines: 0\n\nRehearsal revalidates again immediately before removal. No force removal or global pruning is used.`,
-        },
-        "Remove Selected Images",
-      );
-      if (selected !== "Remove Selected Images") return;
-      await this.runInTerminal(
-        folder,
+      await this.reviews.review({
         workspaceKey,
-        "Remove selected unused images",
-        [
-          "npx",
-          "--no-install",
-          "rehearsal",
-          ...command,
-          "--write",
-          `--confirm-cleanup=${review.digest}`,
-          ...(snapshot.configPath ? [`--config=${snapshot.configPath}`] : []),
-        ],
-      );
+        workspaceName: snapshot.workspaceName,
+        title: "Review selected image cleanup",
+        description:
+          "Read the exact image identities, references and estimated recovery before continuing to the final removal confirmation. This review changes no resources.",
+        detail: `Core rechecked the exact images below against every running and stopped container.\n\n${review.images.map((image) => `${image.tags.join(", ")}\n${image.id}\n${image.bytes.toLocaleString()} bytes`).join("\n\n")}\n\nEstimated upper bound: ${(review.bytes / 1024 ** 3).toFixed(2)} GiB. Shared layers may reduce recovery.\nContainers: 0\nData volumes: 0\nBaselines: 0\n\nRehearsal revalidates again immediately before removal. No force removal or global pruning is used.`,
+        format: "text",
+        applyLabel: "Continue to removal confirmation",
+        successMessage:
+          "Review complete. Check the Rehearsal terminal and refreshed resource evidence for command status. This review alone does not prove the command started or any image was removed.",
+        canApply,
+        onApply: async () => {
+          canApply();
+          const selected = await vscode.window.showWarningMessage(
+            `Remove ${review.images.length} selected unused image${review.images.length === 1 ? "" : "s"}?`,
+            {
+              modal: true,
+              detail: `Remove only the ${review.images.length} exact images listed in the Rehearsal review.\nEstimated upper bound: ${(review.bytes / 1024 ** 3).toFixed(2)} GiB; shared layers may reduce recovery.\nContainers: 0 · Data volumes: 0 · Baselines: 0\nCore revalidates before removal. No force removal or global pruning.`,
+            },
+            "Remove Selected Images",
+          );
+          canApply();
+          if (selected !== "Remove Selected Images") return false;
+          await this.runInTerminal(
+            folder,
+            workspaceKey,
+            "Remove selected unused images",
+            [
+              "npx",
+              "--no-install",
+              "rehearsal",
+              ...command,
+              "--write",
+              `--confirm-cleanup=${review.digest}`,
+              ...(configPath ? [`--config=${configPath}`] : []),
+            ],
+            async () => {
+              try {
+                canApply();
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          );
+        },
+      });
     } catch {
       void vscode.window.showErrorMessage(
-        "Selected image cleanup could not be verified. Nothing was requested for removal. Refresh Local Resources and preview again.",
+        "Selected image cleanup could not be completed. Check the project terminal and Activity for any command result before refreshing Local Resources and reviewing again.",
       );
     }
   }
@@ -511,13 +827,39 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     );
     if (!snapshot?.configurationMetadata || !snapshot.resources || !folder)
       return;
+    if (!this.reviews) {
+      void vscode.window.showInformationMessage(
+        "The Rehearsal resource review is unavailable. Reopen the project dashboard and start a fresh review; no stopping was requested.",
+      );
+      return;
+    }
+    const configPath = snapshot.configPath;
+    const knownTargets = snapshot.resources.environments.map(
+      ({ target, projectId }) => ({ target, projectId }),
+    );
+    const canApply = this.resourceReviewGuard(
+      workspaceKey,
+      folder,
+      snapshot,
+      (current) =>
+        knownTargets.every(
+          (target) =>
+            current.resources?.environments.some(
+              (entry) =>
+                entry.target === target.target &&
+                entry.projectId === target.projectId,
+            ) === true,
+        ),
+    );
     try {
+      canApply();
       const preview = await runRehearsalJson<unknown>({
         workspaceRoot: folder.uri.fsPath,
         command: ["stop-stale"],
         expectedCommand: "stop-stale",
         ...(snapshot.configPath ? { configPath: snapshot.configPath } : {}),
       });
+      canApply();
       const review = parseStaleStopReview(
         preview.result.data,
         snapshot.resources.environments,
@@ -528,31 +870,56 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         );
         return;
       }
-      const approved = await vscode.window.showWarningMessage(
-        "Stop these exact long-running Rehearsal environments?",
-        {
-          modal: true,
-          detail: `${review.targets.map((target) => `${target.displayName} (${target.target})\n${target.containerCount} owned containers · last start/stop ${target.lastActivityAt}`).join("\n\n")}\n\nContainer age does not prove inactivity. Check your active application sessions. Database and Storage contents, all volumes, images, immutable baselines, other projects, and the shared engine remain intact.\n\nCore revalidates the exact context, configuration, container identities and timestamps immediately before each stop.`,
-        },
-        "Stop Reviewed Environments",
-      );
-      if (approved !== "Stop Reviewed Environments") return;
-      await this.runInTerminal(
-        folder,
+      await this.reviews.review({
         workspaceKey,
-        "Stop reviewed long-running environments",
-        [
-          "npx",
-          "--no-install",
-          "rehearsal",
-          "stop-stale",
-          `--confirm-stop=${review.digest}`,
-          ...(snapshot.configPath ? [`--config=${snapshot.configPath}`] : []),
-        ],
-      );
+        workspaceName: snapshot.workspaceName,
+        title: "Review long-running environments",
+        description:
+          "Inspect the exact project-owned targets before continuing to the final stop confirmation. This review changes no runtime or data.",
+        detail: `${review.targets.map((target) => `${target.displayName} (${target.target})\n${target.projectId}\n${target.containerCount} owned containers · last start/stop ${target.lastActivityAt}`).join("\n\n")}\n\nContainer age does not prove inactivity. Check your active application sessions. Database and Storage contents, all volumes, images, immutable baselines, other projects, and the shared engine remain intact.\n\nCore revalidates the exact context, configuration, container identities and timestamps immediately before each stop.`,
+        format: "text",
+        applyLabel: "Continue to stop confirmation",
+        successMessage:
+          "Review complete. Check the Rehearsal terminal and refreshed environment evidence for command status. This review alone does not prove the command started or any environment stopped.",
+        canApply,
+        onApply: async () => {
+          canApply();
+          const approved = await vscode.window.showWarningMessage(
+            "Stop these exact long-running Rehearsal environments?",
+            {
+              modal: true,
+              detail: `Stop only the ${review.targets.length} exact environments listed in the Rehearsal review. Container age does not prove inactivity. Database and Storage contents, volumes, images and baselines remain intact. Other projects and the shared engine are not stopped. Core revalidates before each stop.`,
+            },
+            "Stop Reviewed Environments",
+          );
+          canApply();
+          if (approved !== "Stop Reviewed Environments") return false;
+          await this.runInTerminal(
+            folder,
+            workspaceKey,
+            "Stop reviewed long-running environments",
+            [
+              "npx",
+              "--no-install",
+              "rehearsal",
+              "stop-stale",
+              `--confirm-stop=${review.digest}`,
+              ...(configPath ? [`--config=${configPath}`] : []),
+            ],
+            async () => {
+              try {
+                canApply();
+                return true;
+              } catch {
+                return false;
+              }
+            },
+          );
+        },
+      });
     } catch {
       void vscode.window.showErrorMessage(
-        "Long-running environments could not be verified. Nothing was requested for stopping. Refresh and review the resource policy or diagnostics.",
+        "Long-running environment review could not be completed. Check the project terminal and Activity for any command result before refreshing and reviewing the resource policy or diagnostics.",
       );
     }
   }
@@ -584,7 +951,10 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     label: string,
     arguments_: readonly string[],
     authorize?: () => Promise<boolean>,
-  ): Promise<void> {
+    revealTerminal = true,
+    requireShellIntegration = false,
+    onDispatched?: (terminal: vscode.Terminal, id: string) => void,
+  ): Promise<boolean> {
     const canLaunch = () =>
       !this.disposed &&
       vscode.workspace.isTrusted &&
@@ -593,13 +963,61 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
           ({ uri }) => uri.toString() === workspaceKey,
         ),
       );
-    if (!canLaunch() || (authorize && !(await authorize()))) return;
-    const terminal = vscode.window.createTerminal({
-      name: `Rehearsal · ${folder.name}`,
-      cwd: folder.uri,
-      iconPath: new vscode.ThemeIcon("database"),
-      isTransient: true,
-    });
+    if (!canLaunch() || (authorize && !(await authorize())) || !canLaunch())
+      return false;
+    const owned = [...this.terminalWorkspaces.entries()]
+      .filter(
+        ([terminal, owner]) =>
+          owner === workspaceKey && terminal.exitStatus === undefined,
+      )
+      .map(([terminal]) => terminal);
+    const busy = owned.find(
+      (terminal) =>
+        this.terminalActivities.has(terminal) ||
+        this.shellExecutions.has(terminal) ||
+        this.unverifiedTerminals.has(terminal) ||
+        this.settlingTerminals.has(terminal),
+    );
+    if (busy) {
+      if (revealTerminal) busy.show(false);
+      const reason = this.fallbackTerminals.has(busy)
+        ? "compatibility completion unavailable"
+        : this.unverifiedTerminals.has(busy)
+          ? "command completion unverified"
+          : this.settlingTerminals.has(busy)
+            ? "completion refresh pending"
+            : this.terminalActivities.has(busy)
+              ? "owned command running"
+              : "shell command running";
+      this.output.warn(`Rehearsal terminal dispatch blocked: ${reason}.`);
+      const guidance = {
+        "compatibility completion unavailable":
+          "VS Code could not track this Rehearsal command because shell integration was unavailable. If it is still running, let it finish. Once it has finished, close that terminal and try again.",
+        "command completion unverified":
+          "This project's Rehearsal terminal completion is unverified. Finish the current command, then close that terminal and try again.",
+        "completion refresh pending":
+          "The previous Rehearsal command has ended. Its project check is still finishing; try again when the check finishes.",
+        "owned command running":
+          "This project's Rehearsal terminal is still busy. Finish the current command before starting another; Ctrl+C or Ctrl+Z closes a sandbox app.",
+        "shell command running":
+          "A shell command is still running in this project's Rehearsal terminal. Finish it before starting another Rehearsal action.",
+      };
+      if (revealTerminal)
+        void vscode.window.showInformationMessage(guidance[reason]);
+      return false;
+    }
+    const correctDirectory = (terminal: vscode.Terminal) =>
+      terminal.shellIntegration?.cwd?.scheme === "file" &&
+      terminal.shellIntegration.cwd.toString() === folder.uri.toString();
+    const reusable = owned.find(correctDirectory);
+    const terminal =
+      reusable ??
+      vscode.window.createTerminal({
+        name: `Rehearsal · ${folder.name}`,
+        cwd: folder.uri,
+        iconPath: new vscode.ThemeIcon("database"),
+        isTransient: true,
+      });
     this.terminalWorkspaces.set(terminal, workspaceKey);
     const activity: WorkspaceActivityRecord = {
       id: randomUUID(),
@@ -611,27 +1029,24 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     };
     this.terminalActivities.set(terminal, activity.id);
     await this.writeActivity(workspaceKey, activity);
-    if (!canLaunch()) return;
-    terminal.show(false);
+    const canDispatch = () =>
+      canLaunch() &&
+      terminal.exitStatus === undefined &&
+      this.terminalWorkspaces.get(terminal) === workspaceKey &&
+      this.terminalActivities.get(terminal) === activity.id &&
+      !this.shellExecutions.has(terminal) &&
+      ((!terminal.shellIntegration?.cwd && !reusable) ||
+        correctDirectory(terminal));
+    if (!canDispatch()) {
+      await this.finishTerminalAction(terminal, workspaceKey, null);
+      return false;
+    }
+    if (revealTerminal) terminal.show(false);
     this.output.info(`Started ${label} for ${folder.name}.`);
 
-    if (terminal.shellIntegration) {
-      if (authorize && !(await authorize())) {
-        terminal.dispose();
-        return;
-      }
-      this.terminalExecutions.set(
-        terminal,
-        terminal.shellIntegration.executeCommand(arguments_[0]!, [
-          ...arguments_.slice(1),
-        ]),
-      );
-      this.monitorTerminalActivity(folder, workspaceKey, terminal, activity.id);
-      return;
-    }
-
     const integration =
-      await new Promise<vscode.TerminalShellIntegration | null>(
+      terminal.shellIntegration ??
+      (await new Promise<vscode.TerminalShellIntegration | null>(
         (resolvePromise) => {
           let settled = false;
           const subscription =
@@ -649,26 +1064,41 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
             settled = true;
             subscription.dispose();
             resolvePromise(null);
-          }, 1_500);
+          }, 5_000);
         },
+      ));
+    if ((authorize && !(await authorize())) || !canDispatch()) {
+      await this.finishTerminalAction(terminal, workspaceKey, null);
+      return false;
+    }
+    // Integration can arrive after the deadline while final authorization awaits.
+    // Prefer its current API rather than needlessly entering untracked fallback.
+    const currentIntegration = terminal.shellIntegration ?? integration;
+    if (requireShellIntegration && !currentIntegration) {
+      this.output.info(
+        "Automatic Rehearsal package update deferred: verified shell integration is unavailable. No package command was sent.",
       );
-    if (integration) {
-      if (!canLaunch() || (authorize && !(await authorize()))) {
-        terminal.dispose();
-        return;
-      }
+      await this.finishTerminalAction(terminal, workspaceKey, null);
+      return false;
+    }
+    if (currentIntegration) {
+      this.output.info(`Dispatching ${label} with verified shell integration.`);
       this.terminalExecutions.set(
         terminal,
-        integration.executeCommand(arguments_[0]!, [...arguments_.slice(1)]),
+        currentIntegration.executeCommand(arguments_[0]!, [
+          ...arguments_.slice(1),
+        ]),
       );
     } else {
-      if (!canLaunch() || (authorize && !(await authorize()))) {
-        terminal.dispose();
-        return;
-      }
+      this.output.warn(
+        `Shell integration was unavailable after five seconds; ${label} is using compatibility mode. Its exit cannot be verified; once it finishes, close this terminal before another action.`,
+      );
+      this.fallbackTerminals.add(terminal);
       terminal.sendText(shellCommand(arguments_), true);
     }
+    onDispatched?.(terminal, activity.id);
     this.monitorTerminalActivity(folder, workspaceKey, terminal, activity.id);
+    return true;
   }
 
   private monitorTerminalActivity(
@@ -720,6 +1150,15 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         if (result.state === "idle") {
           this.refreshedActivityIds.add(id);
           await this.refresh(workspaceKey, false);
+        } else if (result.state === "timeout" && result.observedBusy) {
+          // A long-lived `open` session is expected to outlive bounded monitoring.
+          // Reconcile once through public inspection, without extending polling,
+          // replaying old project facts or interpreting the deadline as failure.
+          await this.refresh(workspaceKey, false);
+          if (allowed())
+            this.output.info(
+              "Live progress monitoring reached its five-minute limit. Rehearsal checked the project again; an open sandbox is not a failed operation.",
+            );
         } else if (
           result.state !== "aborted" &&
           !(
@@ -768,12 +1207,18 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     workspaceKey: string,
     exitCode: number | null,
   ): Promise<void> {
-    this.stopTerminalMonitor(terminal, workspaceKey);
-    const id = this.terminalActivities.get(terminal);
-    if (!id) return;
-    const alreadyRefreshed = this.refreshedActivityIds.delete(id);
-    await this.finishActivity(terminal, workspaceKey, exitCode);
-    if (!alreadyRefreshed) await this.refresh(workspaceKey, false);
+    if (this.settlingTerminals.has(terminal)) return;
+    this.settlingTerminals.add(terminal);
+    try {
+      this.stopTerminalMonitor(terminal, workspaceKey);
+      const id = this.terminalActivities.get(terminal);
+      if (!id) return;
+      const alreadyRefreshed = this.refreshedActivityIds.delete(id);
+      await this.finishActivity(terminal, workspaceKey, exitCode);
+      if (!alreadyRefreshed) await this.refresh(workspaceKey, false);
+    } finally {
+      this.settlingTerminals.delete(terminal);
+    }
   }
 
   private async writeActivity(
@@ -795,8 +1240,10 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
   ): Promise<void> {
     const id = this.terminalActivities.get(terminal);
     if (!id) return;
+    if (exitCode !== null) await this.releaseTerminalPackageLease(terminal, id);
     this.terminalActivities.delete(terminal);
     this.terminalExecutions.delete(terminal);
+    this.fallbackTerminals.delete(terminal);
     const record = this.activityFor(workspaceKey).find(
       (entry) => entry.id === id,
     );
@@ -816,6 +1263,16 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     });
   }
 
+  private async releaseTerminalPackageLease(
+    terminal: vscode.Terminal,
+    id?: string,
+  ): Promise<void> {
+    const record = this.packageUpdateLeases.get(terminal);
+    if (!record || (id !== undefined && record.id !== id)) return;
+    this.packageUpdateLeases.delete(terminal);
+    await releasePackageUpdateLease(record.lease);
+  }
+
   private async cancelOwnedOperation(workspaceKey: string): Promise<void> {
     if (this.pendingCancellations.has(workspaceKey) || this.disposed) return;
     this.pendingCancellations.add(workspaceKey);
@@ -830,9 +1287,16 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     const terminals = [...this.terminalWorkspaces.entries()]
       .filter(
         ([terminal, key]) =>
-          key === workspaceKey && this.terminalActivities.has(terminal),
+          key === workspaceKey &&
+          this.terminalActivities.has(terminal) &&
+          (this.terminalExecutions.has(terminal) ||
+            this.fallbackTerminals.has(terminal)),
       )
-      .map(([terminal]) => terminal);
+      .map(([terminal]) => ({
+        terminal,
+        activityId: this.terminalActivities.get(terminal),
+        execution: this.terminalExecutions.get(terminal),
+      }));
     if (terminals.length === 0) {
       void vscode.window.showInformationMessage(
         "No editor-started Rehearsal operation is running for this project.",
@@ -854,12 +1318,16 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     );
     if (this.disposed || !vscode.workspace.isTrusted || !folder) return;
     const stillOwned = terminals.filter(
-      (terminal) =>
+      ({ terminal, activityId, execution }) =>
         this.terminalWorkspaces.get(terminal) === workspaceKey &&
-        this.terminalActivities.has(terminal),
+        this.terminalActivities.get(terminal) === activityId &&
+        this.terminalExecutions.get(terminal) === execution &&
+        (execution !== undefined || this.fallbackTerminals.has(terminal)) &&
+        (!this.shellExecutions.has(terminal) ||
+          this.shellExecutions.get(terminal) === execution),
     );
     if (!stillOwned.length) return;
-    for (const terminal of stillOwned) {
+    for (const { terminal } of stillOwned) {
       this.stopTerminalMonitor(terminal, workspaceKey);
       terminal.dispose();
     }

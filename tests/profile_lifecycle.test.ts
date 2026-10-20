@@ -4,6 +4,15 @@ import { parseConfigurationMetadata } from "../src/configuration_contract.js";
 import { preferenceStorageKey } from "../src/workspace_preferences.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 
+interface ProfileReview {
+  readonly workspaceKey: string;
+  readonly format: "diff" | "text";
+  readonly detail: string;
+  readonly changedFields?: readonly string[];
+  readonly canApply: () => void;
+  readonly onApply: () => Promise<void | boolean>;
+}
+
 const host = vi.hoisted(() => {
   const uri = (value: string) => ({
     fsPath: value,
@@ -55,10 +64,15 @@ const host = vi.hoisted(() => {
       },
     };
   }
-  const providers = new Map<
-    string,
-    { provideTextDocumentContent(value: ReturnType<typeof uri>): string }
-  >();
+  const reviewApproval = vi.fn();
+  const reviewOptions: ProfileReview[] = [];
+  const review = vi.fn(async (options: ProfileReview) => {
+    reviewOptions.push(options);
+    options.canApply();
+    if (!(await reviewApproval(options))) return false;
+    options.canApply();
+    return (await options.onApply()) !== false;
+  });
   const filesystem = {
     realpath: vi.fn(async (value: string) => value),
     lstat: vi.fn(async (value: string) => ({
@@ -74,13 +88,16 @@ const host = vi.hoisted(() => {
     ),
     unlink: vi.fn(async (_path: string) => {}),
     rmdir: vi.fn(async (_path: string) => {}),
+    open: vi.fn(),
   };
   return {
     uri,
     Events,
     Edit,
     panels,
-    providers,
+    review,
+    reviewApproval,
+    reviewOptions,
     filesystem,
     cli: vi.fn(),
     resolve: vi.fn(),
@@ -112,15 +129,6 @@ const host = vi.hoisted(() => {
         onDidChangeWorkspaceFolders: new Events<void>().event,
         openTextDocument: vi.fn(),
         applyEdit: vi.fn(),
-        registerTextDocumentContentProvider: (
-          scheme: string,
-          provider: typeof providers extends Map<string, infer Provider>
-            ? Provider
-            : never,
-        ) => {
-          providers.set(scheme, provider);
-          return { dispose: () => providers.delete(scheme) };
-        },
       },
       window: {
         createWebviewPanel: vi.fn(() => {
@@ -142,6 +150,13 @@ vi.mock("node:fs/promises", () => host.filesystem);
 vi.mock("../src/process_adapter.js", () => ({
   runRehearsalJson: host.cli,
   resolveWorkspaceRehearsal: host.resolve,
+}));
+vi.mock("../src/review_panel.js", () => ({
+  RehearsalReviewPanels: class {
+    review = host.review;
+    releaseWorkspace = vi.fn();
+    dispose = vi.fn();
+  },
 }));
 
 import { RehearsalWorkspacePanels } from "../src/workspace_panel.js";
@@ -184,21 +199,50 @@ const fixture = () => {
         return { range: { end: { line: 0, character: this.text.length } } };
       },
       save: vi.fn(async () => {
+        diskText = document.text;
         document.isDirty = false;
         return true;
       }),
     };
+    let diskText = document.text;
     return {
       root,
       folder,
       key,
       document,
+      diskText: () => diskText,
       profiles: [] as Profile[],
       proposal: undefined as Proposal | undefined,
       refuse: false,
     };
   });
   host.vscode.workspace.workspaceFolders = scopes.map(({ folder }) => folder);
+  host.filesystem.open.mockImplementation(async (path: string) => {
+    const scope = scopes.find(({ document }) => document.uri.fsPath === path);
+    if (!scope) throw new Error("Unexpected configuration read request.");
+    return {
+      stat: async () => ({
+        dev: 1,
+        ino: 501,
+        size: Buffer.byteLength(scope.diskText()),
+        isFile: () => true,
+      }),
+      read: async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number,
+      ) => {
+        const bytes = Buffer.from(scope.diskText()).subarray(
+          position,
+          position + length,
+        );
+        bytes.copy(buffer, offset);
+        return { bytesRead: bytes.byteLength, buffer };
+      },
+      close: async () => {},
+    };
+  });
   const metadata = (scope: (typeof scopes)[number]) => ({
     schemaVersion: 1,
     path: "rehearsal.config.mjs",
@@ -299,15 +343,7 @@ const fixture = () => {
         (scope) => scope.document.uri.toString() === uri.toString(),
       )?.document;
       if (document) return document;
-      return {
-        uri,
-        isDirty: false,
-        isUntitled: false,
-        getText: () =>
-          host.providers
-            .get("rehearsal-configuration-review")!
-            .provideTextDocumentContent(uri),
-      };
+      throw new Error("Unexpected editable document request.");
     },
   );
   host.vscode.workspace.applyEdit.mockImplementation(
@@ -365,7 +401,7 @@ const fixture = () => {
       return { result: { data: metadata(scope) } };
     },
   );
-  host.vscode.window.showWarningMessage.mockResolvedValue("Apply Changes");
+  host.reviewApproval.mockResolvedValue(true);
   const owner = new RehearsalWorkspacePanels(
     host.uri("/private/extension") as never,
     projects as never,
@@ -380,7 +416,8 @@ const fixture = () => {
 afterEach(() => {
   for (const owner of owners.splice(0)) owner.dispose();
   host.panels.splice(0);
-  host.providers.clear();
+  host.reviewOptions.splice(0);
+  host.reviewApproval.mockReset();
   host.vscode.workspace.workspaceFolders = [];
   host.vscode.workspace.isTrusted = true;
   vi.clearAllMocks();
@@ -411,23 +448,22 @@ describe("named profiles through the workspace host", () => {
         scope.key,
       ),
     );
-    expect(host.vscode.window.showTextDocument).toHaveBeenCalledOnce();
-    const review = host.vscode.window.showTextDocument.mock.calls[0]![0];
-    expect(review.isUntitled).toBe(false);
-    expect(review.getText()).toContain('name: "Full QA"');
-    expect(review.getText()).toContain('targets: ["publication"]');
-    expect(host.vscode.window.showWarningMessage).toHaveBeenCalledWith(
-      "Apply 1 reviewed Rehearsal configuration change?",
-      expect.objectContaining({ modal: true }),
-      "Apply Changes",
-    );
+    expect(host.review).toHaveBeenCalledOnce();
+    const review = host.reviewOptions[0]!;
+    expect(review.workspaceKey).toBe(scope.key);
+    expect(review.format).toBe("diff");
+    expect(review.detail).toContain('name: "Full QA"');
+    expect(review.detail).toContain('targets: ["publication"]');
+    expect(review.changedFields).toEqual(["profiles"]);
+    expect(host.vscode.window.showTextDocument).not.toHaveBeenCalled();
+    expect(host.vscode.window.showWarningMessage).not.toHaveBeenCalled();
     const coreReview = host.cli.mock.calls.findIndex(
       ([request]) => request.command[1] === "review",
     );
     expect(coreReview).toBeGreaterThanOrEqual(0);
     const order = [
-      host.vscode.window.showTextDocument.mock.invocationCallOrder[0]!,
-      host.vscode.window.showWarningMessage.mock.invocationCallOrder[0]!,
+      host.review.mock.invocationCallOrder[0]!,
+      host.reviewApproval.mock.invocationCallOrder[0]!,
       host.cli.mock.invocationCallOrder[coreReview]!,
       host.vscode.workspace.applyEdit.mock.invocationCallOrder[0]!,
       scope.document.save.mock.invocationCallOrder[0]!,
@@ -541,15 +577,16 @@ describe("named profiles through the workspace host", () => {
   it("does not save a valid custom profile when its explicit review is cancelled", async () => {
     const test = fixture();
     const scope = test.scopes[0]!;
-    host.vscode.window.showWarningMessage.mockResolvedValue(undefined);
+    host.reviewApproval.mockResolvedValue(false);
     await test.owner.open(scope.key);
     const before = scope.document.text;
+    const dashboard = host.panels[0]!.webview.html;
     submit(host.panels[0]!, [{ name: "Feature branch", targets: ["primary"] }]);
-    await vi.waitFor(() =>
-      expect(host.vscode.window.showWarningMessage).toHaveBeenCalledOnce(),
-    );
+    await vi.waitFor(() => expect(host.reviewApproval).toHaveBeenCalledOnce());
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(scope.document.text).toBe(before);
+    expect(host.panels[0]!.webview.html).toBe(dashboard);
+    expect(host.reviewOptions[0]!.detail).toContain("Feature branch");
     expect(scope.document.save).not.toHaveBeenCalled();
     expect(host.filesystem.writeFile).not.toHaveBeenCalled();
     expect(test.projects.refreshWorkspace).not.toHaveBeenCalled();
@@ -566,7 +603,7 @@ describe("named profiles through the workspace host", () => {
     await vi.waitFor(() =>
       expect(host.vscode.window.showErrorMessage).toHaveBeenCalledOnce(),
     );
-    expect(host.vscode.window.showWarningMessage).not.toHaveBeenCalled();
+    expect(host.review).not.toHaveBeenCalled();
     expect(scope.document.save).not.toHaveBeenCalled();
     expect(host.filesystem.writeFile).not.toHaveBeenCalled();
   });

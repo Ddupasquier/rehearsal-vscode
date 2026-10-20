@@ -346,6 +346,34 @@ const html = (value: string): string =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+/** An active lock alone proves neither application readiness nor an address. */
+export const openSandboxSessionState = (
+  snapshot: ProjectSnapshot,
+): "opening" | "interactive" | "closing" | "unknown" | null => {
+  const activity = snapshot.activity;
+  if (
+    snapshot.availability !== "operation_active" ||
+    activity?.state !== "busy" ||
+    activity.operation?.kind !== "open"
+  )
+    return null;
+  const progress = activity.operation.progress;
+  if (!progress) return "unknown";
+  if (
+    progress.state !== "running" ||
+    progress.currentStage?.phase === "cleanup"
+  )
+    return "closing";
+  return progress.currentStage?.phase === "interactive-session" &&
+    progress.currentStage.state === "running"
+    ? "interactive"
+    : "opening";
+};
+
+export const isInteractiveSandboxSession = (
+  snapshot: ProjectSnapshot,
+): boolean => openSandboxSessionState(snapshot) === "interactive";
+
 const phaseLabels: Readonly<Record<OperationProgressPhase, string>> = {
   "runtime-lifecycle": "Preparing the local database runtime",
   "dependent-preparation": "Preparing a dependent target",
@@ -388,11 +416,7 @@ export const renderOperationProgress = (snapshot: ProjectSnapshot): string => {
   const live = activity.state === "busy";
   const progress = activity.operation?.progress;
   const finishing = live && progress && progress.state !== "running";
-  const interactive =
-    live &&
-    activity.operation?.kind === "open" &&
-    progress?.state === "running" &&
-    progress.currentStage?.phase === "interactive-session";
+  const interactive = isInteractiveSandboxSession(snapshot);
   const statusMessage = finishing
     ? "Recorded stages have ended. Wait for the owning operation to release its project lock before starting another change."
     : interactive

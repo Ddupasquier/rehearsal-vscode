@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { constants as filesystemConstants } from "node:fs";
 import {
   extensionReleasePresentation,
   type ExtensionReleaseEvidence,
@@ -7,6 +8,7 @@ import {
   lstat,
   realpath,
   mkdtemp,
+  open,
   writeFile,
   unlink,
   rmdir,
@@ -22,8 +24,11 @@ import {
 } from "./configuration_contract.js";
 import { editLiteralConfiguration } from "./literal_configuration.js";
 import { parseActivityData } from "./contracts.js";
-import { renderOperationProgress } from "./operation_progress.js";
-import { ConfigurationReviewDocuments } from "./configuration_review_documents.js";
+import {
+  openSandboxSessionState,
+  renderOperationProgress,
+} from "./operation_progress.js";
+import { RehearsalReviewPanels } from "./review_panel.js";
 import { relative, resolve, sep } from "node:path";
 import * as vscode from "vscode";
 import type { RehearsalTreeProvider } from "./tree_provider.js";
@@ -83,6 +88,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
   private readonly activePages = new Map<string, WorkspacePage>();
   private readonly preferences = new Map<string, WorkspacePreferences>();
   private readonly editing = new Set<string>();
+  private readonly formDraftRevisions = new Map<string, number>();
   private readonly pendingExports = new Set<string>();
   private readonly pendingConfigurationReviews = new Set<string>();
   private readonly liveDocuments = new Map<
@@ -90,7 +96,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     { readonly key: string; delivery: number }
   >();
   private readonly subscriptions: vscode.Disposable[];
-  private readonly configurationReviews: ConfigurationReviewDocuments;
+  private readonly reviewPanels: RehearsalReviewPanels;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -98,17 +104,9 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     private readonly actions: RehearsalWorkspaceActions,
     private readonly workspaceState: vscode.Memento,
     private readonly extensionVersion = "unavailable",
+    reviewPanels?: RehearsalReviewPanels,
   ) {
-    this.configurationReviews = new ConfigurationReviewDocuments(
-      (workspaceKey) =>
-        vscode.workspace.isTrusted &&
-        this.panels.has(workspaceKey) &&
-        Boolean(
-          vscode.workspace.workspaceFolders?.some(
-            ({ uri }) => uri.toString() === workspaceKey,
-          ),
-        ),
-    );
+    this.reviewPanels = reviewPanels ?? new RehearsalReviewPanels(extensionUri);
     this.subscriptions = [
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
         for (const key of this.extensionReleases.keys())
@@ -124,7 +122,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
               ({ uri }) => uri.toString() === workspaceKey,
             )
           )
-            this.configurationReviews.releaseWorkspace(workspaceKey);
+            this.reviewPanels.releaseWorkspace(workspaceKey);
       }),
       projects.onDidUpdateSnapshot(({ workspaceKey, snapshot }) => {
         const panel = this.panels.get(workspaceKey);
@@ -210,7 +208,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       this.preferences.delete(workspaceKey);
       this.editing.delete(workspaceKey);
       this.liveDocuments.delete(workspaceKey);
-      this.configurationReviews.releaseWorkspace(workspaceKey);
+      this.reviewPanels.releaseWorkspace(workspaceKey);
       this.actions.releaseWorkspace(workspaceToken);
     });
     this.panels.set(workspaceKey, panel);
@@ -237,8 +235,9 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     this.preferences.clear();
     this.extensionReleases.clear();
     this.editing.clear();
+    this.formDraftRevisions.clear();
     this.liveDocuments.clear();
-    this.configurationReviews.dispose();
+    this.reviewPanels.dispose();
   }
 
   updateExtensionRelease(
@@ -321,7 +320,6 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       return;
     }
     if (message.type === "reviewResourceConfiguration") {
-      this.editing.delete(workspaceKey);
       const environment = snapshot.resources?.environments.find(
         (entry) => entry.target === message.target,
       );
@@ -342,14 +340,14 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         !configPath
       )
         return;
-      await this.reviewConfiguration(
+      const applied = await this.reviewConfiguration(
         workspaceKey,
         { ...snapshot, configPath },
         message.values,
         snapshot.configPath,
       );
       const refreshed = this.projects.snapshotFor(workspaceKey);
-      if (refreshed) this.render(panel, workspaceKey, refreshed);
+      if (applied && refreshed) this.render(panel, workspaceKey, refreshed);
       return;
     }
     if (message.type === "preferences") {
@@ -372,6 +370,13 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       return;
     }
     if (message.type === "openApplication") {
+      if (
+        !vscode.workspace.isTrusted ||
+        !vscode.workspace.workspaceFolders?.some(
+          ({ uri }) => uri.toString() === workspaceKey,
+        )
+      )
+        return;
       if (typeof message.url !== "string" || !isLoopbackUrl(message.url)) {
         void vscode.window.showErrorMessage(
           "Rehearsal opens HTTP(S) loopback application addresses only.",
@@ -413,10 +418,13 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       return;
     }
     if (message.type === "reviewConfiguration") {
-      this.editing.delete(workspaceKey);
-      await this.reviewConfiguration(workspaceKey, snapshot, message.values);
+      const applied = await this.reviewConfiguration(
+        workspaceKey,
+        snapshot,
+        message.values,
+      );
       const refreshed = this.projects.snapshotFor(workspaceKey);
-      if (refreshed) this.render(panel, workspaceKey, refreshed);
+      if (applied && refreshed) this.render(panel, workspaceKey, refreshed);
     }
   }
 
@@ -492,33 +500,33 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     snapshot: Parameters<typeof renderWorkspaceDocument>[0],
     rawValues: unknown,
     topologyConfigPath: string | undefined = snapshot.configPath,
-  ): Promise<void> {
-    if (!vscode.workspace.isTrusted) return;
+  ): Promise<boolean> {
+    if (!vscode.workspace.isTrusted) return false;
     if (this.pendingConfigurationReviews.has(workspaceKey)) {
       void vscode.window.showInformationMessage(
         "Another configuration review is already in progress for this project. Finish or dismiss it before starting another.",
       );
-      return;
+      return false;
     }
     if (snapshot.activity && snapshot.activity.state !== "idle") {
       void vscode.window.showWarningMessage(
         "Finish or diagnose the current Rehearsal operation before editing its configuration.",
       );
-      return;
+      return false;
     }
     if (!snapshot.configPath) {
       void vscode.window.showInformationMessage(
         "Create a Rehearsal configuration before applying custom values.",
       );
-      return;
+      return false;
     }
     const folder = (vscode.workspace.workspaceFolders ?? []).find(
       ({ uri }) => uri.toString() === workspaceKey,
     );
-    if (!folder) return;
+    if (!folder) return false;
     const absolute = resolve(folder.uri.fsPath, snapshot.configPath);
     const local = relative(folder.uri.fsPath, absolute);
-    if (local === ".." || local.startsWith(`..${sep}`)) return;
+    if (local === ".." || local.startsWith(`..${sep}`)) return false;
     const reviewPanel = this.panels.get(workspaceKey);
     const identity = (
       current: Parameters<typeof renderWorkspaceDocument>[0] | undefined,
@@ -536,7 +544,8 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     const reviewedSnapshot = this.projects.snapshotFor(workspaceKey);
     const reviewedIdentity = identity(reviewedSnapshot);
     const requireReview = (savedSourceSha256?: string) => {
-      if (!vscode.workspace.isTrusted) this.configurationReviews.clear();
+      if (!vscode.workspace.isTrusted)
+        this.reviewPanels.releaseWorkspace(workspaceKey);
       const current = this.projects.snapshotFor(workspaceKey);
       const observedOwnSave =
         savedSourceSha256 !== undefined &&
@@ -570,10 +579,10 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           "Configuration review stopped because project trust, identity or availability changed. No further review action was performed. Refresh and review again.",
         );
     };
-    const inspectBoundary = async () => {
-      requireReview();
+    const inspectBoundary = async (savedSourceSha256?: string) => {
+      requireReview(savedSourceSha256);
       const root = await realpath(folder.uri.fsPath);
-      requireReview();
+      requireReview(savedSourceSha256);
       let candidate = root;
       let device = 0;
       let inode = 0;
@@ -581,7 +590,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       for (const [index, component] of components.entries()) {
         candidate = join(candidate, component);
         const entry = await lstat(candidate);
-        requireReview();
+        requireReview(savedSourceSha256);
         if (
           entry.isSymbolicLink() ||
           (index === components.length - 1
@@ -595,7 +604,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         inode = entry.ino;
       }
       const file = await realpath(candidate);
-      requireReview();
+      requireReview(savedSourceSha256);
       if (
         !components.length ||
         file !== candidate ||
@@ -610,8 +619,11 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     try {
       requireReview();
       const boundary = await inspectBoundary();
-      const requireBoundary = async () => {
-        if ((await inspectBoundary()).identity !== boundary.identity)
+      const requireBoundary = async (savedSourceSha256?: string) => {
+        if (
+          (await inspectBoundary(savedSourceSha256)).identity !==
+          boundary.identity
+        )
           throw new ConfigurationReviewError(
             "Configuration file identity changed during review. Refresh and review the current regular file before applying changes.",
           );
@@ -670,7 +682,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       if (resolved.configurationReviewSchema === 1) {
         const response = await runRehearsalJson<unknown>({
           workspaceRoot: folder.uri.fsPath,
-          configPath: snapshot.configPath,
+          ...(snapshot.configPath ? { configPath: snapshot.configPath } : {}),
           command: ["configuration"],
           expectedCommand: "configuration",
         });
@@ -697,143 +709,234 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
             source: before,
             proposal: parseConfigurationProposal(rawValues),
           });
+      const savedFingerprint = configurationFingerprint(result.source);
+      if (Buffer.byteLength(result.source) > 1024 * 1024)
+        throw new ConfigurationReviewError(
+          "The proposed configuration is too large for safe editing.",
+        );
+      const requireSavedBytes = async () => {
+        requireReview(savedFingerprint);
+        await requireBoundary(savedFingerprint);
+        const file = await open(
+          boundary.file,
+          filesystemConstants.O_RDONLY |
+            filesystemConstants.O_NONBLOCK |
+            filesystemConstants.O_NOFOLLOW,
+        );
+        try {
+          requireReview(savedFingerprint);
+          const stat = await file.stat();
+          requireReview(savedFingerprint);
+          const expected = Buffer.from(result.source, "utf8");
+          if (
+            !stat.isFile() ||
+            JSON.stringify([
+              await realpath(folder.uri.fsPath),
+              boundary.file,
+              stat.dev,
+              stat.ino,
+            ]) !== boundary.identity
+          )
+            throw new ConfigurationReviewError(
+              "The saved configuration could not be confirmed at its reviewed file. Review the current source before trying again; no automatic retry was started.",
+            );
+          if (stat.size !== expected.byteLength)
+            throw new ConfigurationReviewError(
+              "Configuration changed while saving. Review the current file and any unsaved edits before trying again. This review did not overwrite or revert those changes.",
+            );
+          requireReview(savedFingerprint);
+          const bytes = Buffer.alloc(expected.byteLength + 1);
+          let total = 0;
+          while (total < bytes.byteLength) {
+            const { bytesRead } = await file.read(
+              bytes,
+              total,
+              bytes.byteLength - total,
+              total,
+            );
+            requireReview(savedFingerprint);
+            if (bytesRead === 0) break;
+            total += bytesRead;
+          }
+          if (
+            total !== expected.byteLength ||
+            !bytes.subarray(0, total).equals(expected)
+          )
+            throw new ConfigurationReviewError(
+              "Configuration changed while saving. Review the current file and any unsaved edits before trying again. This review did not overwrite or revert those changes.",
+            );
+          await requireBoundary(savedFingerprint);
+        } finally {
+          await file.close();
+        }
+        requireReview(savedFingerprint);
+      };
       if (result.changedFields.length === 0) {
         void vscode.window.showInformationMessage(
           "The proposed values already match the active configuration.",
         );
-        return;
+        return false;
       }
-      const reviewUri = this.configurationReviews.create(
+      return await this.reviewPanels.review({
         workspaceKey,
-        configurationDiff({
+        workspaceName: snapshot.workspaceName,
+        title: "Review configuration changes",
+        description:
+          "Read the complete diff before saving. Nothing changes until you choose Apply changes. Application commands are not run by this edit.",
+        path: snapshot.configPath,
+        detail: configurationDiff({
           path: snapshot.configPath,
           before,
           after: result.source,
         }),
-      );
-      const diffDocument = await vscode.workspace.openTextDocument(reviewUri);
-      requireUnchanged();
-      await vscode.window.showTextDocument(diffDocument, {
-        preview: true,
-        preserveFocus: false,
-      });
-      requireUnchanged();
-      const selected = await vscode.window.showWarningMessage(
-        `Apply ${result.changedFields.length} reviewed Rehearsal configuration ${result.changedFields.length === 1 ? "change" : "changes"}?`,
-        {
-          modal: true,
-          detail: `${result.changedFields.join(", ")}\n\nApplication commands are stored but are not executed by this edit. Rehearsal validates the complete configuration before any later operation.`,
-        },
-        "Apply Changes",
-      );
-      if (selected !== "Apply Changes") return;
-      requireUnchanged();
-      await requireBoundary();
-      requireUnchanged();
-      if (metadata) {
-        const validatedChanges =
-          changes ??
-          configurationProposalChanges(parseConfigurationProposal(rawValues));
-        const temporary = await mkdtemp(
-          join(folder.uri.fsPath, ".rehearsal-config-review-"),
-        );
-        const input = join(temporary, "proposal.json");
-        try {
+        format: "diff",
+        changedFields: result.changedFields,
+        applyLabel: "Apply changes",
+        successMessage:
+          "Saved the reviewed configuration changes. Return to your project to inspect the saved values; use Refresh if its check is still pending.",
+        canApply: requireUnchanged,
+        onReturn: () => reviewPanel?.reveal(vscode.ViewColumn.Active, false),
+        onApply: async () => {
           requireUnchanged();
-          await writeFile(
-            input,
-            JSON.stringify({
-              schemaVersion: 1,
-              sourceSha256: fingerprint,
-              changes: validatedChanges,
-              ...(topologyConfigPath && metadata.dependentTargetReview
-                ? { topologyConfigPath }
-                : {}),
-            }),
-            { mode: 0o600, flag: "wx" },
+          await requireBoundary();
+          requireUnchanged();
+          if (metadata) {
+            const validatedChanges =
+              changes ??
+              configurationProposalChanges(
+                parseConfigurationProposal(rawValues),
+              );
+            const temporary = await mkdtemp(
+              join(folder.uri.fsPath, ".rehearsal-config-review-"),
+            );
+            const input = join(temporary, "proposal.json");
+            try {
+              requireUnchanged();
+              await writeFile(
+                input,
+                JSON.stringify({
+                  schemaVersion: 1,
+                  sourceSha256: fingerprint,
+                  changes: validatedChanges,
+                  ...(topologyConfigPath && metadata.dependentTargetReview
+                    ? { topologyConfigPath }
+                    : {}),
+                }),
+                { mode: 0o600, flag: "wx" },
+              );
+              requireUnchanged();
+              const validation = await runRehearsalJson<{
+                sourceSha256: string;
+                validation: string;
+                writesConfiguration: boolean;
+                executesProposedCommands: boolean;
+              }>({
+                workspaceRoot: folder.uri.fsPath,
+                ...(snapshot.configPath
+                  ? { configPath: snapshot.configPath }
+                  : {}),
+                command: [
+                  "configuration",
+                  "review",
+                  `--proposal=${relative(folder.uri.fsPath, input)}`,
+                ],
+                expectedCommand: "configuration review",
+              });
+              requireUnchanged();
+              if (
+                validation.result.data.sourceSha256 !== fingerprint ||
+                validation.result.data.validation !==
+                  "complete-config-passed" ||
+                validation.result.data.writesConfiguration !== false ||
+                validation.result.data.executesProposedCommands !== false
+              )
+                throw new ConfigurationReviewError(
+                  "Core refused the exact configuration proposal.",
+                );
+            } finally {
+              await unlink(input).catch(() => undefined);
+              await rmdir(temporary).catch(() => undefined);
+            }
+            requireUnchanged();
+          }
+          const edit = new vscode.WorkspaceEdit();
+          await idle();
+          await requireBoundary();
+          requireUnchanged();
+          const end = document.lineAt(document.lineCount - 1).range.end;
+          edit.replace(
+            document.uri,
+            new vscode.Range(new vscode.Position(0, 0), end),
+            result.source,
           );
-          requireUnchanged();
-          const validation = await runRehearsalJson<{
-            sourceSha256: string;
-            validation: string;
-            writesConfiguration: boolean;
-            executesProposedCommands: boolean;
-          }>({
-            workspaceRoot: folder.uri.fsPath,
-            configPath: snapshot.configPath,
-            command: [
-              "configuration",
-              "review",
-              `--proposal=${relative(folder.uri.fsPath, input)}`,
-            ],
-            expectedCommand: "configuration review",
-          });
-          requireUnchanged();
+          if (!(await vscode.workspace.applyEdit(edit))) {
+            throw new ConfigurationReviewError(
+              "VS Code could not save the reviewed configuration changes.",
+            );
+          }
+          // Once our approved edit has applied, an editor auto-save may publish
+          // exactly those bytes before this continuation resumes. Only that own
+          // fingerprint is allowed through the otherwise unchanged guards.
+          requireReview(savedFingerprint);
+          await requireBoundary(savedFingerprint);
+          requireReview(savedFingerprint);
           if (
-            validation.result.data.sourceSha256 !== fingerprint ||
-            validation.result.data.validation !== "complete-config-passed" ||
-            validation.result.data.writesConfiguration !== false ||
-            validation.result.data.executesProposedCommands !== false
+            !document.isClosed &&
+            configurationFingerprint(document.getText()) !== savedFingerprint
           )
             throw new ConfigurationReviewError(
-              "Core refused the exact configuration proposal.",
+              "Configuration changed before saving. Review the unsaved document; it was not saved by this review.",
             );
-        } finally {
-          await unlink(input).catch(() => undefined);
-          await rmdir(temporary).catch(() => undefined);
-        }
-        requireUnchanged();
-      }
-      const edit = new vscode.WorkspaceEdit();
-      await idle();
-      await requireBoundary();
-      requireUnchanged();
-      const end = document.lineAt(document.lineCount - 1).range.end;
-      edit.replace(
-        document.uri,
-        new vscode.Range(new vscode.Position(0, 0), end),
-        result.source,
-      );
-      if (!(await vscode.workspace.applyEdit(edit))) {
-        throw new ConfigurationReviewError(
-          "VS Code could not save the reviewed configuration changes.",
-        );
-      }
-      requireReview();
-      await requireBoundary();
-      requireReview();
-      if (
-        document.isClosed ||
-        configurationFingerprint(document.getText()) !==
-          configurationFingerprint(result.source)
-      )
-        throw new ConfigurationReviewError(
-          "Configuration changed before saving. Review the unsaved document; it was not saved by this review.",
-        );
-      if (!(await document.save()))
-        throw new ConfigurationReviewError(
-          "VS Code could not save the reviewed configuration changes.",
-        );
-      requireReview(configurationFingerprint(result.source));
-      if (
-        document.isClosed ||
-        document.isDirty ||
-        configurationFingerprint(document.getText()) !==
-          configurationFingerprint(result.source)
-      )
-        throw new ConfigurationReviewError(
-          "Configuration changed while saving. Review the current file and any unsaved edits before trying again. This review did not overwrite or revert those changes.",
-        );
-      void vscode.window.showInformationMessage(
-        "Applied the reviewed Rehearsal configuration changes.",
-      );
-      await this.projects.refreshWorkspace(workspaceKey);
+          if (!document.isClosed && !(await document.save()))
+            throw new ConfigurationReviewError(
+              "VS Code could not save the reviewed configuration changes.",
+            );
+          requireReview(savedFingerprint);
+          if (
+            !document.isClosed &&
+            (document.isDirty ||
+              configurationFingerprint(document.getText()) !== savedFingerprint)
+          )
+            throw new ConfigurationReviewError(
+              "Configuration changed while saving. Review the current file and any unsaved edits before trying again. This review did not overwrite or revert those changes.",
+            );
+          // A hidden TextDocument can close after save. Its lifetime and save()
+          // result are not durable evidence: confirm bounded, byte-exact data
+          // through the original canonical regular-file boundary instead.
+          await requireSavedBytes();
+          if (
+            !document.isClosed &&
+            (document.isDirty ||
+              configurationFingerprint(document.getText()) !== savedFingerprint)
+          )
+            throw new ConfigurationReviewError(
+              "Configuration changed while confirming the save. Review the current file and any unsaved edits before trying again; no automatic retry was started.",
+            );
+          void vscode.window.showInformationMessage(
+            "Applied the reviewed Rehearsal configuration changes.",
+          );
+          this.editing.delete(workspaceKey);
+          // Expire pre-save drafts even if a file watcher owns the next inspection.
+          this.formDraftRevisions.set(
+            workspaceKey,
+            (this.formDraftRevisions.get(workspaceKey) ?? 0) + 1,
+          );
+          try {
+            await this.projects.refreshWorkspace(workspaceKey);
+          } catch {
+            void vscode.window.showWarningMessage(
+              "Configuration changes were saved, but the project check could not refresh. Return to the project and choose Refresh; do not apply the same proposal again.",
+            );
+          }
+        },
+      });
     } catch (error) {
       void vscode.window.showErrorMessage(
         error instanceof ConfigurationReviewError
           ? error.message
           : "Rehearsal could not complete this configuration review. Refresh the project, check trust and local file permissions, then review the current configuration and try again.",
       );
+      return false;
     } finally {
       this.pendingConfigurationReviews.delete(workspaceKey);
     }
@@ -848,7 +951,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     if (!workspaceToken) return;
     if (!vscode.workspace.isTrusted) {
       this.extensionReleases.clear();
-      this.configurationReviews.clear();
+      this.reviewPanels.releaseWorkspace(workspaceKey);
       snapshot = {
         workspaceName: snapshot.workspaceName,
         workspaceRoot: snapshot.workspaceRoot,
@@ -919,6 +1022,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         panel.webview.postMessage({
           type: "operationProgressUpdated",
           html: renderOperationProgress(snapshot),
+          sandboxSessionState: openSandboxSessionState(snapshot),
         }),
       ).then((delivered) => {
         if (!delivered) recover();
@@ -947,6 +1051,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         scriptNonce: randomBytes(18).toString("base64url"),
         extensionVersion: this.extensionVersion,
         extensionRelease: this.extensionReleases.get(workspaceKey),
+        formDraftRevision: this.formDraftRevisions.get(workspaceKey) ?? 0,
       },
       this.activePages.get(workspaceKey) ?? "overview",
       this.preferences.get(workspaceKey) ?? DEFAULT_WORKSPACE_PREFERENCES,

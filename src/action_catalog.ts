@@ -409,7 +409,7 @@ export const workspaceActionPlan = (
         {
           title: "Discard this disposable runtime?",
           detail:
-            "This removes the project's disposable local runtime. The immutable baseline remains available to recreate it. Unrelated containers and volumes are outside this action.",
+            "This deletes this project's disposable database and Storage volumes, including all current sandbox edits. The immutable baseline remains available to recreate the sandbox. Other projects' containers and volumes are preserved. The shared engine is preserved unless your explicitly enabled owner-only Colima policy verifies that Rehearsal started that exact idle engine boot and no containers are running.",
           confirmLabel: "Discard Runtime",
           destructive: true,
         },

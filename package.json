@@ -2,7 +2,7 @@
   "name": "rehearsal",
   "displayName": "Rehearsal",
   "description": "See whether database changes are ready for a safe local rehearsal without memorizing CLI commands.",
-  "version": "0.1.12",
+  "version": "0.1.18",
   "private": true,
   "publisher": "rehearsal-db",
   "license": "SEE LICENSE IN LICENSE",
@@ -109,7 +109,7 @@
           {
             "id": "follow-next-step",
             "title": "Follow the next best step",
-            "description": "Use the primary action on Overview. Installs, updates, migrations, resets, and cleanup always show an explicit confirmation or Rehearsal's own guided review."
+            "description": "Use the primary action on Overview. Installation and data changes require explicit approval or Rehearsal's guided review; separately opted-in automatic updates retain your saved authorization."
           }
         ]
       }
@@ -176,6 +176,26 @@
     "configuration": {
       "title": "Rehearsal",
       "properties": {
+        "rehearsal.automaticUpdates": {
+          "type": "object",
+          "scope": "machine",
+          "default": {
+            "extension": false,
+            "cli": false
+          },
+          "additionalProperties": false,
+          "properties": {
+            "extension": {
+              "type": "boolean",
+              "default": false
+            },
+            "cli": {
+              "type": "boolean",
+              "default": false
+            }
+          },
+          "markdownDescription": "Explicit opt-ins for this computer's user settings: `extension` installs verified official Rehearsal VSIX updates; `cli` updates compatible registry-backed npm Rehearsal packages in trusted idle projects, preserving dependency group and lockfile and disabling install scripts. Both default off. These choices authorize public release checks. Projects cannot enable them. No forced reloads, migrations or database lifecycle operations."
+        },
         "rehearsal.configPath": {
           "type": "string",
           "default": "",

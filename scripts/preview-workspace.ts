@@ -1,4 +1,9 @@
 import { createServer } from "node:http";
+import { renderUpdatePromptDocument } from "../src/update_prompt_view.js";
+import {
+  renderReviewDocument,
+  type ReviewContent,
+} from "../src/action_review_view.js";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { previewThemeOverrides as themeOverrides } from "./preview-themes.js";
@@ -17,6 +22,7 @@ import {
 import {
   parseOperationProgressSnapshot,
   renderOperationProgress,
+  openSandboxSessionState,
 } from "../src/operation_progress.js";
 import {
   WORKSPACE_ACTION_IDS,
@@ -858,7 +864,231 @@ const environmentStatePreview = (
   };
 };
 
+const sandboxSnapshot = (interactive: boolean): ProjectSnapshot => ({
+  workspaceName: "Rehearsal Test Lab · synthetic open session",
+  workspaceRoot: "/preview-only",
+  availability: "operation_active",
+  version: "1.0.0",
+  activity: {
+    schemaVersion: 1,
+    state: "busy",
+    operation: {
+      kind: "open",
+      startedAt: "2026-10-18T22:30:00.000Z",
+      rehearsalVersion: "1.0.0",
+      progress: parseOperationProgressSnapshot({
+        schemaVersion: 1,
+        operationId: "9".repeat(64),
+        state: "running",
+        startedAt: "2026-10-18T22:30:00.000Z",
+        updatedAt: "2026-10-18T22:30:10.000Z",
+        elapsedMilliseconds: 10000,
+        currentStage: {
+          id: 1,
+          phase: interactive ? "interactive-session" : "application-start",
+          target: "primary",
+          state: "running",
+          startedAt: "2026-10-18T22:30:00.000Z",
+          endedAt: null,
+          durationMilliseconds: 10000,
+        },
+        completedStages: [],
+        events: [],
+        truncated: { stages: false, events: false },
+      }),
+    },
+  },
+});
+
+// Fixture-only capacity stress case. These identities, sizes and ownership facts
+// are synthetic; this route never inspects the engine or any project resource.
+const manyResourceTargets = Array.from({ length: 12 }, (_, index) =>
+  index === 0 ? "primary" : `preview-${String(index + 1).padStart(2, "0")}`,
+);
+const manyResourcesSnapshot: ProjectSnapshot = {
+  ...readySnapshot,
+  workspaceName: "Local resources · synthetic pagination preview",
+  version: "1.0.0",
+  baseline: {
+    ...readySnapshot.baseline!,
+    generations: [
+      ...readySnapshot.baseline!.generations!,
+      ...Array.from({ length: 10 }, (_, index) => ({
+        ...readySnapshot.baseline!.generations![1]!,
+        generationId: `202609${30 - index}T000000Z-${(3000 + index).toString(16).padStart(12, "0")}`,
+        createdAt: `2026-09-${30 - index}T00:00:00.000Z`,
+        active: false,
+      })),
+    ],
+  },
+  runtime: {
+    ...readySnapshot.runtime!,
+    state: "mixed",
+    targets: manyResourceTargets.map((name, index) => ({
+      ...readySnapshot.runtime!.targets[0]!,
+      name,
+      state: index % 2 ? "stopped" : "running",
+      reason: index % 2 ? "runtime_not_running" : null,
+      endpoint:
+        index % 2
+          ? null
+          : {
+              kind: "postgresql",
+              host: "127.0.0.1",
+              port: 55432 + index,
+              database: "postgres",
+            },
+    })),
+  },
+  configurationMetadata: {
+    ...readySnapshot.configurationMetadata!,
+    profiles: [
+      {
+        name: "All preview targets",
+        targets: manyResourceTargets,
+        applicationUrl: "http://localhost:5175",
+      },
+      {
+        name: "Primary preview only",
+        targets: ["primary"],
+        applicationUrl: "http://localhost:5175",
+      },
+    ],
+  },
+  resources: {
+    ...readySnapshot.resources!,
+    engine: {
+      ...readySnapshot.resources!.engine,
+      resources: [
+        {
+          type: "Images",
+          totalCount: 23,
+          activeCount: 6,
+          size: "9.2GB",
+          reclaimable: "1.8GB (20%)",
+        },
+        {
+          type: "Local volumes",
+          totalCount: 23,
+          activeCount: 12,
+          size: "4.6GB",
+          reclaimable: "Unknown",
+        },
+      ],
+    },
+    environments: manyResourceTargets.map((target, index) => ({
+      ...readySnapshot.resources!.environments[0]!,
+      target,
+      projectId: `synthetic-pagination-${target}-rehearsal`,
+      displayName: `Preview sandbox ${String(index + 1).padStart(2, "0")}`,
+      protected: index % 4 === 0,
+      state: index % 2 ? "stopped" : "running",
+      runningContainerCount: index % 2 ? 0 : 1,
+      diskUsageBytes: (index + 1) * 44_440_000,
+      cpuPercent: index % 2 ? null : 1.25,
+      memoryUsageBytes: index % 2 ? null : 192 * 1024 ** 2,
+      cleanupEligibility: index % 2 ? "preview-required" : "running",
+      classification: parseEnvironmentClassification({
+        schemaVersion: 1,
+        role: "configured-environment",
+        dataPersistence: "preserved-on-stop",
+        presence: { state: "created", reason: "owned-resources-observed" },
+        receipt: {
+          state: "compatible",
+          reason: "supported-receipt-format-and-provider",
+          scope: "format-and-provider-only",
+        },
+        review: {
+          state: "not-due",
+          reason: index % 2 ? "not-running" : "recent-observable-activity",
+          staleAfterSeconds: 3600,
+          lastObservableActivityAt:
+            index % 2 ? null : "2026-10-13T18:37:00.000Z",
+        },
+      })!,
+      provenance: parseEnvironmentProvenance({
+        ...readySnapshot.resources!.environments[0]!.provenance!,
+        configuredPorts: [
+          { service: "database", host: "127.0.0.1", port: 55432 + index },
+          { service: "application", host: "localhost", port: 5175 },
+        ],
+      })!,
+    })),
+    catalog: {
+      schemaVersion: 1,
+      images: Array.from({ length: 23 }, (_, index) => {
+        const state = (
+          ["candidate", "in-use", "current", "outside-policy"] as const
+        )[index % 4]!;
+        return {
+          id: `sha256:${(1000 + index).toString(16).padStart(64, "0")}`,
+          service: index % 2 ? "storage-api" : "postgres",
+          tags: [
+            `preview.invalid/rehearsal/synthetic-${index % 2 ? "storage-api" : "postgres"}:version-${String(index + 1).padStart(2, "0")}`,
+          ],
+          digests: [
+            `preview.invalid/rehearsal/synthetic@sha256:${(2000 + index).toString(16).padStart(64, "0")}`,
+          ],
+          createdAt: `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+          bytes: (index + 1) * 32 * 1024 ** 2,
+          state,
+          reason:
+            state === "candidate"
+              ? "Synthetic safe candidate: no container references. Exact core preview is still required before removal."
+              : state === "in-use"
+                ? "Synthetic running container reference: this image cannot be removed."
+                : state === "current"
+                  ? "Synthetic current service version: retained for reuse."
+                  : "Synthetic image outside the supported cleanup policy: protected from removal.",
+          references:
+            state === "in-use"
+              ? [
+                  {
+                    id: `synthetic-image-reference-${index + 1}`,
+                    name: `synthetic-service-${index + 1}`,
+                    running: true,
+                    ownership:
+                      index % 3 ? ("project" as const) : ("other" as const),
+                  },
+                ]
+              : [],
+        };
+      }),
+      volumes: Array.from({ length: 23 }, (_, index) => ({
+        name: `synthetic-pagination-${String(index + 1).padStart(2, "0")}-database-and-storage-data`,
+        target:
+          index % 3 === 0
+            ? null
+            : manyResourceTargets[index % manyResourceTargets.length]!,
+        ownership: index % 3 === 0 ? "other" : "project",
+        purpose: index % 2 ? "storage" : "database",
+        bytes: (index + 1) * 16 * 1024 ** 2,
+        createdAt: `2026-09-${String(index + 1).padStart(2, "0")}T00:00:00.000Z`,
+        lastActivityAt: index % 2 ? null : "2026-10-13T18:37:00.000Z",
+        state: index % 2 ? "detached" : "attached",
+        protected: index % 3 === 0 || index % 4 === 0,
+        containerCount: index % 2 ? 0 : 1,
+        reason:
+          index % 3 === 0
+            ? "Synthetic other-project volume: read only and protected from deletion."
+            : "Synthetic persistent data: removal is only available through its owning environment's reviewed discard.",
+      })),
+      otherContainers: Array.from({ length: 23 }, (_, index) => ({
+        id: `synthetic-other-container-${String(index + 1).padStart(2, "0")}`,
+        name: `another-preview-project-service-${String(index + 1).padStart(2, "0")}`,
+        running: index % 2 === 0,
+        ownership: index % 3 === 0 ? "conflicting" : "other",
+        reason:
+          "Synthetic shared-capacity evidence only. Rehearsal will not modify this other project's container.",
+      })),
+    },
+  },
+};
+
 const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
+  "/resources-many": manyResourcesSnapshot,
+  "/sandbox": sandboxSnapshot(true),
+  "/sandbox-starting": sandboxSnapshot(false),
   "/": readySnapshot,
   "/not-created": environmentStatePreview("not-created"),
   "/incompatible": environmentStatePreview("incompatible"),
@@ -1276,6 +1506,99 @@ const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${host}:${requestedPort}`);
+  if (url.pathname === "/updates") {
+    const origin = `http://${host}:${requestedPort}`;
+    const stylesheet = new URL("/workspace.css", origin);
+    const theme = url.searchParams.get("theme");
+    if (theme) stylesheet.searchParams.set("theme", theme);
+    response.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    response.end(
+      renderUpdatePromptDocument(
+        {
+          workspaceName: "Rehearsal Test Lab · synthetic update preview",
+          core: { installed: "1.0.0", available: "1.0.1", eligible: true },
+          extension: { installed: "0.1.17", available: "0.1.18" },
+          channel: "preview",
+          automatic: { extension: false, cli: false },
+        },
+        {
+          resourceSource: origin,
+          stylesheetUri: stylesheet.toString(),
+          scriptNonce: "preview-update-nonce",
+        },
+      ),
+    );
+    return;
+  }
+  if (
+    ["/review-configuration", "/review-images", "/review-stale"].includes(
+      url.pathname,
+    )
+  ) {
+    const origin = `http://${host}:${requestedPort}`;
+    const stylesheet = new URL("/workspace.css", origin);
+    const theme = url.searchParams.get("theme");
+    if (theme) stylesheet.searchParams.set("theme", theme);
+    const content: ReviewContent =
+      url.pathname === "/review-configuration"
+        ? {
+            title: "Review configuration changes",
+            workspaceName: "Rehearsal Test Lab · synthetic preview",
+            description:
+              "Read the complete diff before saving. Nothing changes until you choose Apply changes. Application commands are not run by this edit.",
+            path: "rehearsal.config.mjs",
+            format: "diff",
+            changedFields: ["runtime.protected"],
+            detail:
+              '--- a/rehearsal.config.mjs\n+++ b/rehearsal.config.mjs\n@@ -87,7 +87,7 @@\n   // Disposable local runtime identity, URL, and dedicated database port.\n   runtime: {\n-    protected: false,\n+    protected: true,\n     displayName: "Manual PostgreSQL sandbox",\n     target: "postgresql",\n     applicationUrl: "http://127.0.0.1:57676",\n   },',
+          }
+        : url.pathname === "/review-images"
+          ? {
+              title: "Review image cleanup",
+              workspaceName: "Rehearsal Test Lab · synthetic preview",
+              description:
+                "Review every selected image before continuing to the final cleanup confirmation. This preview changes nothing.",
+              format: "text",
+              applyLabel: "Continue to cleanup confirmation",
+              detail:
+                "100 selected unused images · Synthetic boundary fixture\nNo database or Storage volumes are selected.\n\n" +
+                Array.from(
+                  { length: 100 },
+                  (_, i) =>
+                    `${i + 1}. postgres:synthetic-${i + 1}\nID: sha256:${(i + 1).toString(16).padStart(64, "0")}\nSize: 10485760 bytes\nTags: preview-only/postgres:synthetic-${i + 1}`,
+                ).join("\n\n"),
+            }
+          : {
+              title: "Review long-running environments",
+              workspaceName: "Rehearsal Test Lab · synthetic preview",
+              description:
+                "Review the exact environments before the final stop confirmation. Age is not proof of inactivity. Stopping preserves data.",
+              format: "text",
+              applyLabel: "Continue to stop confirmation",
+              detail:
+                "32 environments · Synthetic boundary fixture\nDatabase and Storage data are preserved by stopping.\n\n" +
+                Array.from(
+                  { length: 32 },
+                  (_, i) =>
+                    `${i + 1}. Sandbox ${i + 1}\nTarget: synthetic-${i + 1}\nImmutable project ID: rehearsal-preview-${i + 1}\nObserved age: 48 hours; user activity is not inferred.`,
+                ).join("\n\n"),
+            };
+    response.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    response.end(
+      renderReviewDocument(content, {
+        resourceSource: origin,
+        stylesheetUri: stylesheet.toString(),
+        scriptNonce: "preview-review-nonce",
+      }),
+    );
+    return;
+  }
   if (url.pathname === "/workspace.css") {
     response.writeHead(200, { "Content-Type": "text/css; charset=utf-8" });
     const stylesheet = await readFile(
@@ -1304,7 +1627,9 @@ const server = createServer(async (request, response) => {
   const requestedPage = url.searchParams.get("page");
   const activePage = WORKSPACE_PAGES.includes(requestedPage as WorkspacePage)
     ? (requestedPage as WorkspacePage)
-    : "overview";
+    : url.pathname === "/resources-many"
+      ? "runtime"
+      : "overview";
   const actionUris = Object.fromEntries(
     WORKSPACE_ACTION_IDS.map((action) => [action, `#preview-${action}`]),
   ) as Record<WorkspaceActionId, string>;
@@ -1345,11 +1670,13 @@ const server = createServer(async (request, response) => {
     [],
     url.pathname === "/loading" ? "loading" : "idle",
   );
-  if (url.pathname === "/progress" && url.searchParams.get("live") === "1") {
+  if (
+    ["/progress", "/sandbox-starting"].includes(url.pathname) &&
+    url.searchParams.get("live") === "1"
+  ) {
     const progress = snapshot.activity!.operation!.progress!;
-    const updates = Array.from({ length: 6 }, (_, index) => ({
-      type: "operationProgressUpdated",
-      html: renderOperationProgress({
+    const updates = Array.from({ length: 6 }, (_, index) => {
+      const next: ProjectSnapshot = {
         ...snapshot,
         activity: {
           ...snapshot.activity!,
@@ -1365,6 +1692,12 @@ const server = createServer(async (request, response) => {
               currentStage: progress.currentStage
                 ? {
                     ...progress.currentStage,
+                    phase:
+                      url.pathname === "/sandbox-starting"
+                        ? index === 5
+                          ? "cleanup"
+                          : "interactive-session"
+                        : progress.currentStage.phase,
                     durationMilliseconds:
                       progress.currentStage.durationMilliseconds +
                       (index + 1) * 2000,
@@ -1373,8 +1706,13 @@ const server = createServer(async (request, response) => {
             },
           },
         },
-      }),
-    }));
+      };
+      return {
+        type: "operationProgressUpdated",
+        html: renderOperationProgress(next),
+        sandboxSessionState: openSandboxSessionState(next),
+      };
+    });
     const serialized = JSON.stringify(updates).replaceAll("<", "\\u003c");
     document = document.replace(
       "</body>",
@@ -1414,7 +1752,7 @@ const server = createServer(async (request, response) => {
 server.listen(requestedPort, host, () => {
   console.log(`Rehearsal workspace preview: http://${host}:${requestedPort}`);
   console.log(
-    "States: /, /auth, /progress, /progress-unavailable, /loading, /outdated, /missing, /not-ready, /timeout",
+    "States: /, /auth, /progress, /progress-unavailable, /sandbox, /sandbox-starting, /resources-many, /loading, /outdated, /missing, /not-ready, /timeout",
   );
   console.log(
     "Themes: add ?theme=light, ?theme=dark-modern, ?theme=contrast or ?theme=contrast-light",
