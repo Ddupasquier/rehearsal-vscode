@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.21 — Native Windows dispatch correction
+
+- Refuse foreground project commands on native Windows before terminal creation or
+  dispatch, including while inspection is loading or a ready-state shortcut is visible.
+  An older core package cannot bypass that extension-host boundary; use the documented
+  WSL 2 Linux workspace instead.
+- Supersede the immutable 0.1.20 GitHub preview without changing its bytes, tag or
+  checksum. The canonical extension identity and free Starter license remain unchanged.
+
 ## 0.1.20 — Platform compatibility candidate
 
 - Distinguish native Windows from a Windows desktop running the extension in a WSL 2

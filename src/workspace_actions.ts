@@ -9,7 +9,10 @@ import {
   type FileHandle,
 } from "node:fs/promises";
 import * as vscode from "vscode";
-import { runRehearsalJson } from "./process_adapter.js";
+import {
+  assertInspectionPlatform,
+  runRehearsalJson,
+} from "./process_adapter.js";
 import { parseActivityData } from "./contracts.js";
 import { EXTENSION_ID } from "./extension_identity.js";
 import { terminalShellFamily } from "./platform_runtime.js";
@@ -172,6 +175,8 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     private readonly workspaceState: vscode.Memento,
     private readonly reviews?: RehearsalReviewPanels,
     private readonly mayStartWork: () => boolean = () => true,
+    private readonly hostPlatform: () => NodeJS.Platform = () =>
+      process.platform,
   ) {
     this.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(({ removed }) => {
@@ -386,7 +391,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         return;
       }
       case "terminal":
-        if (!this.mayStartWork()) return;
+        if (!this.terminalHostSupported(true) || !this.mayStartWork()) return;
         if (!vscode.workspace.isTrusted) {
           void vscode.window.showWarningMessage(
             "Trust this workspace before running a Rehearsal command.",
@@ -463,7 +468,11 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       readonly coordinationDirectory?: string;
     },
   ): Promise<boolean> {
-    if (!this.mayStartWork()) return false;
+    if (
+      !this.terminalHostSupported(options?.automatic !== true) ||
+      !this.mayStartWork()
+    )
+      return false;
     const automatic = options?.automatic === true;
     if (automatic && !options?.coordinationDirectory) return false;
     if (
@@ -516,6 +525,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     );
     const contextCurrent = () =>
       !this.disposed &&
+      this.terminalHostSupported(false) &&
       this.mayStartWork() &&
       vscode.workspace.isTrusted &&
       this.projects.snapshotFor(workspaceKey) === snapshot &&
@@ -976,8 +986,10 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     requireShellIntegration = false,
     onDispatched?: (terminal: vscode.Terminal, id: string) => void,
   ): Promise<boolean> {
+    if (!this.terminalHostSupported(revealTerminal)) return false;
     const canLaunch = () =>
       !this.disposed &&
+      this.terminalHostSupported(false) &&
       this.mayStartWork() &&
       vscode.workspace.isTrusted &&
       Boolean(
@@ -1138,6 +1150,19 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     onDispatched?.(terminal, activity.id);
     this.monitorTerminalActivity(folder, workspaceKey, terminal, activity.id);
     return true;
+  }
+
+  private terminalHostSupported(showGuidance: boolean): boolean {
+    try {
+      assertInspectionPlatform(this.hostPlatform());
+      return true;
+    } catch {
+      if (showGuidance)
+        void vscode.window.showWarningMessage(
+          "Rehearsal did not start a command on native Windows. Open this project in VS Code Remote - WSL using WSL 2 and its Linux home filesystem, then retry there. No terminal, package update or database operation was started.",
+        );
+      return false;
+    }
   }
 
   private monitorTerminalActivity(
