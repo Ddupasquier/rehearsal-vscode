@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   publish: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
+  openExternal: vi.fn(),
   review: vi.fn(),
   reviewApproval: vi.fn(),
   releaseReviewWorkspace: vi.fn(),
@@ -61,10 +62,12 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("vscode", () => ({
   env: {
+    openExternal: mocks.openExternal,
     get shell() {
       return mocks.shell;
     },
   },
+  Uri: { parse: (value: string) => ({ toString: () => value }) },
   workspace: {
     onDidChangeWorkspaceFolders: (listener: typeof mocks.folderListener) => {
       mocks.folderListener = listener;
@@ -116,7 +119,10 @@ vi.mock("vscode", () => ({
   ThemeIcon: class {},
   ProgressLocation: { Notification: 1 },
 }));
-vi.mock("../src/process_adapter.js", () => ({ runRehearsalJson: mocks.read }));
+vi.mock("../src/process_adapter.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/process_adapter.js")>()),
+  runRehearsalJson: mocks.read,
+}));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   return {
@@ -221,6 +227,7 @@ const actions = (
   onWrite?: () => Promise<void>,
   withReviews = true,
   mayStartWork: () => boolean = () => true,
+  hostPlatform: () => NodeJS.Platform = () => process.platform,
 ) => {
   const runner = new RehearsalWorkspaceActions(
     {
@@ -244,6 +251,7 @@ const actions = (
         } as never)
       : undefined,
     mayStartWork,
+    hostPlatform,
   );
   runners.push(runner);
   return runner;
@@ -305,6 +313,88 @@ beforeEach(async () => {
   }));
 });
 describe("reviewed resource actions", () => {
+  it.each(["loading", "ready"] as const)(
+    "refuses every native Windows foreground shortcut while %s, independent of inspection",
+    async (availability) => {
+      current = { ...snapshot, availability };
+      const storage = new Map<string, unknown>();
+      const runner = actions(
+        storage,
+        undefined,
+        true,
+        () => true,
+        () => "win32",
+      );
+      await runner.runWorkspace("file:///workspace", "guidedSetup");
+      await runner.runWorkspace("file:///workspace", "doctor");
+      expect(mocks.confirm).not.toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ modal: true }),
+        expect.any(String),
+      );
+      expect(mocks.terminal).not.toHaveBeenCalled();
+      expect(mocks.execute).not.toHaveBeenCalled();
+      expect(mocks.read).not.toHaveBeenCalled();
+      expect(storage.size).toBe(0);
+    },
+  );
+  it("refuses automatic native Windows package updates before identity reads, leases or activity writes", async () => {
+    const verify = vi.fn(async () => true);
+    const storage = new Map<string, unknown>();
+    const runner = actions(
+      storage,
+      undefined,
+      true,
+      () => true,
+      () => "win32",
+    );
+    expect(
+      await runner.updatePackageVersion(
+        "file:///workspace",
+        "0.1.0-rc.4",
+        "0.1.0-rc.8",
+        verify,
+        "devDependencies",
+        automaticOptions(),
+      ),
+    ).toBe(false);
+    expect(verify).not.toHaveBeenCalled();
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(await readdir(coordinationDirectory)).toEqual([]);
+    expect(storage.size).toBe(0);
+  });
+  it("rechecks actual host before terminal creation after an awaited approval", async () => {
+    let platform: NodeJS.Platform = "linux";
+    mocks.confirm.mockImplementationOnce(async (_title, _options, label) => {
+      platform = "win32";
+      return label;
+    });
+    const storage = new Map<string, unknown>();
+    await actions(
+      storage,
+      undefined,
+      true,
+      () => true,
+      () => platform,
+    ).runWorkspace("file:///workspace", "doctor");
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+    expect(storage.size).toBe(0);
+  });
+  it("keeps public documentation available on native Windows without terminal authority", async () => {
+    await actions(
+      new Map(),
+      undefined,
+      true,
+      () => true,
+      () => "win32",
+    ).runWorkspace("file:///workspace", "documentation");
+    expect(mocks.openExternal).toHaveBeenCalledOnce();
+    expect(mocks.terminal).not.toHaveBeenCalled();
+  });
   it("uses PowerShell-compatible previews and text only for an identified PowerShell fallback", async () => {
     vi.useFakeTimers();
     mocks.shell = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
