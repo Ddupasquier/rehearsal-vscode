@@ -5,6 +5,11 @@ import {
   comparePublishedVersions,
   isPublishedVersion,
 } from "./update_advisory.js";
+import {
+  EXTENSION_NAME,
+  EXTENSION_PUBLISHER,
+  extensionArtifactFilename,
+} from "./extension_identity.js";
 
 export const EXTENSION_UPDATE_LIMITS = Object.freeze({
   archiveBytes: 8 * 1024 * 1024,
@@ -25,8 +30,8 @@ export interface ExtensionUpdateRuntime {
   readonly nodeVersion: string;
 }
 export interface VerifiedExtensionManifest {
-  readonly publisher: "rehearsal-db";
-  readonly name: "rehearsal";
+  readonly publisher: typeof EXTENSION_PUBLISHER;
+  readonly name: typeof EXTENSION_NAME;
   readonly version: string;
   readonly engines: { readonly vscode: string; readonly node: string };
 }
@@ -37,7 +42,7 @@ export interface VerifiedExtensionUpdate {
 }
 const releaseAssets = (version: string) => {
   if (!isPublishedVersion(version)) return fail();
-  const filename = `rehearsal-${version}.vsix`;
+  const filename = extensionArtifactFilename(version);
   const base = `https://github.com/Ddupasquier/rehearsal-vscode/releases/download/v${version}/`;
   return { filename, archive: base + filename, checksums: base + "SHA256SUMS" };
 };
@@ -211,8 +216,8 @@ const verifyManifest = (
       ? /^>=(\d+) <(\d+)$/u.exec(engines.node)
       : null;
   if (
-    data.publisher !== "rehearsal-db" ||
-    data.name !== "rehearsal" ||
+    data.publisher !== EXTENSION_PUBLISHER ||
+    data.name !== EXTENSION_NAME ||
     data.version !== version ||
     data.main !== "./dist/src/extension.js" ||
     data.browser !== undefined ||
@@ -264,8 +269,8 @@ const verifyManifest = (
   };
   const attributes = xmlAttributes(identities[0]![1]!);
   if (
-    attributes.get("Publisher") !== "rehearsal-db" ||
-    attributes.get("Id") !== "rehearsal" ||
+    attributes.get("Publisher") !== EXTENSION_PUBLISHER ||
+    attributes.get("Id") !== EXTENSION_NAME ||
     attributes.get("Version") !== version ||
     (attributes.has("TargetPlatform") &&
       attributes.get("TargetPlatform") !== "universal")
@@ -292,8 +297,8 @@ const verifyManifest = (
       return fail();
   }
   return {
-    publisher: "rehearsal-db",
-    name: "rehearsal",
+    publisher: EXTENSION_PUBLISHER,
+    name: EXTENSION_NAME,
     version,
     engines: { vscode: engines.vscode as string, node: engines.node as string },
   };

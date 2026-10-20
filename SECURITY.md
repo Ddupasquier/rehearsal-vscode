@@ -4,6 +4,24 @@ The extension is a client of the workspace-installed Rehearsal CLI. It never imp
 Rehearsal implementation modules or implements database, migration, sanitization,
 identity, Storage, restore, or cleanup behavior.
 
+## Extension identity boundary
+
+The canonical package from 0.1.19 is `rehearsal-db.rehearsal-db`, displayed in Marketplace
+as **Rehearsal DB**. The workbench remains Rehearsal. Automatic update metadata,
+asset names (`rehearsal-db-<version>.vsix`) and embedded publisher/name must all agree
+with this canonical identity; legacy `rehearsal-db.rehearsal` archives are refused.
+Public legacy 0.1.18 remains immutable and available, but its old asset-name filter
+does not silently install the canonical identity.
+
+Activation fails closed whenever VS Code still reports the legacy extension ID.
+`isActive: false` does not prove an installed extension is disabled, so it cannot
+authorize coexistence. The supported migration is explicit: finish active commands,
+save work, uninstall the legacy extension, reload and install the verified canonical
+package. This release does not silently uninstall/disable another extension, inspect
+or copy its private Memento state, or alter project config, keys, baselines or database
+data. Shared user settings remain unchanged; review those settings before migration.
+See the [manual migration guide](README.md#move-from-a-preview-through-0118).
+
 ## Fail-closed rules
 
 - Do not run in an untrusted workspace.

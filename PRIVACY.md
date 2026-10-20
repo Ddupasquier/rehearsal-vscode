@@ -25,6 +25,22 @@ independent extension and CLI checkboxes. They are saved as
 repository configuration or Settings Sync. Closing or deferring the prompt does not opt
 in. Turn either flag off in user settings or **Rehearsal: Configure Update Checks**.
 
+## Canonical identity and legacy previews
+
+From 0.1.19, the package identity is `rehearsal-db.rehearsal-db` (Marketplace display
+name **Rehearsal DB**); older GitHub previews use `rehearsal-db.rehearsal`. The new
+extension does not read or import the old extension's private workspace/global storage.
+Per-extension view preferences, bounded activity receipts and metadata-check consent
+are not transferred. Review consent and re-select views in the new installation.
+
+Shared VS Code user settings keep their existing values, including the separately
+chosen `rehearsal.automaticUpdates` flags. They are not reset by the identity change;
+review or disable them before migrating if desired. Project config, credentials, keys,
+baselines and database/Storage data are neither copied nor modified for migration.
+No migration report or account association is uploaded. The new extension refuses to
+activate if VS Code still reports the legacy extension; it does not silently uninstall,
+disable or rename it. Follow the [manual migration steps](README.md#move-from-a-preview-through-0118).
+
 ## When networking can happen
 
 Passive project inspection makes no network request. Separate optional update checks
@@ -41,6 +57,8 @@ official GitHub release's VSIX and SHA256SUMS, allowing GitHub's HTTPS asset red
 `release-assets.githubusercontent.com`. These services see ordinary connection information
 and the requested public release asset. Checksums, embedded extension identity and engine
 compatibility are verified before VS Code receives the local file. No forced reload occurs.
+The canonical identity accepts only its `rehearsal-db-<version>.vsix` artifacts; a legacy
+package cannot become an automatic identity migration.
 Automatic CLI updates separately authorize the project's npm registry/package-manager
 traffic for compatible exact versions; installation scripts are disabled. No database
 operation is requested. Active work, dirty files and unavailable verification defer updates.

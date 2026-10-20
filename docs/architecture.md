@@ -6,8 +6,8 @@
 | ------------- | -------------------------------------------------------------------------- |
 | Repository    | Separate sibling repository: `rehearsal-vscode`                            |
 | Visibility    | Public repository and reviewed GitHub VSIX prereleases                     |
-| Display name  | Rehearsal                                                                  |
-| Extension ID  | `rehearsal-db.rehearsal`                                                   |
+| Display name  | Marketplace: Rehearsal DB; workbench and commands: Rehearsal               |
+| Extension ID  | Canonical from 0.1.19: `rehearsal-db.rehearsal-db`                         |
 | Publisher     | Registered Marketplace publisher `rehearsal-db`, administered by the owner |
 | Product owner | Rehearsal project, administered by Ddupasquier                             |
 | License       | Free Starter for included features; Rehearsal core remains MIT             |
@@ -20,6 +20,32 @@ owns the current distribution channels; a registered publisher alone is not a li
 extension. Public pricing, payment setup and a paid launch require separate approval.
 The manifest's `private: true` prevents npm publication; it does not describe GitHub
 repository visibility or prevent reviewed VSIX packaging.
+
+### Legacy identity migration
+
+GitHub previews through 0.1.18 used `rehearsal-db.rehearsal`. That public artifact and
+its tag/checksum remain immutable and downloadable. The canonical name change uses a
+new version, 0.1.19, and assets named `rehearsal-db-<version>.vsix`. The old updater's
+`rehearsal-<version>.vsix` filter ignores canonical-only releases rather than silently
+performing an identity migration. Canonical metadata and ZIP/manifest validation accept
+only the canonical asset name, publisher `rehearsal-db` and package name `rehearsal-db`.
+
+The canonical activation entry point checks the native extension registry before
+registering commands, watchers or update schedulers. If VS Code reports the legacy ID,
+activation refuses with migration guidance. `isActive: false` proves only that an
+extension is not active, not that it is disabled. No guessed disabled state or automatic
+uninstall, disable, rename, reload or process interruption resolves coexistence.
+The supported owner-driven sequence is finish commands, save files, uninstall legacy,
+reload, install canonical and review preferences. A disabled legacy installation is
+safe only when the native API no longer reports it; otherwise refusal remains.
+
+Private global/workspace storage is scoped to the extension identity and is not read,
+copied or rewritten from the old identity. View preferences, activity receipts and
+metadata-check consent therefore start in the new identity's own storage. Existing
+shared `rehearsal.*` user configuration remains unchanged, including automatic-update
+flags, so the migration guide asks users to review them. Project configuration, privacy
+keys, baselines and database/Storage state are outside this identity migration.
+The [README migration steps](../README.md#move-from-a-preview-through-0118) own the user flow.
 
 ## Technical foundation
 
@@ -509,5 +535,6 @@ new grant travels with a separately reviewed Starter release, not a rebuilt old 
 
 There is no telemetry or hosted license service. Public GitHub prereleases establish
 technical distribution only. Future Pro terms, entitlement design, paid launch, checkout,
-Marketplace publication, pricing and refunds need their own approval. Those future paid
+pricing and refunds need their own approval. Free Marketplace distribution still requires
+its reviewed artifact and verified listing; publisher creation alone is not publication. Those future paid
 decisions are not prerequisites for the approved Starter grant or free CLI use.

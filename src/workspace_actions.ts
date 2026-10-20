@@ -11,6 +11,7 @@ import {
 import * as vscode from "vscode";
 import { runRehearsalJson } from "./process_adapter.js";
 import { parseActivityData } from "./contracts.js";
+import { EXTENSION_ID } from "./extension_identity.js";
 import { isEligibleCoreUpdate } from "./update_advisory.js";
 import { parseImageCleanupReview } from "./resource_contract.js";
 import { parseStaleStopReview } from "./stale_review.js";
@@ -162,6 +163,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     private readonly output: vscode.LogOutputChannel,
     private readonly workspaceState: vscode.Memento,
     private readonly reviews?: RehearsalReviewPanels,
+    private readonly mayStartWork: () => boolean = () => true,
   ) {
     this.subscriptions.push(
       vscode.workspace.onDidChangeWorkspaceFolders(({ removed }) => {
@@ -339,7 +341,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       case "inspection_settings":
         await vscode.commands.executeCommand(
           "workbench.action.openSettings",
-          "@ext:rehearsal-db.rehearsal Rehearsal inspection timeout",
+          `@ext:${EXTENSION_ID} Rehearsal inspection timeout`,
         );
         return;
       case "cancel_owned_operation":
@@ -370,6 +372,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         return;
       }
       case "terminal":
+        if (!this.mayStartWork()) return;
         if (!vscode.workspace.isTrusted) {
           void vscode.window.showWarningMessage(
             "Trust this workspace before running a Rehearsal command.",
@@ -446,6 +449,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       readonly coordinationDirectory?: string;
     },
   ): Promise<boolean> {
+    if (!this.mayStartWork()) return false;
     const automatic = options?.automatic === true;
     if (automatic && !options?.coordinationDirectory) return false;
     if (
@@ -498,6 +502,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     );
     const contextCurrent = () =>
       !this.disposed &&
+      this.mayStartWork() &&
       vscode.workspace.isTrusted &&
       this.projects.snapshotFor(workspaceKey) === snapshot &&
       Boolean(
@@ -650,6 +655,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       const current = this.projects.snapshotFor(workspaceKey);
       if (
         this.disposed ||
+        !this.mayStartWork() ||
         !vscode.workspace.isTrusted ||
         !current ||
         current !== snapshot ||
@@ -674,6 +680,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
 
   async cleanupImages(workspaceKey: string, rawIds: unknown): Promise<void> {
     if (
+      !this.mayStartWork() ||
       !vscode.workspace.isTrusted ||
       !Array.isArray(rawIds) ||
       !rawIds.length ||
@@ -820,7 +827,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
   }
 
   async reviewStaleStop(workspaceKey: string): Promise<void> {
-    if (!vscode.workspace.isTrusted) return;
+    if (!this.mayStartWork() || !vscode.workspace.isTrusted) return;
     const snapshot = this.projects.snapshotFor(workspaceKey);
     const folder = vscode.workspace.workspaceFolders?.find(
       (folder) => folder.uri.toString() === workspaceKey,
@@ -957,6 +964,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
   ): Promise<boolean> {
     const canLaunch = () =>
       !this.disposed &&
+      this.mayStartWork() &&
       vscode.workspace.isTrusted &&
       Boolean(
         vscode.workspace.workspaceFolders?.some(

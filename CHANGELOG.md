@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.1.19 — Canonical Rehearsal DB identity
+
+- Use Marketplace display name **Rehearsal DB** and canonical extension ID
+  `rehearsal-db.rehearsal-db`, retaining the Rehearsal workbench brand and free Starter
+  terms. Canonical GitHub assets are named `rehearsal-db-0.1.19.vsix`.
+- Require a one-time explicit migration from `rehearsal-db.rehearsal`: finish commands,
+  save work, uninstall the legacy extension, reload, then install the verified canonical
+  package. Canonical activation refuses while VS Code still reports the legacy ID;
+  inactive is not evidence that an extension is disabled.
+- Validate automatic updates against only the canonical artifact name and embedded
+  identity. Legacy 0.1.18 remains available with unchanged bytes and checksums; its old
+  artifact-name filter does not automatically rename or replace the installation.
+- Preserve project configuration, keys, baselines, database data and shared user settings.
+  Do not copy private per-extension view state, activity history or metadata-check consent,
+  and do not automatically remove or disable an existing installation.
+
 ## 0.1.18 — Free Starter preview with automatic updates and usability fixes
 
 This release includes the previously local 0.1.13–0.1.17 improvements below.
