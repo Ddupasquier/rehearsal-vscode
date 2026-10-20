@@ -4,19 +4,12 @@ import { RehearsalWorkspacePanels } from "./workspace_panel.js";
 import { RehearsalWorkspaceActions } from "./workspace_actions.js";
 import { AutomaticDashboardController } from "./automatic_dashboard.js";
 import { createUpdateAdvisory } from "./update_advisory_host.js";
+import { RehearsalReviewPanels } from "./review_panel.js";
+import { AutomaticUpdateScheduler } from "./automatic_update_scheduler.js";
+import { readAutomaticUpdateSettings } from "./automatic_update_settings.js";
+import { openBundledDocument } from "./bundled_documents.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
-
-const openBundledDocument = async (
-  context: vscode.ExtensionContext,
-  filename: "LICENSE" | "PRIVACY.md" | "SUPPORT.md",
-): Promise<void> => {
-  const uri = vscode.Uri.joinPath(context.extensionUri, filename);
-  await vscode.window.showTextDocument(
-    await vscode.workspace.openTextDocument(uri),
-    { preview: true },
-  );
-};
 
 const selectWorkspaceKey = async (
   provided: unknown,
@@ -47,10 +40,12 @@ const selectWorkspaceKey = async (
 export const activate = (context: vscode.ExtensionContext): void => {
   const output = vscode.window.createOutputChannel("Rehearsal", { log: true });
   const provider = new RehearsalTreeProvider(output);
+  const reviews = new RehearsalReviewPanels(context.extensionUri);
   const actions = new RehearsalWorkspaceActions(
     provider,
     output,
     context.workspaceState,
+    reviews,
   );
   const workspaces = new RehearsalWorkspacePanels(
     context.extensionUri,
@@ -58,6 +53,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
     actions,
     context.workspaceState,
     String(context.extension.packageJSON.version),
+    reviews,
   );
   const tree = vscode.window.createTreeView("rehearsal.projects", {
     treeDataProvider: provider,
@@ -70,6 +66,8 @@ export const activate = (context: vscode.ExtensionContext): void => {
     state: context.workspaceState,
     version: String(context.extension.packageJSON.version),
     preview: context.extension.packageJSON.preview === true,
+    extensionUri: context.extensionUri,
+    storagePath: context.globalStorageUri.fsPath,
     onExtensionRelease: (key, evidence) =>
       workspaces.updateExtensionRelease(key, evidence),
   });
@@ -103,13 +101,27 @@ export const activate = (context: vscode.ExtensionContext): void => {
         );
       });
   };
+  const automaticUpdateScheduler = new AutomaticUpdateScheduler(async () => {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const snapshot = provider.snapshotFor(folder.uri.toString());
+      if (!snapshot || snapshot.availability === "loading") continue;
+      await updates.check(folder.uri.toString(), false);
+    }
+  });
+  const scheduleAutomaticUpdates = () => {
+    const settings = readAutomaticUpdateSettings();
+    automaticUpdateScheduler.setEnabled(settings.extension || settings.cli);
+  };
+  scheduleAutomaticUpdates();
   context.subscriptions.push(
     output,
     provider,
+    reviews,
     actions,
     workspaces,
     tree,
     updates,
+    automaticUpdateScheduler,
     provider.onDidUpdateSnapshot(({ workspaceKey }) => {
       tryAutomaticDashboard(workspaceKey);
       void updates.open(workspaceKey);
@@ -119,6 +131,13 @@ export const activate = (context: vscode.ExtensionContext): void => {
       if (vscode.workspace.isTrusted) void provider.refresh();
     }),
     vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("rehearsal.automaticUpdates")) {
+        scheduleAutomaticUpdates();
+        for (const folder of vscode.workspace.workspaceFolders ?? []) {
+          void updates.resumeAutomatic(folder.uri.toString());
+          void updates.check(folder.uri.toString());
+        }
+      }
       if (!event.affectsConfiguration("rehearsal.openDashboardAutomatically"))
         return;
       const folders = vscode.workspace.workspaceFolders ?? [];
@@ -154,13 +173,13 @@ export const activate = (context: vscode.ExtensionContext): void => {
       await vscode.env.openExternal(vscode.Uri.parse(DOCUMENTATION_URL));
     }),
     vscode.commands.registerCommand("rehearsal.openPrivacy", async () => {
-      await openBundledDocument(context, "PRIVACY.md");
+      await openBundledDocument(context.extensionUri, "PRIVACY.md");
     }),
     vscode.commands.registerCommand("rehearsal.openSupport", async () => {
-      await openBundledDocument(context, "SUPPORT.md");
+      await openBundledDocument(context.extensionUri, "SUPPORT.md");
     }),
     vscode.commands.registerCommand("rehearsal.openLicense", async () => {
-      await openBundledDocument(context, "LICENSE");
+      await openBundledDocument(context.extensionUri, "LICENSE");
     }),
     vscode.commands.registerCommand(
       "rehearsal.resetLocalState",

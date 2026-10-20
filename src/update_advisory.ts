@@ -234,6 +234,7 @@ const initial: AdvisoryState = {
   skippedExtension: null,
 };
 export interface UpdateAdvisoryHost {
+  automaticChecksEnabled?(): boolean;
   extensionRelease?(key: string, evidence: ExtensionReleaseEvidence): void;
   checking<T>(action: () => Promise<T>): Promise<T>;
   allowed(key: string): boolean;
@@ -308,7 +309,11 @@ export class UpdateAdvisoryController {
     private readonly now: () => number = Date.now,
   ) {}
   open(key: string): Promise<void> {
-    if (this.seen.has(key) || !this.allowed(key)) return Promise.resolve();
+    if (
+      !this.allowed(key) ||
+      (this.seen.has(key) && this.host.automaticChecksEnabled?.() !== true)
+    )
+      return Promise.resolve();
     this.seen.add(key);
     return this.check(key, false);
   }
@@ -372,7 +377,8 @@ export class UpdateAdvisoryController {
   }
   private async perform(key: string, manual: boolean, once = false) {
     let state = savedState(this.host.load(key));
-    let permitted = state.enabled || once;
+    let permitted =
+      state.enabled || once || this.host.automaticChecksEnabled?.() === true;
     if (!permitted && (manual || !state.offered)) {
       state = { ...state, offered: true };
       await this.host.save(key, state);

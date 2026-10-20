@@ -156,6 +156,34 @@ describe("workspace action catalog", () => {
     ).toBe(`'npx' '--config=folder/it'"'"'s-safe.mjs' '$(unsafe)'`);
   });
 
+  it("states discard data loss and qualified engine retention before destructive approval", () => {
+    const plan = workspaceActionPlan(snapshot(), "discardRuntime");
+    expect(plan?.arguments).toEqual([
+      "npx",
+      "--no-install",
+      "rehearsal",
+      "discard",
+      "--config=infrastructure/rehearsal/rehearsal.config.mjs",
+    ]);
+    expect(plan?.confirmation).toMatchObject({
+      title: "Discard this disposable runtime?",
+      confirmLabel: "Discard Runtime",
+      destructive: true,
+    });
+    expect(plan?.confirmation?.detail).toContain(
+      "deletes this project's disposable database and Storage volumes, including all current sandbox edits",
+    );
+    expect(plan?.confirmation?.detail).toContain(
+      "The immutable baseline remains available to recreate the sandbox",
+    );
+    expect(plan?.confirmation?.detail).toContain(
+      "Other projects' containers and volumes are preserved",
+    );
+    expect(plan?.confirmation?.detail).toContain(
+      "The shared engine is preserved unless your explicitly enabled owner-only Colima policy verifies that Rehearsal started that exact idle engine boot and no containers are running",
+    );
+  });
+
   it("exposes cancellation as an owned editor action rather than a shell command", () => {
     expect(
       workspaceActionPlan(snapshot(), "cancelOwnedOperation"),

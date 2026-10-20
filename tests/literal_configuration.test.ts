@@ -2,8 +2,70 @@ import { describe, expect, it } from "vitest";
 import {
   editLiteralConfiguration,
   hasLiteralConfigurationPath,
+  matchesLiteralConfigurationValue,
 } from "../src/literal_configuration.js";
 describe("literal configuration editing", () => {
+  it("compares exact scalar values without executing source or normalizing strings", () => {
+    const source = `// displayName: 'bait', protected: true\nexport default defineRehearsalConfig({runtime: { displayName: 'Manual sandbox', protected: false, projectId: 'stable' }});`;
+    expect(
+      matchesLiteralConfigurationValue(
+        source,
+        "runtime.displayName",
+        "Manual sandbox",
+      ),
+    ).toBe(true);
+    expect(
+      matchesLiteralConfigurationValue(source, "runtime.protected", false),
+    ).toBe(true);
+    expect(
+      matchesLiteralConfigurationValue(
+        source,
+        "runtime.displayName",
+        "Different",
+      ),
+    ).toBe(false);
+    expect(
+      matchesLiteralConfigurationValue(source, "runtime.protected", true),
+    ).toBe(false);
+    expect(
+      matchesLiteralConfigurationValue(source, "runtime.missing", false),
+    ).toBe(false);
+    expect(
+      matchesLiteralConfigurationValue(source, "runtime.displayName", false),
+    ).toBe(false);
+  });
+  it.each([
+    [String.raw`'Dylan\'s sandbox'`, "Dylan's sandbox"],
+    [String.raw`"Dylan\u0027s sandbox"`, "Dylan's sandbox"],
+    [String.raw`'Manual\x20sandbox'`, "Manual sandbox"],
+    [String.raw`'Manual\u0020sandbox'`, "Manual sandbox"],
+    [String.raw`'Manual\u{20}sandbox'`, "Manual sandbox"],
+    [String.raw`'Sandbox \u{1f680}'`, "Sandbox 🚀"],
+    [String.raw`'C:\\sandbox'`, String.raw`C:\sandbox`],
+    [String.raw`'Name\q'`, "Nameq"],
+    ["'Manu\\\nal sandbox'", "Manual sandbox"],
+  ])("decodes supported string %s without evaluating it", (literal, value) => {
+    const source = `export default {runtime:{displayName: ${literal}}};`;
+    expect(
+      matchesLiteralConfigurationValue(source, "runtime.displayName", value),
+    ).toBe(true);
+  });
+  it("fails closed on ambiguous owners, expressions and malformed or legacy numeric escapes", () => {
+    for (const source of [
+      "export default {runtime: {displayName: getName()}};",
+      "export default {runtime: {displayName: 'A', displayName: 'A'}};",
+      "export default {runtime: {...options, displayName: 'A'}};",
+      "export default {runtime: {displayName: 'A'}} || other;",
+      String.raw`export default {runtime: {displayName: '\u{110000}'}};`,
+      String.raw`export default {runtime: {displayName: '\x4'}};`,
+      String.raw`export default {runtime: {displayName: '\u004'}};`,
+      String.raw`export default {runtime: {displayName: '\1'}};`,
+      "export default {runtime: {displayName: 'A\nB'}};",
+    ])
+      expect(() =>
+        matchesLiteralConfigurationValue(source, "runtime.displayName", "A"),
+      ).toThrow();
+  });
   it("edits only the exported owner, ignores comments and strings, and preserves unrelated fields", () => {
     const source = `import { defineRehearsalConfig } from '@rehearsal-db/core';\n// runtime: { applicationUrl: 'wrong' }\nexport default defineRehearsalConfig({ application: { startCommand: 'npm run dev', readiness: { url: 'http://localhost:5175' } }, runtime: { applicationUrl: 'http://localhost:5175', projectId: 'stable' } });`;
     const result = editLiteralConfiguration(source, [

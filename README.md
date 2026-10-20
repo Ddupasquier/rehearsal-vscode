@@ -11,9 +11,10 @@ installed in each workspace. Its native project navigator opens a Rehearsal Work
 persistent navigation for Overview, Project setup, Migrations, Environments, Data & auth,
 Configuration, and Activity & reports.
 
-The repository and [reviewed VSIX prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases)
-are public on GitHub. This is not a Marketplace listing or an announcement of a paid
-launch; those remain separate release decisions.
+The repository and [reviewed VSIX previews](https://github.com/Ddupasquier/rehearsal-vscode/releases)
+are public on GitHub. Use the [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/)
+for current distribution channels. Starter is free; preview status describes stability,
+not a trial or a paid launch.
 
 ## Install and open your project
 
@@ -47,18 +48,37 @@ If VS Code's `code` command is available, step 3 can instead use:
 code --install-extension /absolute/path/to/rehearsal.vsix --force
 ```
 
-To update the extension, download and verify the next reviewed VSIX and repeat step 3.
-GitHub VSIX installations do not auto-update. Keep the previous reviewed file for rollback.
+To update manually, download and verify the next reviewed VSIX and repeat step 3.
+Or opt in to **Keep this extension up to date** in the Rehearsal update prompt.
+Rehearsal downloads the official release, verifies its checksum, package identity and
+compatibility, then hands it to VS Code's installer. It never forces a reload.
+Keep the previous reviewed file for rollback.
 An ordinary core-package update is different: the dashboard detects it automatically,
 without reloading the VS Code window. [Support](SUPPORT.md) explains how to report problems.
 
 Use **Check for updates** in the dashboard or **Rehearsal: Check for Updates** in the
 Command Palette for an optional release check. The first trusted opening offers informed
 opt-in: npm/GitHub see ordinary connection information, but receive no project data or
-installed versions. Daily checks run only at project opening, not while idle. You can
+installed versions. Metadata-only daily checks run at project opening. Automatic-update
+opt-ins additionally check daily while the window remains open. You can
 defer or skip a release, or disable checks with **Rehearsal: Configure Update Checks**.
-Checks never install anything automatically. Compatible does not mean newest; local or
-candidate builds and unverified installation provenance require manual review.
+Checks alone never authorize installation. The update prompt has independent, initially
+off extension and CLI auto-update checkboxes. Choose **Save preferences** to remember
+them, or edit your user settings:
+
+```json
+"rehearsal.automaticUpdates": { "extension": true, "cli": false }
+```
+
+Enable `cli` separately for compatible registry-backed npm packages in trusted idle
+projects. CLI updates preserve the dependency group, pin the exact checked version and
+update the lockfile with install scripts disabled. Dirty dependency files, busy terminals,
+unknown completion and another window's update defer installation. No migration, database
+lifecycle action or forced editor reload is requested. Turning either flag off revokes
+future automatic work for that component. Project settings cannot authorize installation.
+Compatible does not mean newest; breaking CLI upgrades, local/candidate builds and
+unverified provenance require manual review. Offline or failed verification preserves the
+existing installation and provides recovery guidance rather than claiming success.
 
 The dashboard's top-right **Extension** badge always shows the loaded extension
 version, separately from **Core**. A confirmed update shows installed → newest;
@@ -79,6 +99,12 @@ other projects' read-only containers. Search/filter/sort controls include larges
 disk review. Friendly names and protection policies are saved through reviewed config
 diffs; technical ownership IDs stay unchanged. Selected image cleanup shows exact IDs,
 tags, and a size estimate, revalidates through core, and never selects database volumes.
+Each resource list starts with five cards and has its own Previous/Next controls;
+choose 5, 10 or 25 rows per list. Target summaries and retained baseline versions
+use the same bounded paging. Filters and sorting apply to the entire inventory,
+not just the current page. Paging preserves drafts and selections. Bulk selection
+selects only safe candidates on the current page; selected images on other pages
+remain counted and can be cleared before the exact cleanup review.
 Volume deletion is available only through the owning environment's reviewed discard.
 **Inspect environment** also shows optional, recorded runtime provenance: restore-writer
 version, baseline generation and data checksum, candidate migration digest, and configured
@@ -107,14 +133,19 @@ security-sensitive **Your decision** choices that Rehearsal refuses to guess.
 
 It does not implement database behavior, inspect private rows, read credentials, or
 contact hosted databases. Rehearsal core remains the only migration and safety engine.
-Passive inspection stays read-only. Every terminal action previews its exact allowlisted
-public CLI command before opening an owned integrated terminal; installs, updates, migration
-execution, runtime changes, and cleanup retain explicit editor or core confirmation. A running
+Passive inspection stays read-only. User-triggered terminal actions preview their exact
+allowlisted public CLI command before opening an owned integrated terminal. Compatible
+automatic CLI updates instead require the separate saved opt-in and repeated checks above;
+migration execution, runtime changes, and cleanup retain explicit editor or core confirmation. A running
 editor-started action can be cancelled from Activity without signaling an unrelated operation.
 
 The structured configuration editor accepts custom local URLs, application/proof commands,
 lifecycle choices, and baseline retention. It validates bounded values, shows an exact diff,
-rechecks the source for concurrent edits, and writes only after an explicit modal approval.
+rechecks the source for concurrent edits, and writes only after **Apply changes** in a
+readable review tab. The complete diff stays visible without a covering dialog; Cancel
+makes no changes, and a saved state offers **Return to project**. Image cleanup and
+long-running environment review also show their complete details before the existing
+final destructive confirmation.
 Complex expression-based fields fail closed and remain available through **Open configuration**.
 Finish or dismiss a configuration review before starting another. If the source changes
 while saving, Rehearsal asks you to review the current file instead of claiming success.
@@ -133,8 +164,27 @@ or unsafe evidence is shown as unavailable, not successful. Provider consent, sc
 acceptance, and application-specific security checks remain separate from these receipts.
 Live progress updates in place rather than reloading the dashboard, preserving navigation,
 focus, scroll position and expanded evidence while an operation runs.
+Live monitoring is bounded to five minutes. A sandbox can stay open longer: when that
+limit is reached, Rehearsal checks its actual state once instead of treating the time
+limit as a failed project check. The application is not stopped or reset.
+During a hands-on session, Overview distinguishes **Opening sandbox**, **Sandbox
+running** and **Closing sandbox** using core's public phase evidence. Missing phase
+evidence says **Sandbox session open**, not ready. Project inspection is on hold
+until the session closes; the application itself is not paused. Use Overview's
+local-address field and **Open application** to visit the URL shown by the owning
+terminal. A remembered address is labelled as user-entered, not freshly verified;
+no port is guessed. Opening the browser does not run another command or reset data.
 If VS Code cannot confirm a terminal's exit, its activity stays **Unverified**, even
 after reloading. A different command in that terminal cannot mark Rehearsal complete.
+Commands reuse the same Rehearsal terminal for each project after its previous command
+has a confirmed exit. A running sandbox or manually entered foreground command is never
+interrupted to make room for another action. If you close the terminal, change its working
+directory, or reopen the project, Rehearsal creates a fresh project-scoped terminal.
+Without shell integration or a confirmed exit, finish the command and close that terminal
+before retrying; an idle database lock alone does not prove the terminal is ready.
+New terminals allow up to five seconds for shell integration, proceeding immediately
+when it arrives. Diagnostics identify compatibility-mode dispatch and the specific
+reason reuse is blocked; a finishing project check is not reported as an unknown exit.
 
 Markdown and JSON exports retain aggregate counts where supplied. Detailed lists are
 limited to the first **1,000 readiness checks**, **32 runtime targets**, and **1,000 baseline
@@ -194,11 +244,14 @@ npm run preview
 
 Open `http://127.0.0.1:4178`. The preview is loopback-only and includes safe fixture
 states at `/loading`, `/outdated`, `/missing`, `/not-ready`, `/timeout`, `/auth`,
-`/progress`, and `/progress-unavailable`. Add `?theme=light`, `?theme=dark-modern`,
+`/progress`, `/progress-unavailable`, `/sandbox`, and `/sandbox-starting`.
+Add `?theme=light`, `?theme=dark-modern`,
 `?theme=contrast` or `?theme=contrast-light` to inspect explicit theme fixtures.
 Browsing controls work with sample data;
 `/progress?page=activity&live=1` adds a bounded six-update UI fixture to check that
 live progress preserves the document, evidence disclosures, focus and scrolling.
+`/sandbox-starting?live=1` exercises opening → interactive → cleanup text changes
+with the same address input preserved; it is synthetic UI evidence, not a live app.
 resource review buttons explain their VS Code flow without applying anything. This
 developer surface never runs Rehearsal commands or touches a project.
 
@@ -234,15 +287,15 @@ they are not being removed or put behind a paywall.
 
 Future optional Pro features must be separately identified and cannot retroactively
 restrict a version already granted under the Starter license. No Pro entitlement system,
-billing flow or paid-feature gate is implemented. Pro terms, pricing and Marketplace
-publication remain separate decisions. Rehearsal core stays MIT-licensed and fully usable
+billing flow or paid-feature gate is implemented. Pro terms, pricing and paid publication
+remain separate decisions. Rehearsal core stays MIT-licensed and fully usable
 without the extension. Existing accepted-order rights and support remain in effect.
 
 Historical VSIX files retain their bundled terms; this source change does not replace
 their bytes or checksums. Install a reviewed release carrying the Starter license to use
 that grant. Technical preview status describes stability, not a timed trial.
 
-GitHub VSIX installations do not auto-update. Every delivery must identify the extension
+GitHub VSIX installations update automatically only after the separate opt-in above. Every delivery must identify the extension
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
@@ -272,8 +325,10 @@ or automatic license activation.
   workspace storage. Credentials and policy approvals are never stored there.
 - Guided setup, exact-plan review, rehearsal, migrate, sandbox open/start/verify/reset/
   stop/discard, identity connection, cleanup preview, support, install, and update actions.
-- Exact update guidance for incompatible project packages; no background registry polling
-  and no silent dependency changes.
+- Exact update guidance for incompatible project packages. Passive inspection stays
+  network-free; daily release checks and automatic installation require their separate
+  user consent. CLI dependency changes require explicit approval or the independent
+  compatible-update opt-in described above.
 - Structured activity and runtime state; human-formatted CLI output is never parsed.
 - Refresh cancellation stops only the inspection process owned by the extension.
 - Every refresh announces a cancellable loading state in the sidebar and dashboard. A

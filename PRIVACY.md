@@ -19,14 +19,34 @@ receipts for a project. Update consent is separate: use **Rehearsal: Configure U
 Checks → Disable Automatic Checks** to stop optional checks. Uninstalling the extension
 also stops future processing.
 
+Automatic installation is a separate, initially disabled choice. The update prompt offers
+independent extension and CLI checkboxes. They are saved as
+`rehearsal.automaticUpdates.extension` and `.cli` in machine-scoped user settings, not
+repository configuration or Settings Sync. Closing or deferring the prompt does not opt
+in. Turn either flag off in user settings or **Rehearsal: Configure Update Checks**.
+
 ## When networking can happen
 
 Passive project inspection makes no network request. Separate optional update checks
 contact only `registry.npmjs.org` and `api.github.com` after informed consent or an explicit
 one-time check. Servers see ordinary connection information such as your IP address;
 requests send no project names, paths, files, installed versions, credentials or database
-data. An opted-in project is checked at opening at most daily, with no idle polling or
-background daemon. Use **Rehearsal: Configure Update Checks** to disable these checks.
+data. Metadata-only opt-ins check a project at opening at most daily, not while idle.
+The separate automatic-installation choices also authorize the open-window daily checks
+described below. Use **Rehearsal: Configure Update Checks** to disable checks; no separate
+background daemon is installed.
+
+If you explicitly enable automatic extension updates, Rehearsal also downloads only the
+official GitHub release's VSIX and SHA256SUMS, allowing GitHub's HTTPS asset redirect to
+`release-assets.githubusercontent.com`. These services see ordinary connection information
+and the requested public release asset. Checksums, embedded extension identity and engine
+compatibility are verified before VS Code receives the local file. No forced reload occurs.
+Automatic CLI updates separately authorize the project's npm registry/package-manager
+traffic for compatible exact versions; installation scripts are disabled. No database
+operation is requested. Active work, dirty files and unavailable verification defer updates.
+While an automatic option is enabled, a daily release check also runs in an open editor
+window. Turning both options off stops that timer; metadata-only project-opening checks
+remain governed by their separate consent. There is no runtime polling or separate daemon.
 
 Other networking happens only when you explicitly:
 

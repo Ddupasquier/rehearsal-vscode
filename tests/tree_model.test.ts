@@ -3,8 +3,65 @@ import {
   overviewItemAccessibilityLabel,
   overviewItems,
 } from "../src/tree_model.js";
+import type { ProjectSnapshot } from "../src/project_snapshot.js";
 
 describe("tree model", () => {
+  it("labels a hands-on sandbox independently from a busy mutation without restoring stale facts", () => {
+    const active: ProjectSnapshot = {
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      availability: "operation_active",
+      activity: {
+        schemaVersion: 1,
+        state: "busy",
+        operation: {
+          kind: "open",
+          startedAt: "2026-10-18T22:00:00.000Z",
+          rehearsalVersion: "1.0.0",
+          progress: {
+            schemaVersion: 1,
+            operationId: "a".repeat(64),
+            state: "running",
+            startedAt: "2026-10-18T22:00:00.000Z",
+            updatedAt: "2026-10-18T22:01:00.000Z",
+            elapsedMilliseconds: 60000,
+            currentStage: {
+              id: 1,
+              phase: "interactive-session",
+              target: "primary",
+              state: "running",
+              startedAt: "2026-10-18T22:00:00.000Z",
+              endedAt: null,
+              durationMilliseconds: 60000,
+            },
+            completedStages: [],
+            events: [],
+            truncated: { stages: false, events: false },
+          },
+        },
+      },
+    };
+    const entry = overviewItems(active).find(({ id }) => id === "activity")!;
+    expect(entry.label).toBe("Sandbox running");
+    expect(entry.tooltip).toContain("does not pause the application");
+    const withoutProgress: ProjectSnapshot = {
+      ...active,
+      activity: {
+        ...active.activity!,
+        operation: { ...active.activity!.operation!, progress: null },
+      },
+    };
+    expect(
+      overviewItems(withoutProgress).find(({ id }) => id === "activity")?.label,
+    ).toBe("Sandbox session open");
+    expect(
+      overviewItems({
+        ...active,
+        availability: "operation_attention",
+        activity: { ...active.activity!, state: "stale" },
+      }).find(({ id }) => id === "activity")?.label,
+    ).toBe("Previous Rehearsal operation needs review");
+  });
   it("keeps screen-reader labels concise while retaining visible descriptions", () => {
     expect(
       overviewItemAccessibilityLabel({

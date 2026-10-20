@@ -1,6 +1,70 @@
 # Changelog
 
-## 0.1.12 — Version-header candidate
+## 0.1.18 — Free Starter preview with automatic updates and usability fixes
+
+This release includes the previously local 0.1.13–0.1.17 improvements below.
+
+- Add separate, initially off extension and CLI automatic-update checkboxes to a readable
+  update prompt, with machine-scoped user settings and explicit revocation.
+- Verify official VSIX bytes, checksum, identity and compatibility before VS Code installs
+  them; preserve the running editor session and never force reload.
+- Update compatible registry-backed npm CLI packages only with separate consent, exact
+  dependency/lock identity, idle coordination and install scripts disabled.
+- Confirm reviewed configuration saves from exact on-disk bytes, including editor
+  auto-save and hidden-document closure, without reapplying an already saved edit.
+- Open the bundled Starter license in both packaged VSIX and source installations.
+
+## 0.1.17 — Readable review candidate
+
+- Keep configuration diffs readable in a non-modal review tab with explicit Apply,
+  Cancel, saved state and Return to project; no dialog covers the diff.
+- Count only actual name/protection changes and retain unchanged literal formatting.
+- Preserve bounded, source-bound form drafts and focus when returning from review.
+- Give image cleanup and long-running environment reviews the same readable details
+  before their existing final destructive confirmation.
+- Clarify database and Storage data loss in whole-project discard confirmation.
+
+## 0.1.16 — Resource spacing candidate
+
+- Keep inventory actions in one wrapping group so adjacent rows retain their gap.
+- Fit baseline identifier backgrounds to their content while preserving narrow-card
+  wrapping; use the correct singular version count.
+- Separate empty-state recovery buttons from their explanatory text.
+
+## 0.1.15 — Resource pagination candidate
+
+- Paginate environments, data volumes, images and other-project containers instead
+  of showing the full engine inventory in one long page. Start with five cards per
+  list, with independent page controls and a 5/10/25 page-size choice.
+- Bound target summaries and retained baseline versions with the same independent
+  paging controls, including baseline evidence in Data & auth.
+- Filter and sort the complete inventory before paging; preserve selections and
+  environment drafts across pages. Bulk image selection affects the current page
+  only, with off-page selections explicitly counted and cleanup protections intact.
+
+## 0.1.14 — Terminal startup candidate
+
+- Allow up to five seconds for native shell integration, dispatching as soon as it
+  arrives and rechecking it after final authorization before using compatibility mode.
+- Distinguish a running command, unavailable completion evidence and a finishing
+  project refresh in recovery guidance and bounded diagnostics. Unknown completion
+  still cannot authorize terminal reuse.
+
+## 0.1.13 — Active sandbox and terminal candidate
+
+- Distinguish sandbox startup, hands-on use, cleanup and missing phase evidence.
+  Explain that project inspection is on hold rather than the application paused.
+- Open an explicitly entered loopback application address from Overview without
+  another CLI command, invented port or stale configuration claim.
+- Patch session-state text and progress in place, retaining address input, focus,
+  navigation and scroll. A five-minute monitoring limit no longer becomes a false
+  project failure; one actual inspection reconciles the session without more polling.
+- Reuse the extension-owned project terminal after a confirmed exit and directory
+  check. Busy, unknown-exit and manually occupied terminals remain protected.
+- Keep cancellation bound to the exact activity and shell execution, and prevent an
+  abandoned project inspection from overwriting newer active-operation evidence.
+
+## 0.1.12 — Released version-header preview
 
 - Show the loaded extension version at the top right, separately from the project's
   Rehearsal core version. Confirmed newer releases show installed → newest.

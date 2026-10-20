@@ -4,6 +4,7 @@ import {
   parseOperationProgressSnapshot,
   parseRecentOperationProgress,
   renderOperationProgress,
+  openSandboxSessionState,
 } from "../src/operation_progress.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 
@@ -111,6 +112,78 @@ const snapshot = (activity: unknown): ProjectSnapshot => ({
   activity: parseActivityData(activity),
 });
 describe("safe native operation progress", () => {
+  it("distinguishes a proved interactive session from startup, missing evidence and cleanup", () => {
+    const activity = {
+      schemaVersion: 1,
+      state: "busy",
+      operation: {
+        kind: "open",
+        startedAt,
+        rehearsalVersion: "1.0.0",
+        progress: progress(),
+      },
+    };
+    expect(openSandboxSessionState(snapshot(activity))).toBe("opening");
+    const interactive = snapshot({
+      ...activity,
+      operation: {
+        ...activity.operation,
+        progress: {
+          ...progress(),
+          currentStage: {
+            ...progress().currentStage,
+            phase: "interactive-session",
+          },
+        },
+      },
+    });
+    expect(openSandboxSessionState(interactive)).toBe("interactive");
+    expect(
+      openSandboxSessionState({ ...interactive, availability: "error" }),
+    ).toBeNull();
+    expect(
+      openSandboxSessionState(snapshot({ ...activity, state: "stale" })),
+    ).toBeNull();
+    expect(
+      openSandboxSessionState(
+        snapshot({
+          ...activity,
+          operation: { ...activity.operation, kind: "run" },
+        }),
+      ),
+    ).toBeNull();
+    for (const missing of [null, undefined])
+      expect(
+        openSandboxSessionState(
+          snapshot({
+            ...activity,
+            operation: { ...activity.operation, progress: missing },
+          }),
+        ),
+      ).toBe("unknown");
+    expect(
+      openSandboxSessionState(
+        snapshot({
+          ...activity,
+          operation: { ...activity.operation, progress: ended() },
+        }),
+      ),
+    ).toBe("closing");
+    expect(
+      openSandboxSessionState(
+        snapshot({
+          ...activity,
+          operation: {
+            ...activity.operation,
+            progress: {
+              ...progress(),
+              currentStage: { ...progress().currentStage, phase: "cleanup" },
+            },
+          },
+        }),
+      ),
+    ).toBe("closing");
+  });
   it("preserves exact bounded phases/events/timings and supports completed, failed and cancelled receipts", () => {
     const item = parseOperationProgressSnapshot(progress());
     expect(item.currentStage?.phase).toBe("application-proof");

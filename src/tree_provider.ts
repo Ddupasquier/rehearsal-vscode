@@ -294,6 +294,13 @@ export class RehearsalTreeProvider
           }),
     };
     this.snapshots.set(workspaceKey, snapshot);
+    if (activity) {
+      // A newer public activity observation invalidates any inspection begun
+      // before it. Its eventual ready/error result must not replace safe state.
+      this.controllers.get(workspaceKey)?.abort();
+      this.controllers.delete(workspaceKey);
+      this.setInspectionState(workspaceKey, "idle");
+    }
     this.snapshotChanges.fire({ workspaceKey, snapshot });
     this.changes.fire(undefined);
   }
@@ -399,6 +406,8 @@ export class RehearsalTreeProvider
             },
           })
         : undefined;
+      if (controller.signal.aborted || this.controllers.get(key) !== controller)
+        return undefined;
       snapshot = await inspectProject({
         workspaceName: folder.name,
         workspaceRoot: folder.uri.fsPath,

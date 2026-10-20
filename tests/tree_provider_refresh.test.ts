@@ -115,6 +115,17 @@ const vscode = vi.hoisted(() => {
 
 vi.mock("vscode", () => vscode.module);
 
+const inspections = vi.hoisted(() => ({
+  bootstrap: vi.fn(),
+  inspect: vi.fn(),
+}));
+vi.mock("../src/bootstrap_discovery.js", () => ({
+  bootstrapProjectDiscovery: inspections.bootstrap,
+}));
+vi.mock("../src/project_snapshot.js", () => ({
+  inspectProject: inspections.inspect,
+}));
+
 import { PROJECT_REFRESH_PATHS } from "../src/workspace_refresh.js";
 import { RehearsalTreeProvider } from "../src/tree_provider.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
@@ -122,6 +133,8 @@ import type { ProjectSnapshot } from "../src/project_snapshot.js";
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  inspections.bootstrap.mockReset();
+  inspections.inspect.mockReset();
   vscode.watchers.splice(0);
   vscode.configurationPaths.clear();
   delete vscode.listeners.folders;
@@ -144,6 +157,134 @@ const configurationChanged = () => {
 };
 
 describe("RehearsalTreeProvider project watchers", () => {
+  it.each([
+    ["busy", "ready"],
+    ["busy", "error"],
+    ["stale", "ready"],
+    ["stale", "error"],
+    ["invalid", "ready"],
+    ["invalid", "error"],
+  ] as const)(
+    "keeps newer %s activity when an older inspection finishes %s",
+    async (state, oldAvailability) => {
+      const provider = new RehearsalTreeProvider(outputChannel() as never);
+      const key = vscode.folder.uri.toString();
+      const initial: ProjectSnapshot = {
+        workspaceName: "synthetic",
+        workspaceRoot: vscode.folder.uri.fsPath,
+        availability: "ready",
+        readiness: { state: "READY", passed: 1, failed: 0, checks: [] },
+        applicationUrl: "http://localhost:5175",
+      };
+      (
+        provider as unknown as { snapshots: Map<string, ProjectSnapshot> }
+      ).snapshots.set(key, initial);
+      let finishInspection!: (snapshot: ProjectSnapshot) => void;
+      let signal: AbortSignal | undefined;
+      inspections.bootstrap.mockResolvedValue(undefined);
+      inspections.inspect.mockImplementationOnce(
+        (options: { signal: AbortSignal }) => {
+          signal = options.signal;
+          return new Promise<ProjectSnapshot>((resolve) => {
+            finishInspection = resolve;
+          });
+        },
+      );
+      const refreshing = provider.refreshWorkspace(key);
+      await Promise.resolve();
+      expect(inspections.inspect).toHaveBeenCalledOnce();
+      expect(provider.inspectionStateFor(key)).toBe("loading");
+      provider.publishOperationActivity(key, {
+        schemaVersion: 1,
+        state,
+        operation:
+          state === "invalid"
+            ? null
+            : {
+                kind: "open",
+                startedAt: "2026-10-18T22:00:00Z",
+                rehearsalVersion: "1.0.0",
+              },
+      });
+      const observed = provider.snapshotFor(key);
+      expect(signal?.aborted).toBe(true);
+      expect(provider.inspectionStateFor(key)).toBe("idle");
+      expect(observed).toMatchObject({
+        availability:
+          state === "busy" ? "operation_active" : "operation_attention",
+        activity: { state },
+      });
+      expect(observed).not.toHaveProperty("readiness");
+      expect(observed).not.toHaveProperty("applicationUrl");
+      // A later explicit refresh is new evidence, not blocked by the old one.
+      let finishCurrentInspection!: (snapshot: ProjectSnapshot) => void;
+      inspections.inspect.mockImplementationOnce(
+        () =>
+          new Promise<ProjectSnapshot>((resolve) => {
+            finishCurrentInspection = resolve;
+          }),
+      );
+      const currentRefresh = provider.refreshWorkspace(key);
+      await Promise.resolve();
+      expect(provider.inspectionStateFor(key)).toBe("loading");
+      finishInspection({ ...initial, availability: oldAvailability });
+      expect(await refreshing).toBeUndefined();
+      expect(provider.snapshotFor(key)).toBe(observed);
+      expect(provider.inspectionStateFor(key)).toBe("loading");
+      finishCurrentInspection(initial);
+      expect(await currentRefresh).toBe(initial);
+      expect(provider.snapshotFor(key)).toBe(initial);
+      expect(provider.inspectionStateFor(key)).toBe("idle");
+      provider.dispose();
+    },
+  );
+
+  it("does not start an inspection when newer activity arrives during bootstrap", async () => {
+    const provider = new RehearsalTreeProvider(outputChannel() as never);
+    const key = vscode.folder.uri.toString();
+    (
+      provider as unknown as { snapshots: Map<string, ProjectSnapshot> }
+    ).snapshots.set(key, {
+      workspaceName: "synthetic",
+      workspaceRoot: vscode.folder.uri.fsPath,
+      availability: "ready",
+    });
+    let finishBootstrap!: () => void;
+    inspections.bootstrap.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishBootstrap = resolve;
+        }),
+    );
+    const refreshing = provider.refreshWorkspace(key);
+    const busy = {
+      schemaVersion: 1,
+      state: "busy",
+      operation: {
+        kind: "open",
+        startedAt: "2026-10-18T22:00:00Z",
+        rehearsalVersion: "1.0.0",
+      },
+    };
+    provider.publishOperationActivity(key, busy);
+    const inspectionChanges = (
+      provider as unknown as {
+        inspectionChanges: { fire: ReturnType<typeof vi.fn> };
+      }
+    ).inspectionChanges.fire;
+    expect(inspectionChanges.mock.calls).toEqual([
+      [{ workspaceKey: key, state: "loading" }],
+      [{ workspaceKey: key, state: "idle" }],
+    ]);
+    provider.publishOperationActivity(key, busy);
+    expect(inspectionChanges).toHaveBeenCalledTimes(2);
+    finishBootstrap();
+    expect(await refreshing).toBeUndefined();
+    expect(inspections.inspect).not.toHaveBeenCalled();
+    expect(provider.snapshotFor(key)?.availability).toBe("operation_active");
+    provider.dispose();
+  });
+
   it("publishes only safe active state and drops inconsistent inspection details", () => {
     const provider = new RehearsalTreeProvider({
       appendLine: vi.fn(),

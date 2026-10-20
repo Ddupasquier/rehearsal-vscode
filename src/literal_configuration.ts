@@ -199,10 +199,12 @@ const exportedLiteralStart = (
   return start;
 };
 
-export const hasLiteralConfigurationPath = (
+const configurationPropertyAtPath = (
   source: string,
   path: string,
-): boolean => {
+):
+  | { readonly tokens: readonly Token[]; readonly property: Property }
+  | undefined => {
   const tokens = tokensFor(source);
   let start = exportedLiteralStart(source, tokens);
   const keys = path.split(".");
@@ -211,8 +213,8 @@ export const hasLiteralConfigurationPath = (
     const property = object.properties.find(
       (property) => property.key === keys[i],
     );
-    if (!property) return false;
-    if (i === keys.length - 1) return true;
+    if (!property) return undefined;
+    if (i === keys.length - 1) return { tokens, property };
     if (
       tokens[property.from]?.value !== "{" ||
       propertiesFor(tokens, property.from).end !== property.to - 1
@@ -220,7 +222,114 @@ export const hasLiteralConfigurationPath = (
       throw new Error("A configuration owner requires manual source review.");
     start = property.from;
   }
-  return false;
+  return undefined;
+};
+
+export const hasLiteralConfigurationPath = (
+  source: string,
+  path: string,
+): boolean => configurationPropertyAtPath(source, path) !== undefined;
+
+/** Decode only one already-tokenized string; never evaluate configuration code. */
+const stringLiteralValue = (source: string): string => {
+  let value = "";
+  const end = source.length - 1;
+  for (let index = 1; index < end; index++) {
+    const character = source[index]!;
+    if (character === "\n" || character === "\r")
+      throw new Error("A configuration string requires manual source review.");
+    if (character !== "\\") {
+      value += character;
+      continue;
+    }
+    const escaped = source[++index];
+    if (escaped === undefined || index >= end)
+      throw new Error("A configuration string escape is incomplete.");
+    if (escaped === "\n" || escaped === "\u2028" || escaped === "\u2029")
+      continue;
+    if (escaped === "\r") {
+      if (source[index + 1] === "\n") index++;
+      continue;
+    }
+    const escapes: Readonly<Record<string, string>> = {
+      b: "\b",
+      f: "\f",
+      n: "\n",
+      r: "\r",
+      t: "\t",
+      v: "\v",
+    };
+    if (Object.hasOwn(escapes, escaped)) {
+      value += escapes[escaped]!;
+      continue;
+    }
+    if (escaped === "0" && !/\d/u.test(source[index + 1] ?? "")) {
+      value += "\0";
+      continue;
+    }
+    if (escaped === "x" || escaped === "u") {
+      const braced = escaped === "u" && source[index + 1] === "{";
+      const from = index + (braced ? 2 : 1);
+      const to = braced
+        ? source.indexOf("}", from)
+        : from + (escaped === "x" ? 2 : 4);
+      const digits = source.slice(from, to);
+      if (
+        to < from ||
+        to > end ||
+        (braced && to >= end) ||
+        !(
+          braced
+            ? /^[a-f0-9]{1,6}$/iu
+            : escaped === "x"
+              ? /^[a-f0-9]{2}$/iu
+              : /^[a-f0-9]{4}$/iu
+        ).test(digits)
+      )
+        throw new Error(
+          "A configuration string escape requires manual source review.",
+        );
+      const codePoint = Number.parseInt(digits, 16);
+      if (codePoint > 0x10ffff)
+        throw new Error(
+          "A configuration string escape requires manual source review.",
+        );
+      value += String.fromCodePoint(codePoint);
+      index = braced ? to : to - 1;
+      continue;
+    }
+    if (/\d/u.test(escaped))
+      throw new Error(
+        "Legacy numeric string escapes require manual source review.",
+      );
+    // Quoted characters, backslashes and non-escape characters have their JS literal value.
+    value += escaped;
+  }
+  return value;
+};
+
+/** Compare known scalar literals without changing their quoting, comments or whitespace. */
+export const matchesLiteralConfigurationValue = (
+  source: string,
+  path: string,
+  expected: string | boolean,
+): boolean => {
+  const found = configurationPropertyAtPath(source, path);
+  if (!found) return false;
+  const { tokens, property } = found;
+  if (!literalValue(tokens, property.from, property.to))
+    throw new Error(
+      `The active configuration does not contain one editable ${path} literal.`,
+    );
+  if (property.to !== property.from + 1) return false;
+  const token = tokens[property.from]!;
+  if (token.kind === "string")
+    return stringLiteralValue(token.value) === expected;
+  return token.value === "true"
+    ? expected === true
+    : token.value === "false"
+      ? expected === false
+      : false;
 };
 
 export const editLiteralConfiguration = (

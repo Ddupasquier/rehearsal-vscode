@@ -173,7 +173,7 @@ const main = async (): Promise<void> => {
         `The Test Lab overview did not consume the structured activity and runtime contracts (activity=${ready.activity?.state ?? "missing"}, targetCount=${String(ready.runtime?.targets.length ?? "missing")}, runtimeState=${ready.runtime?.state ?? "missing"}, targetState=${runtimeTarget?.state ?? "missing"}, runtimeTarget=${runtimeTarget?.runtimeTarget ?? "missing"}, verifiedRuntimeAvailable=${String(runtimeTarget?.verifiedRuntimeAvailable ?? "missing")}).`,
       );
     }
-    if (ready.applicationUrl !== "http://localhost:5176") {
+    if (ready.applicationUrl !== "http://127.0.0.1:5176") {
       throw new Error(
         "The Test Lab overview did not expose the configured loopback application URL.",
       );

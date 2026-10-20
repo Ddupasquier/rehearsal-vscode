@@ -5,7 +5,10 @@ import {
 } from "./configuration_contract.js";
 import { editEnvironmentConfiguration } from "./environment_configuration.js";
 import { parseLocalEndpoint } from "./local_endpoint.js";
-import { editLiteralConfiguration } from "./literal_configuration.js";
+import {
+  editLiteralConfiguration,
+  matchesLiteralConfigurationValue,
+} from "./literal_configuration.js";
 
 export interface ConfigurationProposal {
   readonly applicationUrl?: string;
@@ -225,23 +228,30 @@ export const applyConfigurationProposal = ({
   let result = source;
   const changedFields: string[] = [];
   if (
-    proposal.environmentName !== undefined ||
-    proposal.protectEnvironment !== undefined
+    proposal.environmentName !== undefined &&
+    !matchesLiteralConfigurationValue(
+      result,
+      "runtime.displayName",
+      proposal.environmentName,
+    )
   ) {
     result = editEnvironmentConfiguration(result, {
-      ...(proposal.environmentName === undefined
-        ? {}
-        : { displayName: proposal.environmentName }),
-      ...(proposal.protectEnvironment === undefined
-        ? {}
-        : { protected: proposal.protectEnvironment }),
+      displayName: proposal.environmentName,
     });
-    if (result !== source) {
-      if (proposal.environmentName !== undefined)
-        changedFields.push("runtime.displayName");
-      if (proposal.protectEnvironment !== undefined)
-        changedFields.push("runtime.protected");
-    }
+    changedFields.push("runtime.displayName");
+  }
+  if (
+    proposal.protectEnvironment !== undefined &&
+    !matchesLiteralConfigurationValue(
+      result,
+      "runtime.protected",
+      proposal.protectEnvironment,
+    )
+  ) {
+    result = editEnvironmentConfiguration(result, {
+      protected: proposal.protectEnvironment,
+    });
+    changedFields.push("runtime.protected");
   }
   const update = (
     block: string,

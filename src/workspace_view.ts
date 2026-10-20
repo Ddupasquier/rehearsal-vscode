@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import {
   extensionReleasePresentation,
@@ -16,11 +17,16 @@ import type {
   SuggestedDiscoveryItem,
 } from "./contracts.js";
 import type { WorkspacePreferences } from "./workspace_preferences.js";
-import { DEFAULT_WORKSPACE_PREFERENCES } from "./workspace_preferences.js";
+import {
+  DEFAULT_WORKSPACE_PREFERENCES,
+  isLoopbackUrl,
+} from "./workspace_preferences.js";
 import type { WorkspaceActivityRecord } from "./workspace_activity.js";
 import {
   resourceManagerMarkup,
+  resourcePaginationMarkup,
   RESOURCE_MANAGER_SCRIPT,
+  SUMMARY_LIST_SCRIPT,
 } from "./resource_manager_view.js";
 import {
   renderBaselineScopeReview,
@@ -35,9 +41,16 @@ import {
   migrationReviewMarkup,
 } from "./migration_view.js";
 import { selectMigrationView } from "./migration_filter.js";
-import { renderOperationProgress } from "./operation_progress.js";
+import {
+  openSandboxSessionState,
+  renderOperationProgress,
+} from "./operation_progress.js";
 import { applyOperationProgressUpdate } from "./workspace_live_update.js";
 import { changedConfigurationFormValues } from "./configuration_form.js";
+import {
+  reconcileWorkspaceFormDrafts,
+  workspaceFormDraftIdentity,
+} from "./workspace_form_drafts.js";
 import { renderBaselineShapeEvidence } from "./shape_view.js";
 import {
   knownWorkspaceTargets,
@@ -56,6 +69,7 @@ import {
 export interface WorkspaceViewAssets {
   readonly extensionVersion?: string;
   readonly extensionRelease?: ExtensionReleaseEvidence | undefined;
+  readonly formDraftRevision?: number;
   readonly resourceSource: string;
   readonly stylesheetUri: string;
   readonly logoUri: string;
@@ -131,6 +145,47 @@ const escapeHtml = (value: string): string =>
 const formatCount = (value: number | undefined): string =>
   value === undefined ? "—" : value.toLocaleString("en-US");
 
+/** Fixed presentation copy is also serialized into the browser controller. */
+export const sandboxSessionPresentation = (
+  state: ReturnType<typeof openSandboxSessionState>,
+) => {
+  switch (state) {
+    case "interactive":
+      return {
+        label: "Sandbox running",
+        detail:
+          "Your application passed readiness and is open for hands-on testing.",
+        guidance:
+          "Your sandbox is running. Keep its terminal session open while you test. Press Ctrl+C or Ctrl+Z in that terminal when you are done.",
+      };
+    case "opening":
+      return {
+        label: "Opening sandbox",
+        detail: "Rehearsal is starting and checking your local application.",
+        guidance:
+          "Follow startup in the owning terminal. SANDBOX READY confirms when you can begin hands-on testing.",
+      };
+    case "closing":
+      return {
+        label: "Closing sandbox",
+        detail:
+          "The session is ending; review shutdown in its owning terminal.",
+        guidance:
+          "Check the owning terminal for shutdown and cleanup. Wait for the session to finish before starting another operation.",
+      };
+    case "unknown":
+      return {
+        label: "Sandbox session open",
+        detail:
+          "Application readiness is not confirmed by the available activity details.",
+        guidance:
+          "Your sandbox session stays open for hands-on testing. Check its owning terminal for SANDBOX READY; you do not need to wait for the session to end.",
+      };
+    default:
+      return null;
+  }
+};
+
 const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
   switch (snapshot.availability) {
     case "loading":
@@ -186,12 +241,18 @@ const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
         detail: "Finish the remaining setup item before running a rehearsal.",
         tone: "warning",
       };
-    case "operation_active":
+    case "operation_active": {
+      const session = sandboxSessionPresentation(
+        openSandboxSessionState(snapshot),
+      );
+      if (session)
+        return { label: session.label, detail: session.detail, tone: "active" };
       return {
         label: "Rehearsal in progress",
         detail: "A project operation is currently running.",
         tone: "active",
       };
+    }
     case "operation_attention":
       return {
         label: "Operation needs review",
@@ -248,8 +309,12 @@ const journeyFor = (snapshot: ProjectSnapshot): readonly JourneyStep[] =>
     : snapshot.availability === "operation_active"
       ? ["Set up", "Baseline", "Review", "Run", "Verify"].map((label) => ({
           label,
-          value: "Paused",
-          state: "waiting" as const,
+          value:
+            label === "Run"
+              ? (sandboxSessionPresentation(openSandboxSessionState(snapshot))
+                  ?.label ?? "Operation running")
+              : "Inspection on hold",
+          state: label === "Run" ? ("current" as const) : ("waiting" as const),
         }))
       : [
           {
@@ -305,10 +370,11 @@ const metric = (
   note: string,
   tone: StatusTone = "muted",
   identifier = false,
+  sessionLabel = false,
 ): string => `
   <article class="metric metric--${tone}${identifier ? " metric--identifier" : ""}">
     <div class="metric__top"><span>${escapeHtml(label)}</span><i aria-hidden="true"></i></div>
-    <strong>${escapeHtml(value)}</strong>
+    <strong${sessionLabel ? " data-sandbox-session-label" : ""}>${escapeHtml(value)}</strong>
     <small>${escapeHtml(note)}</small>
   </article>`;
 
@@ -392,7 +458,7 @@ const journeyMarkup = (snapshot: ProjectSnapshot): string => `
         (step, index) => `
           <li class="journey__step journey__step--${step.state}">
             <span class="journey__marker">${step.state === "done" ? "✓" : String(index + 1)}</span>
-            <span><strong>${escapeHtml(step.label)}</strong><small>${escapeHtml(step.value)}</small></span>
+            <span><strong>${escapeHtml(step.label)}</strong><small${step.label === "Run" && openSandboxSessionState(snapshot) !== null ? " data-sandbox-session-label" : ""}>${escapeHtml(step.value)}</small></span>
           </li>`,
       )
       .join("")}
@@ -401,6 +467,7 @@ const journeyMarkup = (snapshot: ProjectSnapshot): string => `
 const nextStepMarkup = (
   snapshot: ProjectSnapshot,
   assets: WorkspaceViewAssets,
+  preferences: WorkspacePreferences,
 ): string => {
   if (snapshot.availability === "loading") {
     return `
@@ -442,11 +509,16 @@ const nextStepMarkup = (
       ${actionGroup(actionButton(assets, "refresh", "Try again", "primary"), ...(snapshot.error.code === "timeout" ? [actionButton(assets, "inspectionSettings", "Adjust timeout")] : []), ...(snapshot.version ? [actionButton(assets, "doctor", "Run Doctor"), actionButton(assets, "supportReport", "Support report")] : []), actionButton(assets, "showOutput", "Open diagnostics"))}`;
   }
   if (snapshot.availability === "operation_active") {
-    const guidance =
-      snapshot.activity?.operation?.kind === "open"
-        ? "Your sandbox session stays open for hands-on testing. When the application is ready, open the local address shown in its terminal. You do not need to wait for the session to end. Close the owning session when you want a fresh project check."
-        : "A project operation is running. View its progress or the owning terminal. Wait for it to finish before a fresh project check.";
-    return `<p>${guidance}</p>${actionGroup(navigationButton("activity", "View operation progress"), actionButton(assets, "showOutput", "Open diagnostics"))}`;
+    const session = sandboxSessionPresentation(
+      openSandboxSessionState(snapshot),
+    );
+    const applicationUrl = isLoopbackUrl(preferences.applicationUrl)
+      ? preferences.applicationUrl
+      : "";
+    return `<p${session ? " data-sandbox-session-guidance" : ""}>${escapeHtml(session?.guidance ?? "A project operation is running. View its progress or the owning terminal. Wait for it to finish before a fresh project check.")}</p>
+      <p class="control-note">Project inspection is on hold while this operation owns the project lock. This does not pause your application.</p>
+      ${session ? `<div class="endpoint-editor"><label><span>Application address</span><input id="active-application-url" type="url" value="${escapeHtml(applicationUrl)}" placeholder="Paste the local address from your terminal" aria-describedby="active-application-help" /></label><button id="open-active-application" class="button button--primary" type="button">Open application</button><small id="active-application-help">Use the HTTP(S) loopback address printed in the owning terminal. Opening a browser does not start the app or verify readiness.</small></div>` : ""}
+      ${actionGroup(navigationButton("activity", "View operation progress"), actionButton(assets, "showOutput", "Open diagnostics"))}`;
   }
   if (snapshot.availability === "operation_attention") {
     return `<p>Review the interrupted operation before trying another change.</p>${actionGroup(actionButton(assets, "doctor", "Run Doctor", "primary"), actionButton(assets, "supportReport", "Support report"))}`;
@@ -668,10 +740,10 @@ const targetMarkup = (snapshot: ProjectSnapshot): string => {
   if (!targets || targets.length === 0) {
     const configured = snapshot.resources?.environments;
     if (configured?.length)
-      return `<div class="runtime-list">${configured.map((entry) => `<article class="runtime-row" data-display-target="${escapeHtml(entry.target)}"><span class="runtime-row__icon" aria-hidden="true">DB</span><span class="runtime-row__copy"><strong>${escapeHtml(entry.target)}</strong><small>${escapeHtml(entry.provider)} · verified receipt unavailable · ${entry.classification?.presence.state === "created" ? "created" : entry.classification?.presence.state === "not-created" ? "not created" : "creation unknown"}</small></span><span class="state-chip">${escapeHtml(entry.state)}</span></article>`).join("")}</div><p class="control-note">Configured resources are visible, but runtime verification is unavailable while Doctor needs attention. No running service or verified database was inferred.</p>`;
+      return `<div class="runtime-list" data-summary-list="targets">${configured.map((entry) => `<article class="runtime-row" data-display-target="${escapeHtml(entry.target)}" data-summary-row="targets" data-summary-target="${escapeHtml(entry.target)}"><span class="runtime-row__icon" aria-hidden="true">DB</span><span class="runtime-row__copy"><strong>${escapeHtml(entry.target)}</strong><small>${escapeHtml(entry.provider)} · verified receipt unavailable · ${entry.classification?.presence.state === "created" ? "created" : entry.classification?.presence.state === "not-created" ? "not created" : "creation unknown"}</small></span><span class="state-chip">${escapeHtml(entry.state)}</span></article>`).join("")}</div>${resourcePaginationMarkup("targets", "Database targets", "summary")}<p class="control-note">Configured resources are visible, but runtime verification is unavailable while Doctor needs attention. No running service or verified database was inferred.</p>`;
     return '<div class="empty-state">No local runtime targets are available yet.</div>';
   }
-  return `<div class="runtime-list">${targets
+  return `<div class="runtime-list" data-summary-list="targets">${targets
     .map(({ name, runtimeTarget, state, reason, verifiedRuntimeAvailable }) => {
       const classification = snapshot.resources?.environments.find(
         (entry) => entry.target === name,
@@ -683,13 +755,15 @@ const targetMarkup = (snapshot: ProjectSnapshot): string => {
             ? "not created"
             : "creation unknown";
       return `
-        <article class="runtime-row" data-display-target="${escapeHtml(name)}">
+        <article class="runtime-row" data-display-target="${escapeHtml(name)}" data-summary-row="targets" data-summary-target="${escapeHtml(name)}">
           <span class="runtime-row__icon" aria-hidden="true">DB</span>
           <span class="runtime-row__copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(runtimeTarget)}${reason ? ` · ${escapeHtml(reason.replaceAll("_", " "))}` : ""} · ${verifiedRuntimeAvailable === true ? "verified receipt available" : verifiedRuntimeAvailable === false ? "verified receipt unavailable" : "preparation unknown"} · ${presence}</small></span>
           <span class="state-chip">${escapeHtml(state)}</span>
         </article>`;
     })
-    .join("")}</div>`;
+    .join(
+      "",
+    )}</div>${resourcePaginationMarkup("targets", "Database targets", "summary")}`;
 };
 
 const formatGiB = (bytes: number): string =>
@@ -711,38 +785,45 @@ const resourceInventoryMarkup = (
       ${metric("Owned containers", formatCount(inventory.environments.reduce((total, entry) => total + entry.containerCount, 0)), `${formatCount(inventory.environments.reduce((total, entry) => total + entry.runningContainerCount, 0))} running`)}
       ${metric("Cleanup review", formatCount(inventory.stale.stoppedCount), inventory.stale.stoppedCount ? "Stopped environments need an exact preview" : "Nothing stale in this project", inventory.stale.stoppedCount ? "warning" : "success")}
     </div>
-    <div class="runtime-list">${inventory.environments
+    <div class="runtime-list" data-summary-list="resource-targets">${inventory.environments
       .map(
         (
           entry,
-        ) => `<article class="runtime-row" data-display-target="${escapeHtml(entry.target)}">
+        ) => `<article class="runtime-row" data-display-target="${escapeHtml(entry.target)}" data-summary-row="resource-targets" data-summary-target="${escapeHtml(entry.target)}">
           <span class="runtime-row__icon" aria-hidden="true">DB</span>
           <span class="runtime-row__copy"><strong>${escapeHtml(entry.target)}</strong><small>${escapeHtml(entry.provider)} · ${entry.runningContainerCount}/${entry.containerCount} containers running · ${entry.volumeCount} volumes${entry.diskUsageBytes === null ? "" : ` · ${formatGiB(entry.diskUsageBytes)} retained`}${entry.cpuPercent === null ? "" : ` · ${entry.cpuPercent.toFixed(2)}% CPU`}${entry.memoryUsageBytes === null ? "" : ` · ${formatGiB(entry.memoryUsageBytes)} memory`} · stop/start preserves data; reviewed reset/run can replace data and volumes · restart ${escapeHtml(entry.restartPolicies.join(", ") || "not present")}${entry.lastActivityAt ? ` · last observable resource activity ${escapeHtml(entry.lastActivityAt)}` : ""}</small></span>
           <span class="state-chip">${escapeHtml(entry.state)}</span>
         </article>`,
       )
-      .join("")}</div>
+      .join(
+        "",
+      )}</div>${resourcePaginationMarkup("resource-targets", "Target resource summaries", "summary")}
     ${inventory.engine.resources.length ? `<dl class="facts-list">${inventory.engine.resources.map((entry) => `<div><dt>${escapeHtml(entry.type)}</dt><dd>${escapeHtml(entry.size ?? "Unknown size")}${entry.reclaimable ? ` · ${escapeHtml(entry.reclaimable)} reclaimable` : ""}</dd></div>`).join("")}</dl>` : ""}
     <p class="control-note">Engine totals and shared images describe the whole Docker engine. Target and profile filters limit project-owned rows only; they never imply image ownership or a partial rehearsal. This is read-only evidence from Rehearsal core. Cleanup still requires its exact preview and confirmation.</p>
     ${resourceManagerMarkup(inventory, preferences)}
   </div>`;
 };
 
-const baselineVersionsMarkup = (snapshot: ProjectSnapshot): string => {
+const baselineVersionsMarkup = (
+  snapshot: ProjectSnapshot,
+  listId: "baselines" | "baseline-evidence" = "baselines",
+): string => {
   const generations = snapshot.baseline?.generations ?? [];
   if (generations.length === 0) {
     return '<div class="empty-state">No baseline versions are available.</div>';
   }
-  return `<div class="version-list">${generations
+  return `<div class="version-list" data-summary-list="${listId}">${generations
     .map(
       (
         generation,
-      ) => `<article class="version-row${generation.active ? " version-row--active" : ""}">
+      ) => `<article class="version-row${generation.active ? " version-row--active" : ""}" data-summary-row="${listId}">
         <span><strong>${escapeHtml(generation.active ? "Active baseline" : "Retained baseline")}</strong><code>${escapeHtml(generation.generationId)}</code><small>${escapeHtml(generation.createdAt ?? "Creation time unavailable")}</small></span>
         <span><b>${formatCount(generation.rowCount)} rows</b><small>${formatCount(generation.tableCount)} tables · ${formatCount(generation.storageAssetCount)} assets</small></span>
       </article>`,
     )
-    .join("")}</div>`;
+    .join(
+      "",
+    )}</div>${resourcePaginationMarkup(listId, "Baseline versions", "summary")}`;
 };
 
 const discoveryFieldValue = (
@@ -766,15 +847,21 @@ const configurationControlsMarkup = (
   const proofCommand =
     snapshot.configuration?.application.proofCommand ??
     discoveryFieldValue(profile, "application.proofCommand");
-  const applicationUrl =
-    preferences.applicationUrl ||
-    snapshot.applicationUrl ||
-    "http://localhost:5175";
+  const activeOperation = snapshot.availability === "operation_active";
+  const applicationUrl = activeOperation
+    ? isLoopbackUrl(preferences.applicationUrl)
+      ? preferences.applicationUrl
+      : ""
+    : preferences.applicationUrl ||
+      snapshot.applicationUrl ||
+      "http://localhost:5175";
   const addressOrigin = preferences.applicationUrl
     ? "Your custom browser address"
-    : snapshot.applicationUrl
-      ? "Saved & validated browser address"
-      : "Suggested example — choose your application's address";
+    : activeOperation
+      ? "Enter the local address from the owning terminal"
+      : snapshot.applicationUrl
+        ? "Saved & validated browser address"
+        : "Suggested example — choose your application's address";
   const commandOrigin = snapshot.configuration
     ? "Saved & validated"
     : "Suggested — review the project script before saving";
@@ -866,6 +953,10 @@ export const renderWorkspaceDocument = (
     ...preferences,
     profile: viewScope.profile as WorkspacePreferences["profile"],
     selectedTarget: viewScope.selectedTarget,
+    ...(snapshot.availability === "operation_active" &&
+    !isLoopbackUrl(preferences.applicationUrl)
+      ? { applicationUrl: "" }
+      : {}),
   };
   const permittedAction = (
     action: WorkspaceActionId,
@@ -878,6 +969,15 @@ export const renderWorkspaceDocument = (
     ? ({ ...snapshot, availability: "loading" } as ProjectSnapshot)
     : snapshot;
   const status = statusFor(guidanceSnapshot);
+  const sandboxSession = sandboxSessionPresentation(
+    openSandboxSessionState(guidanceSnapshot),
+  );
+  const activeOperation = snapshot.availability === "operation_active";
+  const localApplicationUrl = activeOperation
+    ? preferences.applicationUrl
+    : preferences.applicationUrl ||
+      snapshot.applicationUrl ||
+      "http://localhost:5175";
   const readiness = snapshot.readiness;
   const readinessValue = readiness
     ? `${readiness.passed}/${readiness.passed + readiness.failed}`
@@ -896,27 +996,29 @@ export const renderWorkspaceDocument = (
       ? [
           metric(
             "Readiness",
-            "Paused",
-            "Project checks wait for the active operation",
+            "On hold",
+            "Readiness inspection resumes after the active operation",
             "active",
           ),
           metric(
             "Baseline",
-            "Paused",
-            "Verification waits for the active operation",
+            "On hold",
+            "Baseline inspection resumes after the active operation",
             "active",
           ),
           metric(
             "Migrations",
-            "Paused",
+            "On hold",
             "Migration inspection resumes after the operation",
             "active",
           ),
           metric(
-            "Runtime",
-            "Paused",
-            "View Activity or the owning terminal for progress",
+            sandboxSession ? "Sandbox session" : "Runtime",
+            sandboxSession?.label ?? "Not inspected",
+            "Database status is not inspected during the active operation",
             "active",
+            false,
+            sandboxSession !== null,
           ),
         ].join("")
       : [
@@ -1072,6 +1174,24 @@ export const renderWorkspaceDocument = (
   const scriptReviewIdentity = JSON.stringify(
     migrationReviewIdentity(snapshot),
   ).replaceAll("<", "\\u003c");
+  const scriptFormDraftIdentity = JSON.stringify(
+    workspaceFormDraftIdentity(snapshot, assets.formDraftRevision ?? 0),
+  );
+  const scriptStructuredDraftNames = JSON.stringify(
+    snapshot.configurationMetadata?.fields.map((field) => field.path) ?? [],
+  ).replaceAll("<", "\\u003c");
+  // Secondary targets do not advertise independent configuration source hashes.
+  // Do not retain their drafts under the primary configuration's fingerprint.
+  const scriptDraftResourceTargets = JSON.stringify(
+    snapshot.resources?.environments
+      .filter(
+        (environment) =>
+          snapshot.configPath &&
+          resolve(snapshot.workspaceRoot, environment.configPath) ===
+            resolve(snapshot.workspaceRoot, snapshot.configPath),
+      )
+      .map((environment) => environment.target) ?? [],
+  ).replaceAll("<", "\\u003c");
 
   return `<!doctype html>
 <html lang="en">
@@ -1094,7 +1214,7 @@ export const renderWorkspaceDocument = (
         <div class="project-switcher">
           <span>Current project</span>
           <strong>${safeName}</strong>
-          <small><i class="status-dot status-dot--${status.tone}" aria-hidden="true"></i>${escapeHtml(status.label)}</small>
+          <small><i class="status-dot status-dot--${status.tone}" aria-hidden="true"></i><span${sandboxSession ? " data-sandbox-session-label" : ""}>${escapeHtml(status.label)}</span></small>
         </div>
 
         <button id="compact-navigation-trigger" class="compact-nav-trigger" type="button" aria-expanded="false" aria-controls="workspace-navigation" aria-label="Choose Rehearsal page. Current page: ${escapeHtml(activePageDetails.label)}">
@@ -1142,7 +1262,7 @@ export const renderWorkspaceDocument = (
             </div>
             <div class="hero-status hero-status--${status.tone}" role="status">
               <i aria-hidden="true"></i>
-              <span><strong>${escapeHtml(status.label)}</strong><small>${escapeHtml(status.detail)}</small></span>
+              <span><strong${sandboxSession ? " data-sandbox-session-label" : ""}>${escapeHtml(status.label)}</strong><small${sandboxSession ? " data-sandbox-session-detail" : ""}>${escapeHtml(status.detail)}</small></span>
             </div>
           </div>
 
@@ -1153,8 +1273,8 @@ export const renderWorkspaceDocument = (
           <div class="overview-grid">
             <article class="next-step-card">
               <div class="next-step-card__label"><span aria-hidden="true">→</span> Next best step</div>
-              <h2>${(candidateCount ?? 0) > 0 ? "Review your pending migration" : status.label}</h2>
-              <div>${nextStepMarkup(guidanceSnapshot, assets)}</div>
+              <h2${sandboxSession ? " data-sandbox-session-label" : ""}>${sandboxSession ? escapeHtml(status.label) : (candidateCount ?? 0) > 0 ? "Review your pending migration" : escapeHtml(status.label)}</h2>
+              <div>${nextStepMarkup(guidanceSnapshot, assets, preferences)}</div>
             </article>
             <article class="journey-card">
               <div class="card-heading"><span><small>Workflow</small><strong>From setup to proof</strong></span></div>
@@ -1210,22 +1330,22 @@ export const renderWorkspaceDocument = (
             <article class="surface">
               <div class="surface-heading"><span><small>Application</small><h2>Local connection</h2></span></div>
               <dl class="facts-list">
-                <div><dt>URL</dt><dd>${escapeHtml(snapshot.applicationUrl ?? "Not configured")}</dd></div>
+                <div><dt>URL</dt><dd>${escapeHtml(activeOperation ? preferences.applicationUrl || "Enter the terminal's local address below" : (snapshot.applicationUrl ?? "Not configured"))}</dd></div>
                 <div><dt>Activity</dt><dd>${escapeHtml(snapshot.activity?.state ?? "Unavailable")}</dd></div>
                 <div><dt>Package</dt><dd>${escapeHtml(snapshot.packageLocation ?? "Not installed")}</dd></div>
               </dl>
-              <div class="endpoint-editor"><label><span>Open a local address</span><input id="application-url" type="url" value="${escapeHtml(preferences.applicationUrl || snapshot.applicationUrl || "http://localhost:5175")}" /></label><button id="open-custom-application" class="button button--primary" type="button">Open address</button><small>Only HTTP(S) localhost and loopback addresses are accepted.</small></div>
-              ${snapshot.applicationUrl ? actionGroup(permittedAction("openApplication", "Open application", "primary"), permittedAction("identityConnect", "Connect account")) : ""}
+              <div class="endpoint-editor"><label><span>Open a local address</span><input id="application-url" type="url" value="${escapeHtml(localApplicationUrl)}" /></label><button id="open-custom-application" class="button button--primary" type="button">Open address</button><small>Only HTTP(S) localhost and loopback addresses are accepted.</small></div>
+              ${!activeOperation && snapshot.applicationUrl ? actionGroup(permittedAction("openApplication", "Open application", "primary"), permittedAction("identityConnect", "Connect account")) : ""}
             </article>
           </div>
           <article class="surface environment-resources">
             <div class="surface-heading"><span><small>Local resources</small><h2>Capacity and ownership</h2></span><span class="state-chip">preview first</span></div>
               ${resourceInventoryMarkup(snapshot, preferences)}
-            ${actionGroup(actionButton(assets, "refresh", "Refresh inventory"), permittedAction("cleanupPreview", "Preview safe cleanup"))}
-            ${snapshot.configurationMetadata ? '<button id="review-stale-stop" type="button" class="button button--secondary">Review long-running environments</button><p class="control-note">Uses your configured stale cutoff. Age is not proof of inactivity; exact reviewed stop retains all data and the shared engine.</p>' : ""}
+            ${actionGroup(actionButton(assets, "refresh", "Refresh inventory"), permittedAction("cleanupPreview", "Preview safe cleanup"), ...(snapshot.configurationMetadata ? ['<button id="review-stale-stop" type="button" class="button button--secondary">Review long-running environments</button>'] : []))}
+            ${snapshot.configurationMetadata ? '<p class="control-note">Uses your configured stale cutoff. Age is not proof of inactivity; exact reviewed stop retains all data and the shared engine.</p>' : ""}
           </article>
           <article class="surface environment-versions">
-            <div class="surface-heading"><span><small>Environment versions</small><h2>Retained verified baselines</h2></span><span class="state-chip">${formatCount(snapshot.baseline?.generations?.length)} versions</span></div>
+            <div class="surface-heading"><span><small>Environment versions</small><h2>Retained verified baselines</h2></span><span class="state-chip">${formatCount(snapshot.baseline?.generations?.length)} ${snapshot.baseline?.generations?.length === 1 ? "version" : "versions"}</span></div>
             ${baselineVersionsMarkup(snapshot)}
           </article>
           ${snapshot.availability === "ready" && verifiedRuntimeState(snapshot) === "available" ? `<article class="danger-zone"><div><small>Sandbox maintenance</small><h2>Reset or remove disposable resources</h2><p>These actions remain scoped to the whole project and require confirmation. A display filter never narrows deletion.</p></div>${actionGroup(permittedAction("cleanupPreview", "Preview cleanup"), permittedAction("reset", "Reset sandbox", "danger"), permittedAction("discardRuntime", "Discard runtime", "danger"))}</article>` : ""}
@@ -1236,7 +1356,7 @@ export const renderWorkspaceDocument = (
           <div class="two-column">
             <article class="surface surface--large">
               <div class="surface-heading"><span><small>Baseline evidence</small><h2>${snapshot.baseline ? `${formatCount(snapshot.baseline.rowCount)} rows across ${formatCount(snapshot.baseline.tableCount)} tables` : "Unavailable"}</h2></span><span class="state-chip">${escapeHtml(snapshot.baseline?.verification.replaceAll("_", " ") ?? "not verified")}</span></div>
-              ${baselineVersionsMarkup(snapshot)}
+              ${baselineVersionsMarkup(snapshot, "baseline-evidence")}
               ${renderBaselineScopeReview(snapshot)}
               ${renderBaselineShapeEvidence(snapshot.baseline?.shape)}
             </article>
@@ -1338,9 +1458,11 @@ export const renderWorkspaceDocument = (
           const active = document.activeElement;
           const focus = active instanceof HTMLElement && /^[a-z0-9-]{1,100}$/i.test(active.id) ? active.id : null;
           const reviewed = [...document.querySelectorAll('[data-migration-review]:checked')].slice(0,MIGRATION_REVIEW_PERSISTENCE_LIMIT).map(control=>control.dataset.migrationReview);
-          const eligibleImageInputs=[...document.querySelectorAll('[data-image-id]')].filter(control=>!control.disabled);
+          const eligibleImageInputs=imageCheckboxes.filter(control=>!control.disabled);
           const images=reconcileImageSelection(eligibleImageInputs.filter(control=>control.checked).map(control=>control.dataset.imageId),eligibleImageInputs.map(control=>control.dataset.imageId));
-          vscode?.setState({...vscode?.getState(),view:{focus,scroll:Math.max(0,Math.min(1000000,document.scrollingElement?.scrollTop??0)),reviewed,reviewIdentity,images}});
+          const formFocus=configurationFocusFor(active)??(focus===null?reviewFormFocus:null);
+          const formDrafts=reconcileWorkspaceFormDrafts({version:1,identity:formDraftIdentity,forms:configurationDraftForms.filter(entry=>dirtyForms.has(entry.form)).map(draftFormSnapshot),focus:formFocus},formDraftIdentity,configurationDraftForms.map(draftFormSnapshot),configurationDraftFocus);
+          vscode?.setState({...vscode?.getState(),view:{focus,scroll:Math.max(0,Math.min(1000000,document.scrollingElement?.scrollTop??0)),reviewed,reviewIdentity,images,resourcePages:{...resourcePaging.pages},resourceSummaryPages:{...resourcePaging.summaryPages},resourcePageSize:resourcePaging.pageSize,formDrafts}});
         };
         document.addEventListener('focusin',rememberUi);
         document.addEventListener('change',rememberUi);
@@ -1348,22 +1470,82 @@ export const renderWorkspaceDocument = (
         const configurationForms = [...document.querySelectorAll('#configuration-controls,#core-configuration-controls,#named-profile-controls,.resource-environment-form')];
         const initialFormValues = new Map(configurationForms.map(form=>[form,JSON.stringify([...new FormData(form).entries()])]));
         const dirtyForms = new Set();
+        const formDraftIdentity = ${scriptFormDraftIdentity};
+        const reconcileWorkspaceFormDrafts = ${reconcileWorkspaceFormDrafts.toString()};
+        const approvedDraftNames = {
+          'configuration-controls':['applicationUrl','retainBaselineGenerations','startCommand','proofCommand','runPersistence','openPersistence'],
+          'core-configuration-controls':${scriptStructuredDraftNames},
+          'named-profile-controls':['name','target','applicationUrl'],
+          resource:['environmentName','protectEnvironment']
+        };
+        const draftResourceTargets=${scriptDraftResourceTargets};
+        const configurationDraftForms = configurationForms.flatMap(form=>{
+          const target=form.dataset?.resourceTarget;
+          const key=Object.hasOwn(approvedDraftNames,form.id)?form.id:typeof target==='string'&&draftResourceTargets.includes(target)&&/^[a-z0-9][a-z0-9-]{0,62}$/.test(target)?'resource:'+target:null;
+          if(!key)return[];
+          const allowedNames=new Set(approvedDraftNames[key.startsWith('resource:')?'resource':key]);
+          const fields=[];const focus=[];const occurrences=new Map();let buttons=0;
+          [...(form.elements??[])].forEach(control=>{
+            const tag=control.tagName?.toLowerCase();const type=String(control.type??'').toLowerCase();
+            if(control.disabled)return;
+            if(tag==='button' || (tag==='input'&&['submit','reset','button'].includes(type))) {
+              focus.push({key:'button:'+type+':'+buttons++,node:control});return;
+            }
+            if(!['input','select','textarea'].includes(tag)||!allowedNames.has(control.name)||(tag==='input'&&!['text','url','number','checkbox','radio'].includes(type))||control.multiple)return;
+            const kind=['checkbox','radio'].includes(type)?'checked':'value';
+            const base=JSON.stringify([kind,control.name,kind==='checked'?String(control.value):'']);
+            const occurrence=occurrences.get(base)??0;occurrences.set(base,occurrence+1);
+            const key=base+':'+occurrence;
+            fields.push({key,kind,node:control});focus.push({key,node:control});
+          });
+          return[{key,form,fields,focus}];
+        });
+        const draftFormSnapshot=entry=>({key:entry.key,fields:entry.fields.map(field=>({key:field.key,kind:field.kind,value:field.kind==='checked'?field.node.checked:field.node.value}))});
+        const configurationDraftFocus=configurationDraftForms.flatMap(entry=>entry.focus.map(control=>({form:entry.key,control:control.key})));
+        const configurationFocusFor=node=>{
+          for(const entry of configurationDraftForms){const control=entry.focus.find(control=>control.node===node);if(control)return{form:entry.key,control:control.key};}
+          return null;
+        };
+        const restoredFormDrafts=reconcileWorkspaceFormDrafts(savedUi.formDrafts,formDraftIdentity,configurationDraftForms.map(draftFormSnapshot),configurationDraftFocus);
+        let reviewFormFocus=restoredFormDrafts?.focus??null;
+        restoredFormDrafts?.forms.forEach(saved=>{
+          const entry=configurationDraftForms.find(entry=>entry.key===saved.key);
+          saved.fields.forEach(savedField=>{
+            const field=entry?.fields.find(field=>field.key===savedField.key);
+            if(!field)return;
+            if(field.kind==='checked')field.node.checked=savedField.value;
+            else if((field.node.maxLength??-1)<0||savedField.value.length<=field.node.maxLength) {
+              if(field.node.tagName?.toLowerCase()!=='select'||[...(field.node.options??[])].some(option=>option.value===savedField.value))field.node.value=savedField.value;
+            }
+          });
+        });
+        configurationForms.forEach(form=>{if(JSON.stringify([...new FormData(form).entries()])!==initialFormValues.get(form))dirtyForms.add(form);});
+        if(dirtyForms.size)vscode?.postMessage({type:'editing',editing:true});
         const updateFormDraft = form => {
           if(JSON.stringify([...new FormData(form).entries()])===initialFormValues.get(form)) dirtyForms.delete(form);
           else dirtyForms.add(form);
           vscode?.postMessage({type:'editing',editing:dirtyForms.size>0});
+          rememberUi();
         };
         configurationForms.forEach(form=>{
           form.addEventListener('input',()=>updateFormDraft(form));
           form.addEventListener('change',()=>updateFormDraft(form));
           form.addEventListener('reset',()=>queueMicrotask(()=>updateFormDraft(form)));
+          form.addEventListener('submit',event=>{
+            const entry=configurationDraftForms.find(entry=>entry.form===form);
+            const submit=entry?.focus.find(control=>String(control.node.type).toLowerCase()==='submit');
+            reviewFormFocus=configurationFocusFor(event.submitter)??configurationFocusFor(document.activeElement)??(entry&&submit?{form:entry.key,control:submit.key}:null);
+            rememberUi();
+          },true);
         });
         document.querySelector('#review-stale-stop')?.addEventListener('click',()=>vscode?.postMessage({type:'reviewStaleStop'}));
         document.querySelector('#discard-form-drafts')?.addEventListener('click',()=>vscode?.postMessage({type:'editing',editing:false}));
         const applyOperationProgressUpdate = ${applyOperationProgressUpdate.toString()};
         const applyExtensionReleaseUpdate = ${applyExtensionReleaseUpdate.toString()};
-        window.addEventListener('message',event=>{ if(event.data?.type==='extensionReleaseUpdated') { applyExtensionReleaseUpdate(document,event.data); } else if(event.data?.type==='operationProgressUpdated') { applyOperationProgressUpdate(document,event.data); } else if(event.data?.type==='inspectionUpdated') { const notice=document.querySelector('#inspection-draft-notice'); if(notice) notice.hidden=false; } });
+        const sandboxSessionPresentation = ${sandboxSessionPresentation.toString()};
+        window.addEventListener('message',event=>{ if(event.data?.type==='extensionReleaseUpdated') { applyExtensionReleaseUpdate(document,event.data); } else if(event.data?.type==='operationProgressUpdated') { applyOperationProgressUpdate(document,{type:event.data.type,html:event.data.html}); const session=sandboxSessionPresentation(event.data.sandboxSessionState); if(session) { document.querySelectorAll('[data-sandbox-session-label]').forEach(node=>{node.textContent=session.label;}); document.querySelectorAll('[data-sandbox-session-detail]').forEach(node=>{node.textContent=session.detail;}); document.querySelectorAll('[data-sandbox-session-guidance]').forEach(node=>{node.textContent=session.guidance;}); } } else if(event.data?.type==='inspectionUpdated') { const notice=document.querySelector('#inspection-draft-notice'); if(notice) notice.hidden=false; } });
         ${RESOURCE_MANAGER_SCRIPT}
+        ${SUMMARY_LIST_SCRIPT}
         let displayedPage = ${JSON.stringify(activePage)};
         const activate = (page, sourceControl) => {
           if (!allowedPages.has(page)) return;
@@ -1478,21 +1660,22 @@ export const renderWorkspaceDocument = (
           if (workspaceProfile.value === "primary") preferences.selectedTarget = "primary";
           if (workspaceProfile.value === "full") preferences.selectedTarget = "all";
           const named = namedProfiles.find(profile => 'named:'+profile.name === workspaceProfile.value);
-          if (named) { preferences.selectedTarget = named.targets.length === 1 ? named.targets[0] : 'all'; if(named.applicationUrl) { preferences.applicationUrl=named.applicationUrl; const address=document.querySelector('#application-url'); if(address) address.value=named.applicationUrl; } }
+          if (named) { preferences.selectedTarget = named.targets.length === 1 ? named.targets[0] : 'all'; if(named.applicationUrl) { preferences.applicationUrl=named.applicationUrl; ['#application-url','#active-application-url'].forEach(selector=>{const address=document.querySelector(selector);if(address)address.value=named.applicationUrl;}); } }
           updateDisplayScope();
         });
 
         const applicationUrl = document.querySelector("#application-url");
-        applicationUrl?.addEventListener("change", () => {
-          preferences.applicationUrl = applicationUrl.value;
+        const activeApplicationUrl = document.querySelector("#active-application-url");
+        const rememberApplicationUrl = (source) => {
+          preferences.applicationUrl = source.value;
+          [applicationUrl,activeApplicationUrl].forEach(control=>{if(control&&control!==source)control.value=source.value;});
           savePreferences();
-        });
-        document.querySelector("#open-custom-application")?.addEventListener("click", () => {
-          vscode?.postMessage({ type: "openApplication", url: applicationUrl?.value ?? "" });
-        });
+        };
+        [applicationUrl,activeApplicationUrl].forEach(control=>control?.addEventListener("change",()=>rememberApplicationUrl(control)));
+        [["#open-custom-application",applicationUrl],["#open-active-application",activeApplicationUrl]].forEach(([selector,control])=>document.querySelector(selector)?.addEventListener("click",()=>{if(!control)return;rememberApplicationUrl(control);vscode?.postMessage({type:"openApplication",url:control.value});}));
 
         const simpleConfigurationForm = document.querySelector("#configuration-controls");
-        const initialSimpleConfiguration = simpleConfigurationForm ? Object.fromEntries(new FormData(simpleConfigurationForm).entries()) : {};
+        const initialSimpleConfiguration = simpleConfigurationForm ? Object.fromEntries(JSON.parse(initialFormValues.get(simpleConfigurationForm)??'[]')) : {};
         const changedConfigurationFormValues = ${changedConfigurationFormValues.toString()};
         simpleConfigurationForm?.addEventListener("submit", (event) => {
           event.preventDefault();
@@ -1536,6 +1719,14 @@ export const renderWorkspaceDocument = (
         migrationReviewControls.forEach(control=>{control.checked=restoredReviewIds.has(control.dataset.migrationReview);});
         updateReviewedCount();updateDisplayScope();
         if(typeof savedUi.focus==='string' && /^[a-z0-9-]{1,100}$/i.test(savedUi.focus)) document.getElementById(savedUi.focus)?.focus({preventScroll:true});
+        else if(restoredFormDrafts?.focus){
+          const reference=restoredFormDrafts.focus;
+          const node=configurationDraftForms.find(entry=>entry.key===reference.form)?.focus.find(control=>control.key===reference.control)?.node;
+          if(node&&node.isConnected!==false&&!node.closest?.('[data-resource-row]')?.hidden){
+            for(let ancestor=node.parentElement;ancestor;ancestor=ancestor.parentElement)if(ancestor.tagName?.toLowerCase()==='details')ancestor.open=true;
+            node.focus({preventScroll:true});
+          }
+        }
         if(Number.isFinite(savedUi.scroll)) document.scrollingElement?.scrollTo({top:Math.max(0,Math.min(1000000,savedUi.scroll))});
       })();
     </script>
