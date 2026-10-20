@@ -8,6 +8,8 @@ import { RehearsalReviewPanels } from "./review_panel.js";
 import { AutomaticUpdateScheduler } from "./automatic_update_scheduler.js";
 import { readAutomaticUpdateSettings } from "./automatic_update_settings.js";
 import { openBundledDocument } from "./bundled_documents.js";
+import { LEGACY_EXTENSION_ID } from "./extension_identity.js";
+import { createLegacyExtensionGuard } from "./extension_migration.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
 
@@ -38,6 +40,25 @@ const selectWorkspaceKey = async (
 };
 
 export const activate = (context: vscode.ExtensionContext): void => {
+  const mayStartWork = createLegacyExtensionGuard(
+    () => vscode.extensions.getExtension(LEGACY_EXTENSION_ID) !== undefined,
+    () => {
+      void vscode.window
+        .showWarningMessage(
+          "Rehearsal DB cannot start new work while the legacy Rehearsal extension is present. Finish any active commands, save work, explicitly uninstall rehearsal-db.rehearsal in Extensions, then reload VS Code. Project configuration, baselines and database data are not changed by this migration.",
+          "Open Extensions",
+        )
+        .then((choice) => {
+          if (choice === "Open Extensions")
+            return vscode.commands.executeCommand(
+              "workbench.extensions.search",
+              `@id:${LEGACY_EXTENSION_ID}`,
+            );
+          return undefined;
+        });
+    },
+  );
+  if (!mayStartWork()) return;
   const output = vscode.window.createOutputChannel("Rehearsal", { log: true });
   const provider = new RehearsalTreeProvider(output);
   const reviews = new RehearsalReviewPanels(context.extensionUri);
@@ -46,6 +67,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
     output,
     context.workspaceState,
     reviews,
+    mayStartWork,
   );
   const workspaces = new RehearsalWorkspacePanels(
     context.extensionUri,
@@ -54,6 +76,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
     context.workspaceState,
     String(context.extension.packageJSON.version),
     reviews,
+    mayStartWork,
   );
   const tree = vscode.window.createTreeView("rehearsal.projects", {
     treeDataProvider: provider,
@@ -102,6 +125,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
       });
   };
   const automaticUpdateScheduler = new AutomaticUpdateScheduler(async () => {
+    if (!mayStartWork()) return;
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
       const snapshot = provider.snapshotFor(folder.uri.toString());
       if (!snapshot || snapshot.availability === "loading") continue;
@@ -110,7 +134,9 @@ export const activate = (context: vscode.ExtensionContext): void => {
   });
   const scheduleAutomaticUpdates = () => {
     const settings = readAutomaticUpdateSettings();
-    automaticUpdateScheduler.setEnabled(settings.extension || settings.cli);
+    automaticUpdateScheduler.setEnabled(
+      mayStartWork() && (settings.extension || settings.cli),
+    );
   };
   scheduleAutomaticUpdates();
   context.subscriptions.push(
@@ -122,9 +148,14 @@ export const activate = (context: vscode.ExtensionContext): void => {
     tree,
     updates,
     automaticUpdateScheduler,
+    vscode.extensions.onDidChange(() => {
+      if (mayStartWork()) return;
+      automaticUpdateScheduler.setEnabled(false);
+      updates.dispose();
+    }),
     provider.onDidUpdateSnapshot(({ workspaceKey }) => {
       tryAutomaticDashboard(workspaceKey);
-      void updates.open(workspaceKey);
+      if (mayStartWork()) void updates.open(workspaceKey);
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(({ removed }) => {
       for (const folder of removed) updates.remove(folder.uri.toString());
@@ -133,10 +164,11 @@ export const activate = (context: vscode.ExtensionContext): void => {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("rehearsal.automaticUpdates")) {
         scheduleAutomaticUpdates();
-        for (const folder of vscode.workspace.workspaceFolders ?? []) {
-          void updates.resumeAutomatic(folder.uri.toString());
-          void updates.check(folder.uri.toString());
-        }
+        if (mayStartWork())
+          for (const folder of vscode.workspace.workspaceFolders ?? []) {
+            void updates.resumeAutomatic(folder.uri.toString());
+            void updates.check(folder.uri.toString());
+          }
       }
       if (!event.affectsConfiguration("rehearsal.openDashboardAutomatically"))
         return;
@@ -158,6 +190,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
     vscode.commands.registerCommand(
       "rehearsal.checkUpdates",
       async (workspaceKey: unknown) => {
+        if (!mayStartWork()) return;
         const selected = await selectWorkspaceKey(workspaceKey);
         if (selected) await updates.check(selected);
       },
@@ -165,6 +198,7 @@ export const activate = (context: vscode.ExtensionContext): void => {
     vscode.commands.registerCommand(
       "rehearsal.configureUpdateChecks",
       async (workspaceKey: unknown) => {
+        if (!mayStartWork()) return;
         const selected = await selectWorkspaceKey(workspaceKey);
         if (selected) await updates.configure(selected);
       },

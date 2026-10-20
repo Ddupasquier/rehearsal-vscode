@@ -214,6 +214,7 @@ const actions = (
   storage = new Map<string, unknown>(),
   onWrite?: () => Promise<void>,
   withReviews = true,
+  mayStartWork: () => boolean = () => true,
 ) => {
   const runner = new RehearsalWorkspaceActions(
     {
@@ -236,6 +237,7 @@ const actions = (
           dispose: mocks.disposeReviews,
         } as never)
       : undefined,
+    mayStartWork,
   );
   runners.push(runner);
   return runner;
@@ -367,6 +369,101 @@ describe("reviewed resource actions", () => {
       exitCode: 0,
     }));
   };
+  it("refuses new terminal, package and resource work when identity coexistence is unsafe", async () => {
+    prepareStaleReview();
+    const runner = actions(new Map(), undefined, true, () => false);
+    await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+    expect(
+      await runner.updatePackageVersion(
+        "file:///workspace",
+        "0.1.0-rc.4",
+        "0.1.0-rc.8",
+        async () => true,
+        "devDependencies",
+        automaticOptions(),
+      ),
+    ).toBe(false);
+    await runner.cleanupImages("file:///workspace", [id]);
+    await runner.reviewStaleStop("file:///workspace");
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.review).not.toHaveBeenCalled();
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it.each(["approval", "receipt"] as const)(
+    "rechecks identity coexistence after terminal %s before dispatch",
+    async (phase) => {
+      let allowed = true;
+      if (phase === "approval")
+        mocks.confirm.mockImplementation(async (_title, _options, label) => {
+          allowed = false;
+          return label;
+        });
+      const runner = actions(
+        new Map(),
+        phase === "receipt"
+          ? async () => {
+              allowed = false;
+            }
+          : undefined,
+        true,
+        () => allowed,
+      );
+      await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+      expect(mocks.execute).not.toHaveBeenCalled();
+      if (phase === "approval") expect(mocks.terminal).not.toHaveBeenCalled();
+    },
+  );
+  it("refuses package installation when identity coexistence changes during approval", async () => {
+    let allowed = true;
+    mocks.confirm.mockImplementation(async () => {
+      allowed = false;
+      return "Update Exact Version";
+    });
+    const runner = actions(new Map(), undefined, true, () => allowed);
+    expect(
+      await runner.updatePackageVersion(
+        "file:///workspace",
+        "0.1.0-rc.4",
+        "0.1.0-rc.8",
+        async () => true,
+        "devDependencies",
+      ),
+    ).toBe(false);
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it.each(["images", "stale"] as const)(
+    "refuses %s apply when identity coexistence changes during review",
+    async (operation) => {
+      if (operation === "stale") prepareStaleReview();
+      let allowed = true;
+      mocks.reviewApproval.mockImplementationOnce(async () => {
+        allowed = false;
+        return true;
+      });
+      const runner = actions(new Map(), undefined, true, () => allowed);
+      if (operation === "images")
+        await runner.cleanupImages("file:///workspace", [id]);
+      else await runner.reviewStaleStop("file:///workspace");
+      expect(mocks.confirm).not.toHaveBeenCalled();
+      expect(mocks.terminal).not.toHaveBeenCalled();
+      expect(mocks.execute).not.toHaveBeenCalled();
+    },
+  );
+  it("keeps explicit cancellation and cleanup observation available after coexistence changes", async () => {
+    let allowed = true;
+    const runner = actions(new Map(), undefined, true, () => allowed);
+    await runner.runWorkspace("file:///workspace", "startRuntime", "primary");
+    const terminal = mocks.terminal.mock.results[0]!.value;
+    allowed = false;
+    expect(terminal.dispose).not.toHaveBeenCalled();
+    await runner.runWorkspace("file:///workspace", "cancelOwnedOperation");
+    expect(terminal.dispose).toHaveBeenCalledOnce();
+    expect(mocks.execute).toHaveBeenCalledOnce();
+    expect(mocks.refresh).toHaveBeenCalled();
+  });
   it.each([
     ["dependencies", "--save-prod"],
     ["optionalDependencies", "--save-optional"],

@@ -16,6 +16,17 @@ are public on GitHub. Use the [official installation guide](https://ddupasquier.
 for current distribution channels. Starter is free; preview status describes stability,
 not a trial or a paid launch.
 
+The canonical extension identity from **0.1.19** is
+**`rehearsal-db.rehearsal-db`**: publisher `rehearsal-db`, package name
+`rehearsal-db`, and Marketplace display name **Rehearsal DB**. The workbench and its
+commands still use the **Rehearsal** brand. Check the complete publisher and ID rather
+than installing an unrelated extension with a similar name. Marketplace availability
+is established by the official installation guide, not by a registered publisher alone.
+
+Already using a GitHub preview through 0.1.18? Follow the
+[one-time identity migration](#move-from-a-preview-through-0118) before installing the
+canonical package. This is an explicit manual change, not an automatic rename.
+
 ## Install and open your project
 
 Use desktop VS Code 1.101 or newer on macOS or Linux, with Node.js 22, 24, or 26.
@@ -32,9 +43,11 @@ No source checkout, extension build, or Test Lab installation is needed.
    for safe setup and baseline inputs.
 
 2. Open the [GitHub prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases).
-   Download the chosen release's `.vsix` and `SHA256SUMS`. Compare its SHA-256 with the
-   checksum from that same release: use `shasum -a 256 /path/to/rehearsal.vsix` on macOS
-   or `sha256sum /path/to/rehearsal.vsix` on Linux. Stop if they differ.
+   Choose a canonical release starting at **0.1.19** and download
+   `rehearsal-db-0.1.19.vsix` and `SHA256SUMS` (later releases use their own version).
+   Compare its SHA-256 with the
+   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.19.vsix`
+   on macOS or `sha256sum /path/to/rehearsal-db-0.1.19.vsix` on Linux. Stop if they differ.
 3. Open **Extensions → … → Install from VSIX…** and choose that verified file.
    Reload the extension host if VS Code asks.
 4. Review Workspace Trust. Open the Command Palette and choose
@@ -45,13 +58,52 @@ No source checkout, extension build, or Test Lab installation is needed.
 If VS Code's `code` command is available, step 3 can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.19.vsix --force
 ```
+
+### Move from a preview through 0.1.18
+
+Earlier GitHub previews use **`rehearsal-db.rehearsal`**, a different VS Code identity.
+Public 0.1.18 downloads and checksums remain unchanged. Its updater looks for the old
+`rehearsal-<version>.vsix` name, so it does not silently install the new identity from
+`rehearsal-db-<version>.vsix`. Complete this one-time migration yourself:
+
+1. Finish every Rehearsal command in your open project windows. For an open sandbox
+   app, press **Ctrl+C** once in its owning terminal and wait for the normal shell prompt
+   and configured lifecycle result. Save your work before proceeding.
+2. Download and verify the reviewed canonical VSIX and checksum as described above.
+3. In VS Code's Extensions view, search **`@id:rehearsal-db.rehearsal`**. Open that
+   legacy extension's gear menu and choose **Uninstall**. Do not choose a database
+   discard/reset action or **Reset Saved Editor State** as part of migration.
+4. Save any remaining files, then run **Developer: Reload Window**. Ensure the legacy
+   extension is no longer installed in each profile where you intend to use the new one.
+5. Use **Install from VSIX…** to install the verified canonical package. Check its full
+   ID is **`rehearsal-db.rehearsal-db`**, then reload if VS Code asks. Reopen the dashboard
+   and review your update preferences.
+
+The canonical extension refuses activation while VS Code still reports the legacy ID.
+An installed extension that is not currently active is not necessarily disabled.
+Uninstalling and reloading is the supported path above; if both IDs are still reported,
+resolve the old installation before retrying. Rehearsal never silently disables or
+uninstalls another extension or interrupts an active session for this migration.
+
+Project configuration, keys, baseline files and database/Storage data are not migrated,
+reset or deleted by this identity change. Shared VS Code user settings, including
+`rehearsal.automaticUpdates`, remain as you set them; review or turn them off before
+migration if desired. Private per-extension view preferences, activity history and
+metadata-check consent are not copied from the legacy extension. Re-select view
+preferences and review consent in the new installation. For rollback, first finish work,
+uninstall the canonical extension and reload before installing your retained, verified
+legacy VSIX. Never run both identities together.
+
+### Keep the canonical installation current
 
 To update manually, download and verify the next reviewed VSIX and repeat step 3.
 Or opt in to **Keep this extension up to date** in the Rehearsal update prompt.
 Rehearsal downloads the official release, verifies its checksum, package identity and
 compatibility, then hands it to VS Code's installer. It never forces a reload.
+Canonical updates accept only `rehearsal-db-<version>.vsix` with embedded identity
+`rehearsal-db.rehearsal-db`; they cannot silently switch back to a legacy package.
 Keep the previous reviewed file for rollback.
 An ordinary core-package update is different: the dashboard detects it automatically,
 without reloading the VS Code window. [Support](SUPPORT.md) explains how to report problems.
@@ -299,7 +351,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.19.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

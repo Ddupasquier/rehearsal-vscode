@@ -93,7 +93,10 @@ function fixture(production = false) {
             prerelease: true,
             html_url:
               "https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.8",
-            assets: [{ name: "rehearsal-0.1.8.vsix" }, { name: "SHA256SUMS" }],
+            assets: [
+              { name: "rehearsal-db-0.1.8.vsix" },
+              { name: "SHA256SUMS" },
+            ],
           },
         ]
       : {

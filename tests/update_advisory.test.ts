@@ -39,7 +39,7 @@ const release = (version = "0.1.8", preview = true) => ({
   prerelease: preview,
   tag_name: `v${version}`,
   html_url: `${UPDATE_RELEASES_URL}/tag/v${version}`,
-  assets: [{ name: `rehearsal-${version}.vsix` }, { name: "SHA256SUMS" }],
+  assets: [{ name: `rehearsal-db-${version}.vsix` }, { name: "SHA256SUMS" }],
 });
 const state = (changes: Partial<AdvisoryState> = {}): AdvisoryState => ({
   offered: true,
@@ -150,7 +150,7 @@ describe("bounded public update metadata", () => {
     ).toBe("0.1.6");
     expect(
       parseExtensionUpdate(
-        [{ ...release(), assets: [{ name: "rehearsal-0.1.8.vsix" }] }],
+        [{ ...release(), assets: [{ name: "rehearsal-db-0.1.8.vsix" }] }],
         true,
       ),
     ).toBeNull();
@@ -163,6 +163,28 @@ describe("bounded public update metadata", () => {
     expect(() =>
       parseExtensionUpdate(Array(6).fill(release()), true),
     ).toThrow();
+  });
+  it("selects only the canonical asset family from mixed legacy and current releases", () => {
+    const legacy = {
+      ...release("0.1.18"),
+      assets: [{ name: "rehearsal-0.1.18.vsix" }, { name: "SHA256SUMS" }],
+    };
+    expect(parseExtensionUpdate([legacy], true)).toBeNull();
+    expect(parseExtensionUpdate([legacy, release("0.1.19")], true)).toBe(
+      "0.1.19",
+    );
+    expect(
+      parseExtensionUpdate(
+        [
+          {
+            ...release("0.1.99"),
+            assets: [{ name: "rehearsal-0.1.99.vsix" }, { name: "SHA256SUMS" }],
+          },
+          release("0.1.19"),
+        ],
+        true,
+      ),
+    ).toBe("0.1.19");
   });
   it("fetches fixed endpoints without credentials, redirects, installed versions or project data", async () => {
     const request = vi.fn(async () => metadataResponse(JSON.stringify(core())));

@@ -105,6 +105,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     private readonly workspaceState: vscode.Memento,
     private readonly extensionVersion = "unavailable",
     reviewPanels?: RehearsalReviewPanels,
+    private readonly mayStartWork: () => boolean = () => true,
   ) {
     this.reviewPanels = reviewPanels ?? new RehearsalReviewPanels(extensionUri);
     this.subscriptions = [
@@ -501,7 +502,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     rawValues: unknown,
     topologyConfigPath: string | undefined = snapshot.configPath,
   ): Promise<boolean> {
-    if (!vscode.workspace.isTrusted) return false;
+    if (!this.mayStartWork() || !vscode.workspace.isTrusted) return false;
     if (this.pendingConfigurationReviews.has(workspaceKey)) {
       void vscode.window.showInformationMessage(
         "Another configuration review is already in progress for this project. Finish or dismiss it before starting another.",
@@ -556,6 +557,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           reviewedSnapshot?.configurationMetadata?.sourceSha256 ?? null,
         ) === reviewedIdentity;
       if (
+        !this.mayStartWork() ||
         !reviewPanel ||
         this.panels.get(workspaceKey) !== reviewPanel ||
         !this.workspaceTokens.has(workspaceKey) ||

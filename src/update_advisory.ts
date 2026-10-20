@@ -1,6 +1,7 @@
 /** Optional release metadata only; never part of passive project inspection. */
 import { createHash } from "node:crypto";
 import type { ExtensionReleaseEvidence } from "./extension_release_view.js";
+import { extensionArtifactFilename } from "./extension_identity.js";
 
 export const UPDATE_RELEASES_URL =
   "https://github.com/Ddupasquier/rehearsal-vscode/releases";
@@ -129,7 +130,7 @@ export function parseExtensionUpdate(
       throw new Error("Unknown update metadata.");
     const names = data.assets.map((asset) => object(asset).name);
     if (
-      !names.includes(`rehearsal-${version}.vsix`) ||
+      !names.includes(extensionArtifactFilename(version)) ||
       !names.includes("SHA256SUMS")
     )
       continue;

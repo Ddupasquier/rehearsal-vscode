@@ -10,16 +10,16 @@ import {
 const version = "0.1.99";
 const runtime = { vscodeVersion: "1.110.0", nodeVersion: "24.21.0" };
 const base = `https://github.com/Ddupasquier/rehearsal-vscode/releases/download/v${version}/`;
-const filename = `rehearsal-${version}.vsix`;
+const filename = `rehearsal-db-${version}.vsix`;
 const manifest = {
-  name: "rehearsal",
+  name: "rehearsal-db",
   publisher: "rehearsal-db",
   version,
   main: "./dist/src/extension.js",
   engines: { vscode: "^1.101.0", node: ">=22 <27" },
   scripts: { build: "tsc" },
 };
-const xml = `<PackageManifest><Metadata><Identity Language="en-US" Id="rehearsal" Version="${version}" Publisher="rehearsal-db" /></Metadata></PackageManifest>`;
+const xml = `<PackageManifest><Metadata><Identity Language="en-US" Id="rehearsal-db" Version="${version}" Publisher="rehearsal-db" /></Metadata></PackageManifest>`;
 const required = [
   "[Content_Types].xml",
   "extension.vsixmanifest",
@@ -162,7 +162,7 @@ describe("verified extension ZIP and manifests", () => {
     entries[1]!.descriptor = true;
     const result = verify(archive(entries));
     expect(result.manifest).toEqual({
-      name: "rehearsal",
+      name: "rehearsal-db",
       publisher: "rehearsal-db",
       version,
       engines: manifest.engines,
@@ -173,6 +173,7 @@ describe("verified extension ZIP and manifests", () => {
   it.each([
     { publisher: "another-publisher" },
     { name: "another-extension" },
+    { name: "rehearsal" },
     { version: "0.1.98" },
     { main: "./alternate.js" },
     { browser: "./web.js" },
@@ -189,6 +190,12 @@ describe("verified extension ZIP and manifests", () => {
       );
     },
   );
+
+  it("rejects the complete legacy identity even when its JSON and XML agree", () => {
+    const entries = fixtureEntries({ name: "rehearsal" });
+    entries[1]!.text = xml.replace('Id="rehearsal-db"', 'Id="rehearsal"');
+    expect(() => verify(archive(entries))).toThrow("safely verified");
+  });
 
   it.each([
     { vscodeVersion: "1.100.0", nodeVersion: "24.0.0" },
@@ -271,6 +278,7 @@ describe("verified extension ZIP and manifests", () => {
 
   it.each([
     xml.replace('Publisher="rehearsal-db"', 'Publisher="foreign"'),
+    xml.replace('Id="rehearsal-db"', 'Id="rehearsal"'),
     xml.replace(`Version="${version}"`, 'Version="0.1.98"'),
     xml.replace("<Identity", "<!DOCTYPE unsafe><Identity"),
     xml.replace("</Metadata>", '<Identity Id="rehearsal" /></Metadata>'),
@@ -374,6 +382,7 @@ describe("bounded anonymous official release transport", () => {
 
   it.each([
     (sha: string) => `${sha}  alternate.vsix\n`,
+    (sha: string) => `${sha}  rehearsal-${version}.vsix\n`,
     (sha: string) => `${sha}  ${filename}\n${sha}  ${filename}\n`,
     (sha: string) => `${sha}  ../${filename}\n`,
     () => "invalid checksum",

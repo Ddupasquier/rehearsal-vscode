@@ -306,7 +306,11 @@ const busy = (seconds = 1, operationId = "a".repeat(64)): ProjectSnapshot => ({
 
 const owners: RehearsalWorkspacePanels[] = [];
 const ownedDirectories: string[] = [];
-const harness = (initial = ready(), selectedKey = key) => {
+const harness = (
+  initial = ready(),
+  selectedKey = key,
+  mayStartWork: () => boolean = () => true,
+) => {
   let current = initial;
   const snapshots = new Events<{
     workspaceKey: string;
@@ -334,6 +338,8 @@ const harness = (initial = ready(), selectedKey = key) => {
     actions as never,
     { get: vi.fn(), update: vi.fn(async () => {}) } as never,
     "0.1.2",
+    undefined,
+    mayStartWork,
   );
   owners.push(owner);
   return {
@@ -611,6 +617,7 @@ const reviewHarness = (
   modern = false,
   root = editor.folder.uri.fsPath,
   configPath = "rehearsal.config.mjs",
+  mayStartWork: () => boolean = () => true,
 ) => {
   const source =
     'export default { runtime: { applicationUrl: "http://localhost:5175" } };\n';
@@ -620,7 +627,7 @@ const reviewHarness = (
     configPath,
   };
   const workspaceKey = editor.uri(root).toString();
-  const fixture = harness(snapshot, workspaceKey);
+  const fixture = harness(snapshot, workspaceKey, mayStartWork);
   let diskText = source;
   const document = {
     uri: editor.uri(join(root, configPath)),
@@ -787,6 +794,39 @@ const filesystemReview = async (configPath = "rehearsal.config.mjs") => {
 };
 
 describe("in-product configuration reviews", () => {
+  it("refuses a new configuration review when extension coexistence is unsafe", async () => {
+    const fixture = reviewHarness(
+      false,
+      editor.folder.uri.fsPath,
+      "rehearsal.config.mjs",
+      () => false,
+    );
+    await fixture.owner.open(key);
+    await fixture.review();
+    expect(editor.read).not.toHaveBeenCalled();
+    expect(editor.review).not.toHaveBeenCalled();
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+  });
+  it("refuses a configuration write when extension coexistence changes during review", async () => {
+    let allowed = true;
+    const fixture = reviewHarness(
+      true,
+      editor.folder.uri.fsPath,
+      "rehearsal.config.mjs",
+      () => allowed,
+    );
+    await fixture.owner.open(key);
+    editor.reviewApproval.mockImplementationOnce(async () => {
+      allowed = false;
+      return "Apply Changes";
+    });
+    await fixture.review();
+    expect(editor.temporary).not.toHaveBeenCalled();
+    expect(editor.write).not.toHaveBeenCalled();
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+  });
   it("keeps a verified save successful when the subsequent project refresh rejects", async () => {
     const fixture = reviewHarness(true);
     fixture.projects.refreshWorkspace.mockRejectedValueOnce(

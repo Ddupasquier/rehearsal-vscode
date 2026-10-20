@@ -15,6 +15,11 @@ import {
   isPublishedVersion,
 } from "./update_advisory.js";
 import { downloadVerifiedExtensionUpdate } from "./extension_update_artifact.js";
+import {
+  EXTENSION_ID,
+  LEGACY_EXTENSION_ID,
+  extensionArtifactFilename,
+} from "./extension_identity.js";
 
 export class AutomaticExtensionInstaller implements vscode.Disposable {
   private disposed = false;
@@ -37,6 +42,7 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
   ): Promise<boolean> {
     if (
       this.disposed ||
+      vscode.extensions.getExtension(LEGACY_EXTENSION_ID) !== undefined ||
       !isPublishedVersion(version) ||
       comparePublishedVersions(version, this.options.loadedVersion) !== 1 ||
       (!this.options.preview && version.includes("-"))
@@ -57,7 +63,10 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
     permissionCurrent: () => boolean,
     whenIdle: () => Promise<boolean>,
   ): Promise<boolean> {
-    const allowed = () => !this.disposed && permissionCurrent();
+    const allowed = () =>
+      !this.disposed &&
+      vscode.extensions.getExtension(LEGACY_EXTENSION_ID) === undefined &&
+      permissionCurrent();
     if (!allowed() || !(await whenIdle()) || !allowed()) return false;
     await mkdir(this.options.storagePath, { recursive: true, mode: 0o700 });
     if (!allowed()) return false;
@@ -99,8 +108,8 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
         nodeVersion: process.versions.node,
       });
       if (!allowed() || !(await whenIdle()) || !allowed()) return false;
-      const current = vscode.extensions.getExtension("rehearsal-db.rehearsal")
-        ?.packageJSON.version as unknown;
+      const current = vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON
+        .version as unknown;
       if (typeof current !== "string") return false;
       if (typeof current === "string") {
         const comparison = comparePublishedVersions(current, version);
@@ -110,7 +119,7 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
       temporary = await mkdtemp(
         join(this.options.storagePath, "verified-update-"),
       );
-      const target = join(temporary, `rehearsal-${version}.vsix`);
+      const target = join(temporary, extensionArtifactFilename(version));
       const file = await open(target, "wx", 0o600);
       try {
         await file.writeFile(verified.bytes);
@@ -146,7 +155,7 @@ export class AutomaticExtensionInstaller implements vscode.Disposable {
       abort.abort();
       this.aborts.delete(abort);
       if (temporary) {
-        await unlink(join(temporary, `rehearsal-${version}.vsix`)).catch(
+        await unlink(join(temporary, extensionArtifactFilename(version))).catch(
           () => {},
         );
         await rmdir(temporary).catch(() => {});

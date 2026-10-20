@@ -19,9 +19,11 @@ import type {
 
 const editor = vi.hoisted(() => ({
   registeredVersion: "0.1.17" as unknown,
+  legacyInstalled: false,
   execute: vi.fn(),
   info: vi.fn(),
   warning: vi.fn(),
+  lookup: vi.fn(),
   uri: (path: string) => ({
     scheme: "file",
     fsPath: path,
@@ -34,10 +36,7 @@ vi.mock("vscode", () => ({
   Uri: { file: editor.uri },
   commands: { executeCommand: editor.execute },
   extensions: {
-    getExtension: () =>
-      editor.registeredVersion === undefined
-        ? undefined
-        : { packageJSON: { version: editor.registeredVersion } },
+    getExtension: editor.lookup,
   },
   window: {
     showInformationMessage: editor.info,
@@ -56,7 +55,7 @@ const verified = (): VerifiedExtensionUpdate => ({
   sha256: createHash("sha256").update(bytes).digest("hex"),
   manifest: {
     publisher: "rehearsal-db",
-    name: "rehearsal",
+    name: "rehearsal-db",
     version,
     engines: { vscode: "^1.101.0", node: ">=22 <27" },
   },
@@ -122,6 +121,17 @@ const deferredDownload = (download: ReturnType<typeof vi.fn>) => {
 
 beforeEach(() => {
   editor.registeredVersion = "0.1.17";
+  editor.legacyInstalled = false;
+  editor.lookup
+    .mockReset()
+    .mockImplementation((id: string) =>
+      id === "rehearsal-db.rehearsal" && editor.legacyInstalled
+        ? { packageJSON: { version: "0.1.18" } }
+        : id !== "rehearsal-db.rehearsal-db" ||
+            editor.registeredVersion === undefined
+          ? undefined
+          : { packageJSON: { version: editor.registeredVersion } },
+    );
   editor.execute.mockReset().mockResolvedValue(undefined);
   editor.info.mockReset();
   editor.warning.mockReset();
@@ -159,6 +169,8 @@ describe("automatic extension installation boundary", () => {
       nodeVersion: process.versions.node,
     });
     expect(editor.execute).toHaveBeenCalledTimes(1);
+    expect(editor.lookup).toHaveBeenCalledWith("rehearsal-db.rehearsal-db");
+    expect(editor.lookup).toHaveBeenCalledWith("rehearsal-db.rehearsal");
     expect(editor.warning).not.toHaveBeenCalled();
     expect(
       editor.execute.mock.calls.some(([command]) =>
@@ -172,6 +184,62 @@ describe("automatic extension installation boundary", () => {
     await expect(stat(installedPath!)).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+  it("refuses an installed legacy preview before download or canonical installation", async () => {
+    const f = await fixture();
+    editor.lookup.mockImplementation((id: string) =>
+      id === "rehearsal-db.rehearsal"
+        ? { packageJSON: { version: "0.1.18" } }
+        : undefined,
+    );
+    await expect(
+      track(
+        f.create().install(
+          version,
+          () => true,
+          async () => true,
+        ),
+      ),
+    ).resolves.toBe(false);
+    expect(editor.lookup).toHaveBeenCalledWith("rehearsal-db.rehearsal");
+    expect(f.download).not.toHaveBeenCalled();
+    expect(editor.execute).not.toHaveBeenCalled();
+    expect(await f.entries()).toEqual([]);
+  });
+  it("rechecks legacy coexistence after downloading before dispatching the installer", async () => {
+    const f = await fixture();
+    const download = deferredDownload(f.download);
+    const pending = track(
+      f.create().install(
+        version,
+        () => true,
+        async () => true,
+      ),
+    );
+    await vi.waitFor(() => expect(download.signal()).toBeDefined());
+    editor.legacyInstalled = true;
+    download.release();
+    await expect(pending).resolves.toBe(false);
+    expect(editor.execute).not.toHaveBeenCalled();
+    expect(await f.entries()).toEqual([]);
+  });
+  it("refuses a legacy extension appearing at the final idle check after writing verified bytes", async () => {
+    const f = await fixture();
+    const idle = async () => {
+      if (
+        (await f.entries()).some((entry) =>
+          entry.startsWith("verified-update-"),
+        )
+      )
+        editor.legacyInstalled = true;
+      return true;
+    };
+    await expect(
+      track(f.create().install(version, () => true, idle)),
+    ).resolves.toBe(false);
+    expect(editor.legacyInstalled).toBe(true);
+    expect(editor.execute).not.toHaveBeenCalled();
+    expect(await f.entries()).toEqual([]);
   });
   it.each(["0.1.17", "0.1.16", "latest", "file:local", "0.1.99-rc.1"])(
     "does not download unsupported or non-new selector %s",
@@ -304,7 +372,7 @@ describe("automatic extension installation boundary", () => {
         const path = join(
           f.storagePath,
           directory,
-          `rehearsal-${version}.vsix`,
+          `rehearsal-db-${version}.vsix`,
         );
         await chmod(path, 0o600);
         await writeFile(path, "Modified local bytes");
