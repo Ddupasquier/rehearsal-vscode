@@ -80,12 +80,13 @@ const fixture = async () => {
       _runtime: ExtensionUpdateRuntime,
     ): Promise<VerifiedExtensionUpdate> => verified(),
   );
-  const create = () => {
+  const create = (platform?: NodeJS.Platform) => {
     const owner = new AutomaticExtensionInstaller({
       storagePath,
       loadedVersion: "0.1.17",
       preview: false,
       download,
+      ...(platform ? { platform } : {}),
     });
     owners.push(owner);
     return owner;
@@ -144,6 +145,27 @@ afterEach(async () => {
 });
 
 describe("automatic extension installation boundary", () => {
+  it("cleans its exact owned read-only file through the Windows cleanup branch", async () => {
+    const f = await fixture();
+    let installedPath: string | undefined;
+    editor.execute.mockImplementationOnce(async (_command, uri) => {
+      installedPath = uri.fsPath;
+      expect((await stat(uri.fsPath)).mode & 0o777).toBe(0o400);
+    });
+    expect(
+      await track(
+        f.create("win32").install(
+          version,
+          () => true,
+          async () => true,
+        ),
+      ),
+    ).toBe(true);
+    expect(await f.entries()).toEqual([]);
+    await expect(stat(installedPath!)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
   it("passes exact verified read-only bytes only to the VS Code installer, without prompting or reloading", async () => {
     const f = await fixture();
     let installedPath: string | undefined;

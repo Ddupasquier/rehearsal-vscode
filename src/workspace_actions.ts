@@ -12,6 +12,7 @@ import * as vscode from "vscode";
 import { runRehearsalJson } from "./process_adapter.js";
 import { parseActivityData } from "./contracts.js";
 import { EXTENSION_ID } from "./extension_identity.js";
+import { terminalShellFamily } from "./platform_runtime.js";
 import { isEligibleCoreUpdate } from "./update_advisory.js";
 import { parseImageCleanupReview } from "./resource_contract.js";
 import { parseStaleStopReview } from "./stale_review.js";
@@ -34,6 +35,13 @@ import {
 } from "./workspace_activity.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
+
+const previewCommand = (arguments_: readonly string[]): string => {
+  const shell = terminalShellFamily(vscode.env?.shell);
+  return shell
+    ? shellCommand(arguments_, shell)
+    : `Arguments (shell integration required): ${JSON.stringify(arguments_)}`;
+};
 
 const ACTION_IDS = new Set<WorkspaceActionId>(WORKSPACE_ACTION_IDS);
 
@@ -333,7 +341,13 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         await this.refresh(workspaceKey, true);
         return;
       case "documentation":
-        await vscode.env.openExternal(vscode.Uri.parse(DOCUMENTATION_URL));
+        await vscode.env.openExternal(
+          vscode.Uri.parse(
+            snapshot.error?.code === "platform_unsupported"
+              ? `${DOCUMENTATION_URL}getting-started/#windows-use-a-wsl-2-linux-workspace`
+              : DOCUMENTATION_URL,
+          ),
+        );
         return;
       case "show_output":
         this.output.show(true);
@@ -385,7 +399,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
             plan.confirmation.title,
             {
               modal: true,
-              detail: `${plan.confirmation.detail}\n\nCommand: ${shellCommand(plan.arguments)}`,
+              detail: `${plan.confirmation.detail}\n\nCommand: ${previewCommand(plan.arguments)}`,
             },
             plan.confirmation.confirmLabel,
           );
@@ -395,7 +409,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
             `Run ${plan.label}?`,
             {
               modal: true,
-              detail: `${plan.detail}\n\nCommand: ${shellCommand(plan.arguments)}`,
+              detail: `${plan.detail}\n\nCommand: ${previewCommand(plan.arguments)}`,
             },
             "Run Command",
           );
@@ -568,7 +582,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         `Update Rehearsal in ${folder.name} from ${installedVersion} to ${version}?`,
         {
           modal: true,
-          detail: `This updates this project's manifest, lockfile and dependencies through its configured package manager/registry. Review the dependency diff afterward. No runtime or data cleanup is requested.\n\nCommand: ${shellCommand(args)}`,
+          detail: `This updates this project's manifest, lockfile and dependencies through its configured package manager/registry. Review the dependency diff afterward. No runtime or data cleanup is requested.\n\nCommand: ${previewCommand(args)}`,
         },
         "Update Exact Version",
       );
@@ -1098,11 +1112,28 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         ]),
       );
     } else {
+      const creation = terminal.creationOptions;
+      const shell = terminalShellFamily(
+        (creation && "shellPath" in creation
+          ? creation.shellPath
+          : undefined) ?? vscode.env?.shell,
+      );
+      if (!shell) {
+        this.output.warn(
+          "Rehearsal command was not sent: this terminal shell has no verified compatibility quoting.",
+        );
+        if (revealTerminal)
+          void vscode.window.showWarningMessage(
+            "Rehearsal did not send this command because shell integration is unavailable and this shell cannot be quoted safely. Use a supported shell with VS Code shell integration. On Windows, open the project with Remote - WSL in a WSL 2 Linux distribution.",
+          );
+        await this.finishTerminalAction(terminal, workspaceKey, null);
+        return false;
+      }
       this.output.warn(
         `Shell integration was unavailable after five seconds; ${label} is using compatibility mode. Its exit cannot be verified; once it finishes, close this terminal before another action.`,
       );
       this.fallbackTerminals.add(terminal);
-      terminal.sendText(shellCommand(arguments_), true);
+      terminal.sendText(shellCommand(arguments_, shell), true);
     }
     onDispatched?.(terminal, activity.id);
     this.monitorTerminalActivity(folder, workspaceKey, terminal, activity.id);

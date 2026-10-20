@@ -6,6 +6,23 @@ import {
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 
 describe("tree model", () => {
+  it("directs native Windows to WSL without offering a runtime action", () => {
+    const items = overviewItems({
+      workspaceName: "Windows project",
+      workspaceRoot: "C:\\projects\\app",
+      availability: "error",
+      error: {
+        code: "platform_unsupported",
+        message: "Native Windows requires WSL 2.",
+        suggestions: ["Open the project in its Linux home filesystem."],
+      },
+    });
+    expect(items.find(({ id }) => id === "error")).toMatchObject({
+      label: "Open this project in WSL 2",
+      extensionAction: "documentation",
+    });
+    expect(items.every((item) => !item.cliCommand)).toBe(true);
+  });
   it("labels a hands-on sandbox independently from a busy mutation without restoring stale facts", () => {
     const active: ProjectSnapshot = {
       workspaceName: "fixture",

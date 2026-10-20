@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
+import { infrastructureEnvironment } from "./platform_runtime.js";
 import {
   ContractError,
   parseEnvelope,
@@ -20,6 +21,7 @@ const DEFAULT_OUTPUT_LIMIT = 1024 * 1024;
 const MAXIMUM_MANIFEST_BYTES = 1024 * 1024;
 
 export type AdapterFailureCode =
+  | "platform_unsupported"
   | "package_missing"
   | "package_invalid"
   | "config_outside_workspace"
@@ -49,6 +51,16 @@ export class RehearsalCliError extends Error {
     this.name = "RehearsalCliError";
   }
 }
+
+export const assertInspectionPlatform = (
+  platform: NodeJS.Platform = process.platform,
+): void => {
+  if (platform === "win32")
+    throw new AdapterError(
+      "platform_unsupported",
+      "Native Windows Rehearsal inspection is not supported by this extension. Open VS Code with Remote - WSL in a WSL 2 Linux distribution, keep the project in that distribution's Linux home directory, and install Rehearsal in WSL. No inspection process was started.",
+    );
+};
 
 interface PackageManifest {
   readonly name?: unknown;
@@ -273,30 +285,11 @@ export const resolveWorkspaceRehearsal = async (
   };
 };
 
-const ALLOWED_ENVIRONMENT = new Set([
-  "COLIMA_HOME",
-  "DOCKER_CONFIG",
-  "DOCKER_CONTEXT",
-  "DOCKER_HOST",
-  "HOME",
-  "LANG",
-  "LC_ALL",
-  "PATH",
-  "TMPDIR",
-  "USER",
-  "XDG_CONFIG_HOME",
-  "XDG_DATA_HOME",
-  "XDG_RUNTIME_DIR",
-]);
-
 export const editorEnvironment = (
   source: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv => ({
-  ...Object.fromEntries(
-    Object.entries(source).filter(
-      ([key, value]) => ALLOWED_ENVIRONMENT.has(key) && value !== undefined,
-    ),
-  ),
+  ...infrastructureEnvironment(source, platform),
   NO_COLOR: "1",
   REHEARSAL_EDITOR_CLIENT: "1",
 });
@@ -329,12 +322,13 @@ type OwnedProcessState = "present" | "absent" | "unknown";
 export const ownedProcessState = (
   child: Pick<ReturnType<typeof spawn>, "pid" | "exitCode" | "signalCode">,
   killImplementation: typeof process.kill = process.kill,
+  platform: NodeJS.Platform = process.platform,
 ): OwnedProcessState => {
   if (!child.pid) return "absent";
-  if (process.platform === "win32")
+  if (platform === "win32")
     return child.exitCode === null && child.signalCode === null
       ? "present"
-      : "absent";
+      : "unknown";
   try {
     // The detached group's identity does not expire when its launcher exits.
     killImplementation(-child.pid, 0);
@@ -537,6 +531,7 @@ export const runVersion = async (
   workspaceRoot: string,
   options: Pick<RunOptions, "signal" | "environment" | "timeoutMs"> = {},
 ): Promise<VersionResult> => {
+  assertInspectionPlatform();
   const timeoutMs = options.timeoutMs ?? 90_000;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 300_000)
     throw new AdapterError(
@@ -574,6 +569,7 @@ export const runVersion = async (
 export const runRehearsalJson = async <Data>(
   options: RunOptions,
 ): Promise<CliExecution<Data>> => {
+  assertInspectionPlatform();
   const resolved = await resolveWorkspaceRehearsal(options.workspaceRoot);
   const config = await validatedConfigArgument(
     options.workspaceRoot,

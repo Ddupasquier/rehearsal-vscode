@@ -137,20 +137,25 @@ export const overviewItems = (
   }
   if (snapshot.error) {
     const timedOut = snapshot.error.code === "timeout";
+    const unsupportedPlatform = snapshot.error.code === "platform_unsupported";
     items.push({
       id: "error",
-      label: timedOut
-        ? "Project inspection took too long"
-        : "Project inspection needs attention",
+      label: unsupportedPlatform
+        ? "Open this project in WSL 2"
+        : timedOut
+          ? "Project inspection took too long"
+          : "Project inspection needs attention",
       description: snapshot.error.code,
-      tooltip: timedOut
-        ? "A read-only Rehearsal check exceeded the configured timeout. Open the project workspace to retry, adjust the timeout, or run Doctor."
-        : [
-            "Rehearsal could not safely complete this project inspection.",
-            ...snapshot.error.suggestions,
-          ].join("\n"),
+      tooltip: unsupportedPlatform
+        ? [snapshot.error.message, ...snapshot.error.suggestions].join("\n")
+        : timedOut
+          ? "A read-only Rehearsal check exceeded the configured timeout. Open the project workspace to retry, adjust the timeout, or run Doctor."
+          : [
+              "Rehearsal could not safely complete this project inspection.",
+              ...snapshot.error.suggestions,
+            ].join("\n"),
       icon: "error",
-      extensionAction: "showOutput",
+      extensionAction: unsupportedPlatform ? "documentation" : "showOutput",
     });
     return [...items, documentationItem()];
   }

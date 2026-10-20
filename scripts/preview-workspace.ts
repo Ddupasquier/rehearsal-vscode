@@ -1485,6 +1485,22 @@ const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
       ],
     },
   },
+  "/windows": {
+    workspaceName: "Windows project · WSL setup",
+    workspaceRoot: "C:\\projects\\app",
+    availability: "error",
+    error: {
+      code: "platform_unsupported",
+      message:
+        "Native Windows inspection requires a Linux workspace and extension host in WSL 2.",
+      suggestions: [
+        "Install Microsoft's WSL extension in VS Code and use a WSL 2 Linux distribution.",
+        "Keep this project in the distribution's Linux home, not a Windows-mounted drive.",
+        "Use WSL: Open Folder in WSL, then install Rehearsal DB in that WSL extension host.",
+        "Enable Docker Desktop integration for that distribution, or use its local Docker Engine.",
+      ],
+    },
+  },
   "/timeout": {
     workspaceName: "Large project",
     workspaceRoot: "/preview-only",

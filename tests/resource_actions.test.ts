@@ -21,6 +21,7 @@ interface ResourceReviewOptions {
 }
 const mocks = vi.hoisted(() => ({
   trusted: true,
+  shell: undefined as string | undefined,
   confirm: vi.fn(),
   error: vi.fn(),
   read: vi.fn(),
@@ -59,6 +60,11 @@ const mocks = vi.hoisted(() => ({
     | undefined,
 }));
 vi.mock("vscode", () => ({
+  env: {
+    get shell() {
+      return mocks.shell;
+    },
+  },
   workspace: {
     onDidChangeWorkspaceFolders: (listener: typeof mocks.folderListener) => {
       mocks.folderListener = listener;
@@ -253,6 +259,7 @@ beforeEach(async () => {
   );
   vi.clearAllMocks();
   mocks.trusted = true;
+  mocks.shell = undefined;
   mocks.documents = [];
   current = snapshot;
   mocks.folders = [
@@ -298,6 +305,61 @@ beforeEach(async () => {
   }));
 });
 describe("reviewed resource actions", () => {
+  it("uses PowerShell-compatible previews and text only for an identified PowerShell fallback", async () => {
+    vi.useFakeTimers();
+    mocks.shell = "C:\\Program Files\\PowerShell\\7\\pwsh.exe";
+    const terminal = {
+      show: vi.fn(),
+      sendText: vi.fn(),
+      dispose: vi.fn(),
+      creationOptions: { shellPath: mocks.shell },
+    };
+    mocks.terminal.mockReturnValue(terminal);
+    const launch = actions().runWorkspace(
+      "file:///workspace",
+      "startRuntime",
+      "primary",
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    await launch;
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        detail: expect.stringContaining("Command: & 'npx'"),
+      }),
+      "Start Runtime",
+    );
+    expect(terminal.sendText).toHaveBeenCalledWith(
+      expect.stringMatching(/^& 'npx' '--no-install' 'rehearsal'/u),
+      true,
+    );
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it.each(["C:\\Windows\\System32\\cmd.exe", "/usr/bin/unknown-shell"])(
+    "refuses compatibility command text in %s without guessing quoting",
+    async (shellPath) => {
+      vi.useFakeTimers();
+      const terminal = {
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        creationOptions: { shellPath },
+      };
+      mocks.terminal.mockReturnValue(terminal);
+      const launch = actions().runWorkspace(
+        "file:///workspace",
+        "startRuntime",
+        "primary",
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await launch;
+      expect(terminal.sendText).not.toHaveBeenCalled();
+      expect(mocks.execute).not.toHaveBeenCalled();
+      expect(mocks.confirm).toHaveBeenCalledWith(
+        expect.stringContaining("shell cannot be quoted safely"),
+      );
+    },
+  );
   const prepareStaleReview = () => {
     current = {
       ...snapshot,

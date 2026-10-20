@@ -279,6 +279,14 @@ const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
         tone: "warning",
       };
     case "error":
+      if (snapshot.error?.code === "platform_unsupported") {
+        return {
+          label: "Open this project in WSL 2",
+          detail:
+            "Windows uses a Linux workspace and Rehearsal extension host in WSL 2.",
+          tone: "warning",
+        };
+      }
       if (snapshot.error?.code === "timeout") {
         return {
           label: "Project check timed out",
@@ -498,6 +506,13 @@ const nextStepMarkup = (
   )
     return `<p>A configured environment is protected. Review its policy before a rehearsal, reset, or discard. Starting and stopping still preserve its data.</p>${actionGroup(navigationButton("runtime", "Review protected environments"))}`;
   if (snapshot.error) {
+    if (snapshot.error.code === "platform_unsupported") {
+      return `
+        <p>${escapeHtml(snapshot.error.message)}</p>
+        <ol class="recovery-list">${snapshot.error.suggestions.map((suggestion) => `<li>${escapeHtml(suggestion)}</li>`).join("")}</ol>
+        <p>No inspection process was started. This does not change your files or database.</p>
+        ${actionGroup(actionButton(assets, "documentation", "Windows setup guide", "primary"), actionButton(assets, "showOutput", "Open diagnostics"))}`;
+    }
     const errorCopy =
       snapshot.error.code === "timeout"
         ? "A read-only project check took longer than the configured limit. Retry it, or increase Rehearsal: Inspection Timeout Seconds for this workspace."
@@ -1245,7 +1260,7 @@ export const renderWorkspaceDocument = (
           <div class="breadcrumbs"><span>Rehearsal</span><b>/</b><strong>${safeName}</strong></div>
           <div class="topbar__actions">
             <span class="topbar__badge topbar__local">Local only</span>
-            <span class="topbar__badge">Core ${escapeHtml(isLoading && !snapshot.version ? "checking" : (snapshot.version ?? "not installed"))}</span>
+            <span class="topbar__badge">Core ${escapeHtml(isLoading && !snapshot.version ? "checking" : (snapshot.version ?? (snapshot.error?.code === "platform_unsupported" ? "not inspected" : "not installed")))}</span>
             <a id="extension-version" class="topbar__badge topbar__version" href="${escapeHtml(assets.actionUris.checkUpdates)}" title="${escapeHtml(extensionRelease.title)}" data-state="${extensionRelease.state}"><span id="extension-version-label" role="status" aria-live="polite">${escapeHtml(extensionRelease.text)}</span></a>
             ${actionButton(assets, "refresh", "Refresh", "secondary")}
           </div>

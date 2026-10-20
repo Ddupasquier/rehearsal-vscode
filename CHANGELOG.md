@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.20 — Platform compatibility candidate
+
+- Distinguish native Windows from a Windows desktop running the extension in a WSL 2
+  Linux host. Refuse native Windows inspection before a CLI child launches, with an
+  actionable Linux-workspace/Remote-WSL path instead of unsafe cleanup assumptions.
+- Verify compiled adapter behavior on real Linux/macOS Intel/macOS ARM/Windows Node
+  runners, retaining actual POSIX process tests and a genuine Windows refusal canary.
+  Preserve existing protected check names; no new publication authority or branch gate.
+- Document the WSL compatibility preview, Linux-filesystem requirement and separate
+  native-editor/database evidence limits. Other remote, mobile and unlisted systems are
+  not silently relabeled supported by a passing Node or controller test.
+
 ## 0.1.19 — Canonical Rehearsal DB identity
 
 - Use Marketplace display name **Rehearsal DB** and canonical extension ID

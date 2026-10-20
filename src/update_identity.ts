@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { resolveWorkspaceRehearsal } from "./process_adapter.js";
+import { canonicalPathMatches } from "./platform_runtime.js";
 import {
   comparePublishedVersions,
   isPublishedVersion,
@@ -12,7 +13,7 @@ import {
 } from "./update_advisory.js";
 
 async function boundedMetadata(path: string, maximum: number): Promise<string> {
-  if ((await realpath(dirname(path))) !== dirname(path))
+  if (!canonicalPathMatches(await realpath(dirname(path)), dirname(path)))
     throw new Error("Unknown installation metadata.");
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -23,7 +24,7 @@ async function boundedMetadata(path: string, maximum: number): Promise<string> {
     const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
     if (
       bytesRead > maximum ||
-      (await realpath(dirname(path))) !== dirname(path)
+      !canonicalPathMatches(await realpath(dirname(path)), dirname(path))
     )
       throw new Error("Unknown installation metadata.");
     return buffer.subarray(0, bytesRead).toString("utf8");
@@ -91,7 +92,8 @@ export async function readUpdateProjectIdentity(
     fingerprint: hash.digest("hex"),
   });
   try {
-    if ((await realpath(root)) !== resolve(root)) return result("unknown");
+    if (!canonicalPathMatches(await realpath(root), resolve(root)))
+      return result("unknown");
     const installed = await resolveWorkspaceRehearsal(root);
     version = installed.version;
     const source = await boundedMetadata(

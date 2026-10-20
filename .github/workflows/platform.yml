@@ -1,0 +1,48 @@
+name: Platform compatibility
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter:
+    name: Adapter runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, macos-15-intel, windows-2025]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run verify:controller
+      - run: npm test -- tests/platform_runtime.test.ts tests/automatic_update_settings.test.ts tests/extension_identity.test.ts
+      - name: Real POSIX process lifecycle tests
+        if: runner.os != 'Windows'
+        run: npm test -- tests/process_adapter.test.ts
+      - name: Compiled adapter runtime and safe Windows refusal
+        run: node --import tsx scripts/verify-platform-runtime.ts
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: adapter-runtime-${{ matrix.os }}
+          path: test-results/platform/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+# Compiled-controller/Node adapter evidence is not a native VS Code or database
+# walkthrough. Existing protected checks and publication controls are unchanged.

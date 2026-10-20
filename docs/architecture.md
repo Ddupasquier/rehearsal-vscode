@@ -65,8 +65,23 @@ The [README migration steps](../README.md#move-from-a-preview-through-0118) own 
   installed-package acceptance workspace.
   Unit checks use two workers to bound local memory pressure; live container checks
   remain serialized by Test Lab's maintained resource guards.
-- macOS and Linux are supported for the prototype. WSL is experimental. Native Windows,
-  browser-based VS Code, Codespaces, SSH, and Dev Containers are not claimed yet.
+- macOS Intel/Apple Silicon and Linux use the POSIX runtime. Windows desktop access uses
+  the WSL 2 Linux-extension-host compatibility preview, with Linux Node and a project on
+  the distribution's Linux filesystem, not `/mnt/c`. Native Windows inspection refuses
+  before any CLI child launch; unsupported process-tree/ACL behavior is not guessed safe.
+  WSL core PostgreSQL fixture proof is distinct from native Remote-WSL editor acceptance.
+  WSL Supabase/Auth/Storage, browser-only VS Code, Codespaces, SSH, Dev Containers,
+  mobile/BSD and other unlisted systems are not claimed as end-to-end supported.
+  The [core platform policy](https://github.com/Ddupasquier/rehearsal-db/blob/main/COMPATIBILITY.md#operating-systems-and-execution-location)
+  owns the shared host/runtime/architecture matrix.
+
+The separate `Platform compatibility` workflow runs Node 24 on real Linux, macOS ARM,
+macOS Intel and Windows runners without renaming existing protected checks. Its compiled
+adapter smoke launches real Node children for version/JSON contracts from a path with
+spaces and Unicode on POSIX. On actual native Windows it proves the prelaunch refusal
+and absence of a child-execution canary. Targeted platform contracts and compiled
+controller checks are not native VS Code API, WSL GUI, browser or database evidence.
+The core's independent Windows WSL workflow owns real Linux-filesystem PostgreSQL proof.
 
 ## Editor experience and accessibility
 
