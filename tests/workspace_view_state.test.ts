@@ -7,6 +7,7 @@ import {
   reconcileMigrationReview,
   migrationReviewIdentity,
   MIGRATION_REVIEW_PERSISTENCE_LIMIT,
+  workspaceExecutionState,
 } from "../src/workspace_view_state.js";
 
 const profiles = [
@@ -251,5 +252,175 @@ describe("harmless workspace display state", () => {
         ["primary:1"],
       ),
     ).toEqual([]);
+  });
+});
+
+describe("command, database and proof evidence", () => {
+  const receipt = (
+    state: "completed" | "failed" | "cancelled" = "completed",
+    at = "2026-10-20T12:00:00.000Z",
+    target: string | null = "primary",
+  ) => ({
+    kind: "run",
+    rehearsalVersion: "1.0.1",
+    progress: {
+      schemaVersion: 1 as const,
+      operationId: (state === "completed" ? "a" : "b").repeat(64),
+      state,
+      startedAt: at,
+      updatedAt: at,
+      elapsedMilliseconds: 1,
+      currentStage: null,
+      completedStages: [
+        {
+          id: 1,
+          phase: "application-proof" as const,
+          target,
+          state: "completed" as const,
+          startedAt: at,
+          endedAt: at,
+          durationMilliseconds: 1,
+        },
+      ],
+      events: [],
+      truncated: { stages: false, events: false },
+    },
+  });
+  const snapshot = (): ProjectSnapshot => ({
+    workspaceName: "Database-only tutorial",
+    workspaceRoot: "/not-read",
+    availability: "ready",
+    version: "1.0.1",
+    activity: { schemaVersion: 1, state: "idle", operation: null },
+    runtime: {
+      state: "running",
+      targets: [
+        {
+          name: "primary",
+          state: "running",
+          reason: null,
+          runtimeTarget: "postgresql",
+          endpoint: null,
+          verifiedRuntimeAvailable: true,
+        },
+      ],
+    },
+    configuration: {
+      application: {
+        startCommand: "node no-browser.cjs",
+        proofCommand: "node database-proof.cjs",
+        readinessUrl: null,
+      },
+    },
+  });
+  it("does not turn database liveness, readiness or a configured proof into execution success", () => {
+    expect(workspaceExecutionState(snapshot())).toMatchObject({
+      command: "idle",
+      applicationMode: "database_only",
+      proofConfigured: true,
+      lastRun: null,
+      proof: "not_recorded",
+    });
+    const { configuration: _configuration, ...withoutConfiguration } =
+      snapshot();
+    expect(workspaceExecutionState(withoutConfiguration)).toMatchObject({
+      applicationMode: "unknown",
+      proofConfigured: null,
+      proof: "not_recorded",
+    });
+  });
+  it("uses a completed primary proof stage in a completed recorded run, separately from launch configuration", () => {
+    const current = snapshot();
+    const state = workspaceExecutionState({
+      ...current,
+      activity: { ...current.activity!, recent: [receipt()] },
+    });
+    expect(state.proof).toBe("recorded_pass");
+    expect(state.lastRun?.progress.state).toBe("completed");
+    expect(state.applicationMode).toBe("database_only");
+    expect(
+      workspaceExecutionState({
+        ...current,
+        configuration: {
+          application: {
+            ...current.configuration!.application,
+            readinessUrl: "http://127.0.0.1:5123/health",
+          },
+        },
+      }).applicationMode,
+    ).toBe("launch_configured");
+  });
+  it("does not borrow dependent proof, a non-run receipt, or a failed command's successful earlier stage", () => {
+    for (const recent of [
+      [receipt("completed", undefined, "dependent")],
+      [{ ...receipt(), kind: "start" }],
+      [receipt("failed")],
+      [receipt("cancelled")],
+      [
+        {
+          ...receipt(),
+          progress: { ...receipt().progress, completedStages: [] },
+        },
+      ],
+    ]) {
+      const current = snapshot();
+      expect(
+        workspaceExecutionState({
+          ...current,
+          activity: { ...current.activity!, recent },
+        }).proof,
+      ).toBe("not_recorded");
+    }
+  });
+  it("orders run attempts rather than trusting array order and does not revive success after a later failure", () => {
+    const current = snapshot();
+    const recent = [receipt(), receipt("failed", "2026-10-20T12:01:00.000Z")];
+    const observed = workspaceExecutionState({
+      ...current,
+      activity: { ...current.activity!, recent },
+    });
+    expect(observed.lastRun?.progress.state).toBe("failed");
+    expect(observed.proof).toBe("not_recorded");
+    expect(recent[0]?.progress.state).toBe("completed");
+    const tied = workspaceExecutionState({
+      ...current,
+      activity: {
+        ...current.activity!,
+        recent: [receipt(), receipt("failed")],
+      },
+    });
+    expect(tied.lastRun).toBeNull();
+  });
+  it.each(["busy", "stale", "invalid"] as const)(
+    "does not turn retained history into current success while activity is %s",
+    (state) => {
+      const current = snapshot();
+      expect(
+        workspaceExecutionState({
+          ...current,
+          activity: { ...current.activity!, state, recent: [receipt()] },
+        }),
+      ).toMatchObject({ lastRun: null, proof: "not_recorded" });
+    },
+  );
+  it("preserves unknown when history or project inspection is unavailable", () => {
+    const current = snapshot();
+    for (const recent of [undefined, null, []])
+      expect(
+        workspaceExecutionState({
+          ...current,
+          activity: {
+            ...current.activity!,
+            ...(recent === undefined ? {} : { recent }),
+          },
+        }).proof,
+      ).toBe("not_recorded");
+    expect(
+      workspaceExecutionState({
+        ...current,
+        availability: "error",
+        activity: { ...current.activity!, recent: [receipt()] },
+      }).lastRun,
+    ).toBeNull();
   });
 });

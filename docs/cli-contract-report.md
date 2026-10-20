@@ -146,6 +146,51 @@ preserved. The existing engine must be running; only disposable Lab resources ar
 Browser and readiness paths stay separate. This is not native editor, provider-login,
 screen-reader, VM-shutdown or Supabase acceptance.
 
+## Native migration-failure panel companion
+
+On macOS, the separately opt-in native companion accepts one frozen canonical VSIX,
+its full SHA-256, recorded public samples, and an optional fourth exact attempted SQL
+file:
+
+```bash
+node --import tsx scripts/verify-native-migration-failure.ts /absolute/candidate.vsix FULL_VSIX_SHA256 /absolute/public-samples.json /absolute/attempted-migration.sql
+```
+
+Omit the SQL argument when source-link acceptance is not requested. The samples file
+is a closed `schemaVersion: 1`, `kind: "migration-workbench-samples"` wrapper, bounded
+to 64 KiB, containing `artifactSha256`, `failureActivity` and corrected public envelopes
+for activity, explain, status, candidates, doctor and baseline inspection. The legacy
+single public `activity --json` success envelope remains accepted within 256 KiB, but
+does not exercise the corrected workbench. Inputs must be regular files, not private
+history or terminal output. Retain the originating core-artifact evidence separately;
+a recorded version or hash declaration alone does not verify those artifact bytes.
+The report distinguishes the VSIX hash, public-input hash and recorded core-artifact
+hash, and compares installed extension files with the exact frozen archive.
+
+An isolated native VS Code host loads the installed production parser and panel owner.
+A minimal event-emitting projects/actions consumer exercises a recognized diagnosis
+through snapshot refresh, then an explicitly controlled unknown diagnosis through
+refresh and panel close/reopen. Malformed SQL-bearing, changed-summary and mismatched
+receipt controls must refuse. Corrected envelopes additionally pass through the
+production inspector's injected client and panel refresh, checking idle command activity,
+a completed run with recorded primary CLI proof, a separately running database, zero
+pending migrations and database-only next steps without an application-launch requirement.
+
+When supplied, the SQL input is bounded to 2 MiB, must be valid UTF-8, and must match
+exactly one recorded attempted-input SHA and safe relative path. Only an owned workspace
+copy is opened through the production source handler. A changed-byte control must refuse
+without opening the altered file; the copy is then restored. Final fixture inventory,
+source bytes and public-input bytes must match their initial state. Without the optional
+source, the workspace stays empty. No terminal, CLI or database operation is launched.
+The existing normal-memory-pressure guard applies; the launcher owns and reaps only its
+isolated editor process group.
+
+Require the native result and final verification report to pass, including editor exit,
+exact-extension uninstall and profile removal. Failure keeps bounded phase evidence
+and the owned fixture for investigation. This proves native API/panel-document refresh,
+not complete extension activation, a new provider execution, rendered DOM, human visual,
+keyboard, screen-reader, Windows or Remote-WSL acceptance. It adds no CI or release gate.
+
 ## Installed baseline scope and resource-policy companion
 
 Add `--scope-policy-review` to the Lab activity command. It creates separate synthetic

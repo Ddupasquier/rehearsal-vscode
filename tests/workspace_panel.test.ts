@@ -33,6 +33,7 @@ const editor = vi.hoisted(() => {
   };
   const panels: ReturnType<typeof createPanel>[] = [];
   const read = vi.fn();
+  const readMigration = vi.fn();
   const resolvePackage = vi.fn();
   const temporary = vi.fn(
     async () => "/private/manual-round/.rehearsal-config-review-owned",
@@ -123,6 +124,7 @@ const editor = vi.hoisted(() => {
     folder,
     panels,
     read,
+    readMigration,
     resolvePackage,
     temporary,
     write,
@@ -212,6 +214,10 @@ vi.mock("vscode", () => editor.module);
 vi.mock("../src/process_adapter.js", () => ({
   runRehearsalJson: editor.read,
   resolveWorkspaceRehearsal: editor.resolvePackage,
+}));
+vi.mock("../src/migration_failure_source.js", async (original) => ({
+  ...(await original<typeof import("../src/migration_failure_source.js")>()),
+  readExactMigrationSource: editor.readMigration,
 }));
 vi.mock("../src/review_panel.js", () => ({
   RehearsalReviewPanels: class {
@@ -370,6 +376,7 @@ afterEach(async () => {
   editor.module.window.showSaveDialog.mockReset();
   editor.module.workspace.fs.writeFile.mockReset().mockResolvedValue(undefined);
   editor.read.mockReset();
+  editor.readMigration.mockReset();
   editor.resolvePackage.mockReset();
   editor.openFile.mockReset();
   editor.canonical.mockReset().mockImplementation(async (path: string) => path);
@@ -387,6 +394,191 @@ afterEach(async () => {
     );
   for (const directory of ownedDirectories.splice(0))
     await fs.rm(directory, { recursive: true, force: true });
+});
+
+const migrationFailureFixture = () => {
+  const operationId = "d".repeat(64);
+  const text = "select ';';\nSELEC 1;\n";
+  const path = `${editor.folder.uri.fsPath}/database/migrations/20261020000100_broken.sql`;
+  const source = {
+    schemaVersion: 1,
+    kind: "candidate",
+    filename: "20261020000100_broken.sql",
+    sha256: configurationFingerprint(text),
+    workspaceRelativePath: "database/migrations/20261020000100_broken.sql",
+    line: null,
+    column: null,
+    evidence: "owned_execution_input",
+  };
+  const progress = busy().activity!.operation!.progress!;
+  const snapshot: ProjectSnapshot = {
+    ...ready(),
+    activity: parseActivityData({
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent: [
+        {
+          kind: "migrate",
+          rehearsalVersion: "1.0.2",
+          progress: {
+            ...progress,
+            operationId,
+            state: "failed",
+            currentStage: null,
+            completedStages: [],
+            events: [
+              {
+                sequence: 1,
+                code: "operation.failed",
+                phase: null,
+                target: null,
+                at: progress.updatedAt,
+              },
+            ],
+          },
+        },
+      ],
+      recentFailures: [
+        {
+          operationId,
+          diagnostic: {
+            schemaVersion: 1,
+            provider: "postgresql",
+            classification: "syntax",
+            sqlState: "42601",
+            evidence: "provider_sqlstate",
+            summary: "The database reported a SQL syntax error.",
+            suggestions: [
+              "Review the candidate SQL for missing keywords, punctuation or malformed statements; then review the new exact plan before retrying.",
+              "No automatic SQL change or retry was performed. The failure itself does not prove rollback or cleanup; inspect runtime status before retrying.",
+            ],
+            source,
+          },
+        },
+      ],
+    }),
+  };
+  const fixture = harness(snapshot);
+  const checked = { path, text, identity: "same-canonical-file" };
+  const document = {
+    uri: editor.uri(path),
+    isDirty: false,
+    getText: () => text,
+  };
+  editor.readMigration.mockResolvedValue(checked);
+  editor.module.workspace.openTextDocument.mockResolvedValue(document);
+  const send = async (
+    message: unknown = { type: "openMigrationFailure", operationId },
+  ) => {
+    const panel = editor.panels.at(-1)!;
+    await (
+      fixture.owner as unknown as {
+        handleMessage(
+          panel: unknown,
+          workspaceKey: string,
+          message: unknown,
+        ): Promise<void>;
+      }
+    ).handleMessage(panel, key, message);
+  };
+  return { ...fixture, snapshot, source, document, checked, send, operationId };
+};
+
+describe("exact migration input navigation", () => {
+  it("opens only the unchanged recorded file without editing it or running any command", async () => {
+    const fixture = migrationFailureFixture();
+    await fixture.owner.open(key);
+    await fixture.send();
+    expect(editor.readMigration).toHaveBeenCalledTimes(2);
+    expect(editor.module.window.showTextDocument).toHaveBeenCalledWith(
+      fixture.document,
+      { preview: true },
+    );
+    expect(editor.read).not.toHaveBeenCalled();
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(editor.write).not.toHaveBeenCalled();
+  });
+  it.each(["trust", "workspace", "panel", "receipt", "source"] as const)(
+    "refuses when %s changes during the file read",
+    async (change) => {
+      const fixture = migrationFailureFixture();
+      await fixture.owner.open(key);
+      editor.readMigration.mockImplementationOnce(async () => {
+        if (change === "trust") editor.module.workspace.isTrusted = false;
+        if (change === "workspace")
+          editor.module.workspace.workspaceFolders = [];
+        if (change === "panel") fixture.owner.dispose();
+        if (change === "receipt") fixture.update(ready());
+        if (change === "source")
+          fixture.update({
+            ...fixture.snapshot,
+            activity: parseActivityData({
+              ...fixture.snapshot.activity,
+              recentFailures: [
+                {
+                  operationId: fixture.operationId,
+                  diagnostic: {
+                    ...fixture.snapshot.activity!.recentFailures![0]!
+                      .diagnostic,
+                    source: { ...fixture.source, sha256: "f".repeat(64) },
+                  },
+                },
+              ],
+            }),
+          });
+        return fixture.checked;
+      });
+      await fixture.send();
+      expect(editor.module.workspace.openTextDocument).not.toHaveBeenCalled();
+      expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "dirty",
+    "text",
+    "identity",
+    "disk",
+    "unbound",
+    "injected-path",
+  ] as const)(
+    "refuses %s without a stale fallback or SQL launch",
+    async (change) => {
+      const fixture = migrationFailureFixture();
+      await fixture.owner.open(key);
+      if (change === "dirty") fixture.document.isDirty = true;
+      if (change === "text")
+        fixture.document.getText = () => "later editor content";
+      if (change === "identity")
+        editor.readMigration
+          .mockResolvedValueOnce(fixture.checked)
+          .mockResolvedValueOnce({
+            ...fixture.checked,
+            identity: "replacement",
+          });
+      if (change === "disk")
+        editor.readMigration.mockRejectedValue(
+          new Error("PRIVATE_SOURCE_PATH"),
+        );
+      await fixture.send(
+        change === "unbound"
+          ? { type: "openMigrationFailure", operationId: "e".repeat(64) }
+          : change === "injected-path"
+            ? {
+                type: "openMigrationFailure",
+                operationId: fixture.operationId,
+                path: "/private/secret.sql",
+              }
+            : undefined,
+      );
+      expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+      expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+      expect(editor.read).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify(editor.module.window.showWarningMessage.mock.calls),
+      ).not.toContain("PRIVATE_SOURCE_PATH");
+    },
+  );
 });
 
 describe("explicit verification-report export", () => {
@@ -1805,7 +1997,7 @@ describe("live workspace progress presentation", () => {
     });
     fixture.update(busy());
     expect(panel.assignments).toHaveLength(2);
-    expect(panel.webview.html).toContain("Rehearsal in progress");
+    expect(panel.webview.html).toContain("Rehearsal command running");
     fixture.update(busy(2));
     expect(panel.assignments).toHaveLength(2);
     expect(panel.webview.postMessage).toHaveBeenLastCalledWith(

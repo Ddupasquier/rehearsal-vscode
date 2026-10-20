@@ -69,6 +69,17 @@ approval before applying it. Ambiguous, expression-based, oversized, or out-of-w
 configuration is refused. The complete saved file must still pass Rehearsal core validation
 before it can affect a runtime.
 
+Migration diagnoses are accepted only through the closed, versioned core contract and
+must belong to a matching failed operation receipt. The extension does not classify SQL
+or parse provider output itself. An **Open exact migration input** message contains only
+that operation ID, never a webview-provided path or position. The host rechecks the
+current panel, workspace and trust, resolves only the recorded safe project-local path,
+and rejects symlink components, non-regular/oversized files, invalid UTF-8, changed file
+identity or bytes, and a dirty or different editor buffer. SQL is shown only by the
+explicit native-editor action, not included in diagnostics, exports or saved view state.
+No line/column, rollback, successful cleanup, SQL rewrite or retry is inferred from a
+failed migration or its attempted-input attribution.
+
 Freshness does not change the minimum compatibility contract. A newer public version
 may be offered without labeling the installed compatible version broken. Exact-version
 core updates need explicit approval or a current, separate automatic CLI-update opt-in

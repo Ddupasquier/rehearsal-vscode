@@ -151,6 +151,7 @@ export const preferenceStorageKey = (workspaceKey: string): string =>
 export const isLoopbackUrl = isLocalEndpoint;
 
 export type WorkspaceMessage =
+  | { readonly type: "openMigrationFailure"; readonly operationId: string }
   | { readonly type: "reviewStaleStop" }
   | { readonly type: "editing"; readonly editing: boolean }
   | { readonly type: "cleanupImages"; readonly ids: unknown }
@@ -184,6 +185,12 @@ export const parseWorkspaceMessage = (
 ): WorkspaceMessage | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const message = value as Record<string, unknown>;
+  if (message.type === "openMigrationFailure")
+    return Object.keys(message).sort().join(",") === "operationId,type" &&
+      typeof message.operationId === "string" &&
+      /^[a-f0-9]{64}$/u.test(message.operationId)
+      ? { type: "openMigrationFailure", operationId: message.operationId }
+      : null;
   if (message.type === "reviewStaleStop") return { type: "reviewStaleStop" };
   if (message.type === "editing" && typeof message.editing === "boolean")
     return { type: "editing", editing: message.editing };

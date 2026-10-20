@@ -7,6 +7,20 @@ import {
   openSandboxSessionState,
 } from "../src/operation_progress.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
+import { parseMigrationFailureDiagnostic } from "../src/migration_failure.js";
+
+const migrationDiagnostic = () => ({
+  schemaVersion: 1,
+  provider: "postgresql",
+  classification: "constraint",
+  sqlState: "23514",
+  evidence: "provider_sqlstate",
+  summary: "Rows do not satisfy a CHECK constraint.",
+  suggestions: [
+    "Existing rows may not satisfy the new constraint. Review and backfill incompatible rows before enforcing it; also check values written by the migration.",
+    "No automatic SQL change or retry was performed. The failure itself does not prove rollback or cleanup; inspect runtime status before retrying.",
+  ],
+});
 
 const startedAt = "2026-10-13T22:59:00.000Z",
   updatedAt = "2026-10-13T23:00:00.000Z",
@@ -112,6 +126,188 @@ const snapshot = (activity: unknown): ProjectSnapshot => ({
   activity: parseActivityData(activity),
 });
 describe("safe native operation progress", () => {
+  it("renders an opaque exact-input link while keeping SQL line mapping unavailable", () => {
+    const source = {
+      schemaVersion: 1,
+      kind: "candidate",
+      filename: "20261020000100_broken_migration.sql",
+      sha256: "b".repeat(64),
+      workspaceRelativePath:
+        "database/migrations/20261020000100_broken_migration.sql",
+      line: null,
+      column: null,
+      evidence: "owned_execution_input",
+    };
+    const data = {
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent: [
+        { kind: "run", rehearsalVersion: "1.0.2", progress: ended("failed") },
+      ],
+      recentFailures: [
+        {
+          operationId: progress().operationId,
+          diagnostic: { ...migrationDiagnostic(), source },
+        },
+      ],
+    };
+    const activity = parseActivityData(data);
+    expect(activity.recentFailures?.[0]?.diagnostic.source).toEqual(source);
+    const html = renderOperationProgress(snapshot(activity));
+    expect(html).toContain(
+      `data-open-migration-failure="${progress().operationId}"`,
+    );
+    expect(html).toContain(source.filename);
+    expect(html).toContain("Exact SQL line and column are unavailable");
+    expect(html).not.toContain(source.workspaceRelativePath);
+    const baseline = parseActivityData({
+      ...data,
+      recentFailures: [
+        {
+          ...data.recentFailures[0],
+          diagnostic: {
+            ...migrationDiagnostic(),
+            source: {
+              ...source,
+              kind: "baseline",
+              workspaceRelativePath: null,
+            },
+          },
+        },
+      ],
+    });
+    expect(renderOperationProgress(snapshot(baseline))).not.toContain(
+      "data-open-migration-failure",
+    );
+    for (const invalid of [
+      { ...source, line: 7 },
+      { ...source, workspaceRelativePath: "../" + source.filename },
+      { ...source, sql: "SECRET" },
+    ])
+      expect(() =>
+        parseMigrationFailureDiagnostic({
+          ...migrationDiagnostic(),
+          source: invalid,
+        }),
+      ).toThrow();
+  });
+  it("joins fixed migration diagnosis only to its failed receipt and renders it after refresh", () => {
+    const activity = parseActivityData({
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent: [
+        { kind: "run", rehearsalVersion: "1.0.2", progress: ended("failed") },
+      ],
+      recentFailures: [
+        {
+          operationId: progress().operationId,
+          diagnostic: migrationDiagnostic(),
+        },
+      ],
+    });
+    expect(activity.recentFailures?.[0]?.diagnostic.classification).toBe(
+      "constraint",
+    );
+    const html = renderOperationProgress(snapshot(activity));
+    expect(html).toContain("Rows do not satisfy a CHECK constraint.");
+    expect(html).toContain("SQLSTATE 23514");
+    expect(html).toContain("Existing rows may not satisfy the new constraint");
+    expect(html).toContain("does not prove rollback or cleanup");
+    expect(html).not.toContain("confirmed syntax error");
+  });
+
+  it("rejects free text, extra fields, mismatched classification and unbound or oversized failures", () => {
+    const entry = {
+      operationId: progress().operationId,
+      diagnostic: migrationDiagnostic(),
+    };
+    const activity = {
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent: [
+        { kind: "run", rehearsalVersion: "1.0.2", progress: ended("failed") },
+      ],
+    };
+    for (const diagnostic of [
+      { ...migrationDiagnostic(), summary: "<script>SECRET</script>" },
+      { ...migrationDiagnostic(), suggestions: ["SECRET"] },
+      { ...migrationDiagnostic(), sql: "SECRET" },
+      { ...migrationDiagnostic(), classification: "syntax" },
+      { ...migrationDiagnostic(), sqlState: "42601" },
+      { ...migrationDiagnostic(), evidence: "unavailable" },
+      { ...migrationDiagnostic(), provider: ["postgresql"] },
+      { ...migrationDiagnostic(), provider: { toString: () => "postgresql" } },
+    ])
+      expect(() => parseMigrationFailureDiagnostic(diagnostic)).toThrow();
+    for (const recentFailures of [
+      [entry, entry],
+      [{ ...entry, operationId: "b".repeat(64) }],
+      [{ ...entry, secret: "SECRET" }],
+      Array.from({ length: 21 }, () => entry),
+    ])
+      expect(() =>
+        parseActivityData({ ...activity, recentFailures }),
+      ).toThrow();
+    for (const recent of [
+      undefined,
+      null,
+      [],
+      [{ ...activity.recent[0], progress: ended("completed") }],
+    ])
+      expect(() =>
+        parseActivityData({ ...activity, recent, recentFailures: [entry] }),
+      ).toThrow();
+  });
+
+  it("keeps absent and unavailable failure evidence distinct without changing legacy receipts", () => {
+    const legacy = {
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent: [
+        { kind: "run", rehearsalVersion: "1.0.0", progress: ended("failed") },
+      ],
+    };
+    expect(parseActivityData(legacy)).not.toHaveProperty("recentFailures");
+    expect(
+      parseActivityData({ ...legacy, recentFailures: null }).recentFailures,
+    ).toBeNull();
+    expect(
+      parseActivityData({ ...legacy, recentFailures: [] }).recentFailures,
+    ).toEqual([]);
+    expect(parseRecentOperationProgress(legacy.recent)?.[0]).not.toHaveProperty(
+      "migrationFailure",
+    );
+  });
+
+  it("keeps unknown and ambiguous provider evidence explicitly unclassified", () => {
+    for (const evidence of ["unavailable", "ambiguous"]) {
+      const diagnostic = parseMigrationFailureDiagnostic({
+        schemaVersion: 1,
+        provider: "supabase",
+        classification: "unknown",
+        sqlState: null,
+        evidence,
+        summary:
+          "The failure could not be classified from recognized provider SQLSTATE evidence. It is not a confirmed syntax error.",
+        suggestions: [
+          "Review the exact candidate locally and its database requirements. Do not assume syntax, data or permissions are the cause.",
+          migrationDiagnostic().suggestions[1],
+        ],
+      });
+      expect(diagnostic.classification).toBe("unknown");
+      expect(diagnostic.sqlState).toBeNull();
+      expect(() =>
+        parseMigrationFailureDiagnostic({
+          ...diagnostic,
+          evidence: [evidence],
+        }),
+      ).toThrow();
+    }
+  });
   it("distinguishes a proved interactive session from startup, missing evidence and cleanup", () => {
     const activity = {
       schemaVersion: 1,

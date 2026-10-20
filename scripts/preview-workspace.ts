@@ -21,6 +21,7 @@ import {
 } from "../src/resource_contract.js";
 import {
   parseOperationProgressSnapshot,
+  parseRecentOperationFailures,
   renderOperationProgress,
   openSandboxSessionState,
 } from "../src/operation_progress.js";
@@ -1085,7 +1086,174 @@ const manyResourcesSnapshot: ProjectSnapshot = {
   },
 };
 
+// Synthetic public-contract examples only: no SQL, provider logs or database calls.
+const migrationFailureSnapshot = (
+  sqlState: "23514" | null,
+): ProjectSnapshot => {
+  const operationId = (sqlState === null ? "b" : "a").repeat(64);
+  const startedAt = "2026-10-13T18:30:00.000Z";
+  const updatedAt = "2026-10-13T18:30:10.000Z";
+  const recent = [
+    {
+      kind: "run",
+      rehearsalVersion: readySnapshot.version ?? null,
+      progress: parseOperationProgressSnapshot({
+        schemaVersion: 1,
+        operationId,
+        state: "failed",
+        startedAt,
+        updatedAt,
+        elapsedMilliseconds: 10_000,
+        currentStage: {
+          id: 1,
+          phase: "runtime-lifecycle",
+          target: "primary",
+          state: "failed",
+          startedAt,
+          endedAt: updatedAt,
+          durationMilliseconds: 10_000,
+        },
+        completedStages: [],
+        events: [
+          {
+            sequence: 1,
+            code: "operation.started",
+            phase: null,
+            target: null,
+            at: startedAt,
+          },
+          {
+            sequence: 2,
+            code: "stage.started",
+            phase: "runtime-lifecycle",
+            target: "primary",
+            at: startedAt,
+          },
+          {
+            sequence: 3,
+            code: "stage.failed",
+            phase: "runtime-lifecycle",
+            target: "primary",
+            at: updatedAt,
+          },
+          {
+            sequence: 4,
+            code: "operation.failed",
+            phase: null,
+            target: null,
+            at: updatedAt,
+          },
+        ],
+        truncated: { stages: false, events: false },
+      }),
+    },
+  ];
+  return {
+    ...readySnapshot,
+    workspaceName: "Rehearsal Test Lab · synthetic migration failure",
+    activity: {
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent,
+      recentFailures: parseRecentOperationFailures(
+        [
+          {
+            operationId,
+            diagnostic: {
+              schemaVersion: 1,
+              provider: "postgresql",
+              classification: sqlState === null ? "unknown" : "constraint",
+              sqlState,
+              evidence: sqlState === null ? "unavailable" : "provider_sqlstate",
+              summary:
+                sqlState === null
+                  ? "The failure could not be classified from recognized provider SQLSTATE evidence. It is not a confirmed syntax error."
+                  : "Rows do not satisfy a CHECK constraint.",
+              suggestions: [
+                sqlState === null
+                  ? "Review the exact candidate locally and its database requirements. Do not assume syntax, data or permissions are the cause."
+                  : "Existing rows may not satisfy the new constraint. Review and backfill incompatible rows before enforcing it; also check values written by the migration.",
+                "No automatic SQL change or retry was performed. The failure itself does not prove rollback or cleanup; inspect runtime status before retrying.",
+              ],
+              ...(sqlState === null
+                ? {}
+                : {
+                    source: {
+                      schemaVersion: 1,
+                      kind: "candidate",
+                      filename: "20261002000000_migration_failure_review.sql",
+                      sha256: "f".repeat(64),
+                      workspaceRelativePath:
+                        "benchmark/migrations/20261002000000_migration_failure_review.sql",
+                      line: null,
+                      column: null,
+                      evidence: "owned_execution_input",
+                    },
+                  }),
+            },
+          },
+        ],
+        recent,
+      ),
+    },
+  };
+};
+
+const {
+  applicationUrl: _databaseOnlyUrl,
+  migrationReview: _databaseOnlyPlan,
+  ...databaseOnlyBase
+} = readySnapshot;
+const databaseOnlyPreview: ProjectSnapshot = {
+  ...databaseOnlyBase,
+  workspaceName: "Database-only tutorial · synthetic preview",
+  configuration: {
+    application: {
+      startCommand: "npm run dev",
+      proofCommand: "npm run proof",
+      readinessUrl: null,
+    },
+  },
+  candidates: {
+    count: 0,
+    digest: "a".repeat(64),
+    files: [],
+    targets: [
+      { name: "primary", configPath: "rehearsal.config.mjs", count: 0 },
+    ],
+  },
+};
+
 const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
+  "/database-only": databaseOnlyPreview,
+  "/database-only-no-proof-record": {
+    ...databaseOnlyPreview,
+    activity: {
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+      recent: [],
+      recentFailures: [],
+    },
+  },
+  "/package-linked-external": {
+    workspaceName: "Tutorial package-link recovery · synthetic preview",
+    workspaceRoot: "/preview-only",
+    availability: "error",
+    error: {
+      code: "package_link_external",
+      message:
+        "The workspace Rehearsal package resolves outside its repository. Install a project-local package copy before refreshing.",
+      suggestions: [
+        "Install the published @rehearsal-db/core package in this project, or install a reviewed packed .tgz candidate.",
+        "For a local source folder with npm, use --install-links to install a package copy instead of an external symlink.",
+        "Keep the repository boundary intact, then select Refresh. No database action is needed.",
+      ],
+    },
+  },
+  "/migration-failure": migrationFailureSnapshot("23514"),
+  "/migration-unknown": migrationFailureSnapshot(null),
   "/resources-many": manyResourcesSnapshot,
   "/sandbox": sandboxSnapshot(true),
   "/sandbox-starting": sandboxSnapshot(false),
@@ -1645,7 +1813,9 @@ const server = createServer(async (request, response) => {
     ? (requestedPage as WorkspacePage)
     : url.pathname === "/resources-many"
       ? "runtime"
-      : "overview";
+      : ["/migration-failure", "/migration-unknown"].includes(url.pathname)
+        ? "activity"
+        : "overview";
   const actionUris = Object.fromEntries(
     WORKSPACE_ACTION_IDS.map((action) => [action, `#preview-${action}`]),
   ) as Record<WorkspaceActionId, string>;
@@ -1768,7 +1938,7 @@ const server = createServer(async (request, response) => {
 server.listen(requestedPort, host, () => {
   console.log(`Rehearsal workspace preview: http://${host}:${requestedPort}`);
   console.log(
-    "States: /, /auth, /progress, /progress-unavailable, /sandbox, /sandbox-starting, /resources-many, /loading, /outdated, /missing, /not-ready, /timeout",
+    "States: /, /database-only, /database-only-no-proof-record, /package-linked-external, /auth, /progress, /progress-unavailable, /sandbox, /sandbox-starting, /resources-many, /migration-failure, /migration-unknown, /loading, /outdated, /missing, /not-ready, /timeout",
   );
   console.log(
     "Themes: add ?theme=light, ?theme=dark-modern, ?theme=contrast or ?theme=contrast-light",

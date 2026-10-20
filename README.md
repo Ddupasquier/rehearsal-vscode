@@ -35,7 +35,7 @@ For Windows desktop use, open the project with **Remote - WSL** in a WSL 2 Linux
 distribution and install Rehearsal into that Linux extension host. Keep project files,
 Linux Node and the local Docker engine on the Linux side, not under `/mnt/c`. Follow
 the [Windows setup guide](https://ddupasquier.github.io/rehearsal-db/getting-started/#windows-use-a-wsl-2-linux-workspace).
-In 0.1.21, native Windows inspection and foreground actions refuse before any CLI child
+Since 0.1.21, native Windows inspection and foreground actions refuse before any CLI child
 process is launched; its guidance is not a claim that native Windows database runtime works.
 WSL remains a compatibility preview: Linux/WSL core fixture proof does not certify a
 native Remote-WSL editor walkthrough or Supabase/Auth/Storage in that environment.
@@ -50,17 +50,19 @@ default; installation requires an explicit option and never starts a database.
    npm install --save-dev @rehearsal-db/core
    ```
 
-   This release targets core **1.0.1**; `0.1.0-rc.4` remains the minimum core contract.
+   This release targets core **1.0.2**; `0.1.0-rc.4` remains the minimum core contract.
+   The new persistent migration diagnoses require core 1.0.2; an older compatible
+   package cannot supply that evidence.
    Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
    for safe setup and baseline inputs.
 
 2. Open the [GitHub prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases).
-   Choose the **0.1.21** release and download
-   `rehearsal-db-0.1.21.vsix` and `SHA256SUMS`. If that version is absent, publication
+   Choose the **0.1.22** release and download
+   `rehearsal-db-0.1.22.vsix` and `SHA256SUMS`. If that version is absent, publication
    has not completed; a source version is not a downloadable release.
    Compare its SHA-256 with the
-   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.21.vsix`
-   on macOS or `sha256sum /path/to/rehearsal-db-0.1.21.vsix` on Linux. Stop if they differ.
+   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.22.vsix`
+   on macOS or `sha256sum /path/to/rehearsal-db-0.1.22.vsix` on Linux. Stop if they differ.
 3. Open **Extensions → … → Install from VSIX…** and choose that verified file.
    Reload the extension host if VS Code asks.
 4. Review Workspace Trust. Open the Command Palette and choose
@@ -71,7 +73,7 @@ default; installation requires an explicit option and never starts a database.
 If VS Code's `code` command is available, step 3 can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.21.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.22.vsix --force
 ```
 
 ### Move from a preview through 0.1.18
@@ -151,6 +153,38 @@ select the badge to check or review updates. Offline or unchecked availability i
 unknown—not “up to date.” Release results update in place without refreshing the view.
 
 ## What the workbench shows
+
+Overview distinguishes a command that is currently running from the database's
+running/stopped state and the last recorded rehearsal result. A completed run can leave
+the database running without another command being active. Recorded CLI proof requires
+the completed primary proof stage; it is historical evidence, not a new check of the
+current configuration or migrations. Database-only projects offer **Verify database**
+and migration review without asking you to configure a browser application. Optional
+application launch remains available when the project actually configures it.
+
+With core 1.0.2, **Activity & reports** retains bounded migration failure explanations
+and safe next steps after refresh. Recognized provider evidence can distinguish a syntax
+error from, for example, existing rows violating a new constraint. Unsupported or
+ambiguous evidence stays unknown. SQL, row values, connection strings and raw provider
+details are not included in these diagnostics. When core proves the exact attempted
+project-local migration input, **Open exact migration input** opens only the unchanged,
+reviewed file in VS Code. Changed or dirty files require a fresh review; an attempted
+input is not a proven SQL origin and no line or column is guessed. Rehearsal never
+rewrites or retries the migration automatically. Follow the main
+[failure-and-fix tutorial](https://ddupasquier.github.io/rehearsal-db/tutorial/) to review
+a fresh candidate, observe a safe failure, correct it and verify the result.
+
+If the tutorial CLI works but the dashboard says **Project package link needs repair**,
+npm linked its package outside this repository. Keep the same project and baseline.
+Install a project-local copy:
+
+```bash
+npm install --ignore-scripts --no-save --install-links /absolute/path/to/rehearsal-db
+```
+
+Alternatively, install a reviewed tarball/published package, then choose **Refresh**.
+A local copy does not track later source edits. Do not reset data,
+clear editor state or relax the repository boundary to repair a package link.
 
 The Environments page consumes Rehearsal core's versioned resource inventory. It shows
 only the current project's ownership-proven containers, running/stopped state, nullable
@@ -364,7 +398,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.21.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.22.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and
@@ -376,7 +410,7 @@ or automatic license activation.
 
 - Desktop VS Code 1.101 or newer on macOS and Linux; Windows desktop uses the WSL 2
   Linux extension-host compatibility preview described above. Native Windows inspection
-  and foreground dispatch are deliberately refused in 0.1.21 rather than claiming unsafe process cleanup works.
+  and foreground dispatch have been deliberately refused since 0.1.21 rather than claiming unsafe process cleanup works.
 - SSH, Dev Containers, Codespaces, browser-only VS Code, mobile systems and other
   unlisted environments have no end-to-end support claim. A Node/controller CI pass is
   not a native editor, database, provider, accessibility or every-architecture acceptance.

@@ -1,6 +1,10 @@
 /** Public bounded operation telemetry. No human output, raw errors or process authority. */
 import { ContractError } from "./contracts.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
+import {
+  parseMigrationFailureDiagnostic,
+  type MigrationFailureDiagnostic,
+} from "./migration_failure.js";
 
 export const OPERATION_PROGRESS_PHASES = [
   "runtime-lifecycle",
@@ -58,6 +62,10 @@ export interface RecentOperationProgress {
   readonly kind: string;
   readonly rehearsalVersion: string | null;
   readonly progress: OperationProgressSnapshot;
+}
+export interface RecentOperationFailure {
+  readonly operationId: string;
+  readonly diagnostic: MigrationFailureDiagnostic;
 }
 export const OPERATION_KINDS = [
   "stop-stale",
@@ -339,6 +347,40 @@ export const parseRecentOperationProgress = (
   return result;
 };
 
+export const parseRecentOperationFailures = (
+  value: unknown,
+  recent: readonly RecentOperationProgress[] | null | undefined,
+): readonly RecentOperationFailure[] | null => {
+  if (value === null) return null;
+  const failures = boundedList(value, 20).map((value) => {
+    const data = record(value, ["operationId", "diagnostic"]);
+    if (
+      typeof data.operationId !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(data.operationId) ||
+      !recent?.some(
+        (entry) =>
+          entry.progress.operationId === data.operationId &&
+          entry.progress.state === "failed",
+      )
+    )
+      throw new ContractError(
+        "Migration failure diagnosis has no matching failed operation receipt.",
+      );
+    return {
+      operationId: data.operationId,
+      diagnostic: parseMigrationFailureDiagnostic(data.diagnostic),
+    };
+  });
+  if (
+    new Set(failures.map(({ operationId }) => operationId)).size !==
+    failures.length
+  )
+    throw new ContractError(
+      "Migration failure operation identities are duplicated.",
+    );
+  return failures;
+};
+
 const html = (value: string): string =>
   value
     .replaceAll("&", "&amp;")
@@ -409,6 +451,14 @@ const progressMarkup = (
   <details class="technical-details"><summary>${progress.completedStages.length} recorded successful stages${progress.truncated.stages ? " · earlier stages omitted" : ""}</summary><ol>${progress.completedStages.map((item) => `<li>${html(phaseLabels[item.phase])} · ${html(item.target ?? "Project-wide")} · ${duration(item.durationMilliseconds)}</li>`).join("") || "<li>No successful stage completion was recorded.</li>"}</ol></details>
   <details class="technical-details"><summary>Safe structured events${progress.truncated.events ? " · earlier events omitted" : ""}</summary><ol>${progress.events.map((item) => `<li><time datetime="${item.at}">${item.at}</time> · ${eventLabels[item.code]}${item.phase ? `: ${html(phaseLabels[item.phase])}` : ""}${item.target ? ` · ${html(item.target)}` : ""}</li>`).join("") || "<li>No event evidence is available.</li>"}</ol><p>Only fixed event codes and public phase/target metadata are included. Raw commands, errors, logs, paths and environment values are never rendered.</p></details>`;
 
+const failureMarkup = (
+  diagnostic: MigrationFailureDiagnostic | undefined,
+  operationId: string,
+): string =>
+  diagnostic === undefined
+    ? ""
+    : `<section class="source-banner source-banner--warning" aria-label="Migration failure explanation"><div><strong>${html(diagnostic.summary)}</strong><p>${html(diagnostic.provider)} · ${html(diagnostic.classification.replaceAll("_", " "))} · SQLSTATE ${html(diagnostic.sqlState ?? diagnostic.evidence)}</p>${diagnostic.source ? `<p>Attempted ${html(diagnostic.source.kind)} input: <code>${html(diagnostic.source.filename)}</code>. Exact SQL line and column are unavailable; the input does not establish where the failing SQL originated.</p>${diagnostic.source.workspaceRelativePath ? `<button type="button" class="button button--secondary" data-open-migration-failure="${operationId}">Open exact migration input</button>` : '<p class="control-note">The recorded input is not available as a project-local file link.</p>'}` : '<p class="control-note">Migration-file attribution and SQL position are unavailable.</p>'}<ul class="recovery-list">${diagnostic.suggestions.map((suggestion) => `<li>${html(suggestion)}</li>`).join("")}</ul></div></section>`;
+
 export const renderOperationProgress = (snapshot: ProjectSnapshot): string => {
   const activity = snapshot.activity;
   if (!activity)
@@ -443,7 +493,7 @@ export const renderOperationProgress = (snapshot: ProjectSnapshot): string => {
               .reverse()
               .map(
                 (item) =>
-                  `<article class="control-card"><div class="surface-heading"><strong>${html(item.kind)}</strong><span class="state-chip">${item.progress.state === "completed" ? "Completed" : item.progress.state === "failed" ? "Failed" : "Cancelled"}</span></div><p>Core ${html(item.rehearsalVersion ?? "version unavailable")} · ${duration(item.progress.elapsedMilliseconds)} elapsed</p>${progressMarkup(item.progress, false)}<details class="technical-details"><summary>Exact operation identity</summary><code>${item.progress.operationId}</code></details></article>`,
+                  `<article class="control-card"><div class="surface-heading"><strong>${html(item.kind)}</strong><span class="state-chip">${item.progress.state === "completed" ? "Completed" : item.progress.state === "failed" ? "Failed" : "Cancelled"}</span></div><p>Core ${html(item.rehearsalVersion ?? "version unavailable")} · ${duration(item.progress.elapsedMilliseconds)} elapsed</p>${failureMarkup(activity.recentFailures?.find(({ operationId }) => operationId === item.progress.operationId)?.diagnostic, item.progress.operationId)}${progressMarkup(item.progress, false)}<details class="technical-details"><summary>Exact operation identity</summary><code>${item.progress.operationId}</code></details></article>`,
               )
               .join("")}</div>`;
   return `${current}<article class="surface"><div class="surface-heading"><span><small>Core-owned evidence</small><h2>Recent operation receipts</h2></span>${recent ? `<span class="state-chip">${recent.length} receipts</span>` : ""}</div>${history}<p class="control-note">A recorded stage or successful command is not a complete acceptance report. Real provider consent, browser behavior, account blocking, MFA and other manual checks need separate observed proof. This view does not grant process ownership or permission to cancel another session.</p></article>`;

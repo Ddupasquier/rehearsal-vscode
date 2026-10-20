@@ -7,6 +7,23 @@ import {
 } from "../src/workspace_preferences.js";
 
 describe("workspace preferences", () => {
+  it("opens migration evidence using only a closed opaque operation ID, never a supplied path or position", () => {
+    const operationId = "a".repeat(64);
+    expect(
+      parseWorkspaceMessage({ type: "openMigrationFailure", operationId }),
+    ).toEqual({ type: "openMigrationFailure", operationId });
+    for (const invalid of [
+      {
+        type: "openMigrationFailure",
+        operationId,
+        path: "/private/secret.sql",
+      },
+      { type: "openMigrationFailure", operationId, line: 1 },
+      { type: "openMigrationFailure", operationId: "not-an-operation" },
+      { type: "openMigrationFailure", operationId: [operationId] },
+    ])
+      expect(parseWorkspaceMessage(invalid)).toBeNull();
+  });
   it("keeps bounded harmless project preferences", () => {
     expect(
       normalizeWorkspacePreferences({

@@ -1,6 +1,65 @@
 /** Harmless display/review state. It never changes runtime selection or approval digests. */
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import type { NamedWorkspaceProfile } from "./configuration_contract.js";
+import type { RecentOperationProgress } from "./operation_progress.js";
+
+/** Current activity, historical command results and database liveness are separate evidence. */
+export const workspaceExecutionState = (snapshot: ProjectSnapshot) => {
+  const application = snapshot.configuration?.application;
+  const applicationMode = !application
+    ? "unknown"
+    : application.readinessUrl === null
+      ? "database_only"
+      : application.readinessUrl && application.startCommand.trim()
+        ? "launch_configured"
+        : "incomplete";
+  const proofConfigured = application
+    ? Boolean(application.proofCommand.trim())
+    : null;
+  const command =
+    snapshot.activity?.state === "busy"
+      ? "active"
+      : snapshot.activity?.state === "idle"
+        ? "idle"
+        : snapshot.activity?.state === "stale" ||
+            snapshot.activity?.state === "invalid"
+          ? "attention"
+          : "unknown";
+  // Do not let cached receipts turn unsafe/unobserved activity into current success.
+  const runs =
+    command === "idle" && snapshot.availability === "ready"
+      ? (snapshot.activity?.recent ?? [])
+          .filter((receipt) => receipt.kind === "run")
+          .sort(
+            (left, right) =>
+              Date.parse(right.progress.startedAt) -
+              Date.parse(left.progress.startedAt),
+          )
+      : [];
+  // The public array is not ordered. Equal timestamps cannot prove a latest run.
+  const lastRun: RecentOperationProgress | null =
+    runs[0] &&
+    (!runs[1] || runs[0].progress.startedAt !== runs[1].progress.startedAt)
+      ? runs[0]
+      : null;
+  const primaryProof = lastRun?.progress.completedStages.some(
+    (stage) =>
+      stage.phase === "application-proof" &&
+      stage.target === "primary" &&
+      stage.state === "completed",
+  );
+  const failedProof =
+    lastRun?.progress.currentStage?.phase === "application-proof" &&
+    lastRun.progress.currentStage.target === "primary" &&
+    lastRun.progress.currentStage.state === "failed";
+  const proof =
+    lastRun?.progress.state === "completed" && primaryProof
+      ? "recorded_pass"
+      : failedProof
+        ? "recorded_failure"
+        : "not_recorded";
+  return { command, applicationMode, proofConfigured, lastRun, proof } as const;
+};
 
 /** Review ticks are display preferences, not approval or execution authority. */
 export const MIGRATION_REVIEW_PERSISTENCE_LIMIT = 1000;

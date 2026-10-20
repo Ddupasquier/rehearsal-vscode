@@ -1068,6 +1068,216 @@ describe("project overview", () => {
     });
   });
 
+  it("retains validated database-only proof configuration when optional cleanup metadata is absent", async () => {
+    const base = client();
+    const snapshot = await inspectProject({
+      workspaceName: "Database-only",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        async command<Data>(options: Parameters<SnapshotClient["command"]>[0]) {
+          const observed = await base.command<Data>(options);
+          if (options.expectedCommand !== "explain") return observed;
+          const explanation = observed.result.data as ExplainData;
+          const { cleanup: _cleanup, ...withoutCleanup } = explanation;
+          return {
+            ...observed,
+            result: {
+              ...observed.result,
+              data: {
+                ...withoutCleanup,
+                application: { ...explanation.application!, readiness: null },
+              } as Data,
+            },
+          };
+        },
+      },
+    });
+    expect(snapshot.configuration?.application).toEqual({
+      startCommand: "npm run dev",
+      proofCommand: "npm test",
+      readinessUrl: null,
+    });
+    expect(snapshot.configuration?.cleanup).toBeUndefined();
+  });
+
+  it("offers fixed external-link recovery only for the dedicated adapter reason", async () => {
+    for (const code of ["package_link_external", "package_invalid"] as const) {
+      const snapshot = await inspectProject({
+        workspaceName: "Linked checkout",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: {
+          ...client(),
+          async version() {
+            throw new AdapterError(code, "private-adapter-canary");
+          },
+        },
+      });
+      expect(snapshot.availability).toBe("error");
+      expect(snapshot.error?.code).toBe(code);
+      if (code === "package_link_external") {
+        expect(snapshot.error?.message).not.toContain("private-adapter-canary");
+        expect(snapshot.error?.suggestions.join(" ")).toContain(
+          "--install-links",
+        );
+      } else {
+        expect(snapshot.error?.suggestions.join(" ")).not.toContain(
+          "--install-links",
+        );
+      }
+    }
+  });
+
+  it("keeps omitted legacy readiness unknown rather than inventing database-only configuration", async () => {
+    const base = client();
+    const snapshot = await inspectProject({
+      workspaceName: "Legacy application metadata",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        async command<Data>(options: Parameters<SnapshotClient["command"]>[0]) {
+          const observed = await base.command<Data>(options);
+          if (options.expectedCommand !== "explain") return observed;
+          return {
+            ...observed,
+            result: {
+              ...observed.result,
+              data: {
+                ...observed.result.data,
+                application: {
+                  startCommand: "npm run dev",
+                  proofCommand: "npm test",
+                },
+              } as Data,
+            },
+          };
+        },
+      },
+    });
+    expect(snapshot.availability).toBe("ready");
+    expect(snapshot.configuration).toBeUndefined();
+  });
+
+  it.each([
+    {},
+    { startCommand: "npm run dev", proofCommand: "npm test", readiness: {} },
+    {
+      startCommand: "npm run dev",
+      proofCommand: "npm test",
+      readiness: undefined,
+    },
+    { startCommand: "npm run dev", proofCommand: "npm test", readiness: false },
+    {
+      startCommand: "npm run dev",
+      proofCommand: "npm test",
+      readiness: {
+        url: "https://outside.example/health",
+        expectedStatus: 200,
+        timeoutSeconds: 30,
+      },
+    },
+    {
+      startCommand: "npm run dev",
+      proofCommand: "npm test",
+      readiness: {
+        url: "http://user:private@127.0.0.1:5511/health",
+        expectedStatus: 200,
+        timeoutSeconds: 30,
+      },
+    },
+    {
+      startCommand: "npm run dev",
+      proofCommand: "npm test",
+      readiness: { url: "http://127.0.0.1:5511/health" },
+    },
+    { startCommand: "npm run dev", proofCommand: {}, readiness: null },
+    { startCommand: null, proofCommand: "npm test", readiness: null },
+    { startCommand: "npm run dev", proofCommand: " ", readiness: null },
+    {
+      startCommand: "private-invalid-command\nnext",
+      proofCommand: "npm test",
+      readiness: null,
+    },
+    {
+      startCommand: "npm run dev",
+      proofCommand: "x".repeat(4097),
+      readiness: null,
+    },
+  ])(
+    "refuses malformed application metadata without raw-value leakage",
+    async (application) => {
+      const base = client();
+      const snapshot = await inspectProject({
+        workspaceName: "Malformed application metadata",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: {
+          ...base,
+          async command<Data>(
+            options: Parameters<SnapshotClient["command"]>[0],
+          ) {
+            const observed = await base.command<Data>(options);
+            if (options.expectedCommand !== "explain") return observed;
+            return {
+              ...observed,
+              result: {
+                ...observed.result,
+                data: { ...observed.result.data, application } as Data,
+              },
+            };
+          },
+        },
+      });
+      expect(snapshot.availability).toBe("error");
+      expect(snapshot.error?.code).toBe("invalid_cli_contract");
+      expect(snapshot.configuration).toBeUndefined();
+      expect(snapshot.error?.message).not.toContain("private-invalid-command");
+      expect(snapshot.error?.message).not.toContain("user:private");
+    },
+  );
+
+  it("accepts bounded proof commands and core loopback readiness independently of editor-input port restrictions", async () => {
+    const base = client();
+    const snapshot = await inspectProject({
+      workspaceName: "Core loopback metadata",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        async command<Data>(options: Parameters<SnapshotClient["command"]>[0]) {
+          const observed = await base.command<Data>(options);
+          if (options.expectedCommand !== "explain") return observed;
+          return {
+            ...observed,
+            result: {
+              ...observed.result,
+              data: {
+                ...observed.result.data,
+                application: {
+                  startCommand: "x".repeat(4096),
+                  proofCommand: "npm test",
+                  readiness: {
+                    url: "http://[::1]/health",
+                    expectedStatus: 204,
+                    timeoutSeconds: 30,
+                  },
+                },
+              } as Data,
+            },
+          };
+        },
+      },
+    });
+    expect(snapshot.availability).toBe("ready");
+    expect(snapshot.configuration?.application.startCommand.length).toBe(4096);
+    expect(snapshot.configuration?.application.readinessUrl).toBe(
+      "http://[::1]/health",
+    );
+  });
+
   it("loads resource inventory only through the declared core contract", async () => {
     const base = client();
     const inventory: ResourceInventoryData = {
