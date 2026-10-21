@@ -610,20 +610,26 @@ describe("named profiles through the workspace host", () => {
 
   it.each([
     [
-      {
-        name: "Remote",
-        targets: ["primary"],
-        applicationUrl: "https://production.invalid",
-      },
+      [
+        {
+          name: "Remote",
+          targets: ["primary"],
+          applicationUrl: "https://production.invalid",
+        },
+      ],
+      "editor",
     ],
-    [{ name: "Unknown target", targets: ["not-configured"] }],
+    [[{ name: "Unknown target", targets: ["not-configured"] }], "core"],
     [
-      { name: "Duplicate", targets: ["primary"] },
-      { name: "Duplicate", targets: ["publication"] },
+      [
+        { name: "Duplicate", targets: ["primary"] },
+        { name: "Duplicate", targets: ["publication"] },
+      ],
+      "editor",
     ],
-  ])(
-    "does not apply custom values after the public core review refuses them (%j)",
-    async (...profiles) => {
+  ] as const)(
+    "refuses invalid custom profiles without saving (%j, %s boundary)",
+    async (profiles, boundary) => {
       const test = fixture();
       const scope = test.scopes[0]!;
       scope.refuse = true;
@@ -632,7 +638,9 @@ describe("named profiles through the workspace host", () => {
       submit(host.panels[0]!, profiles);
       await vi.waitFor(() =>
         expect(host.vscode.window.showErrorMessage).toHaveBeenCalledWith(
-          "Rehearsal could not complete this configuration review. Refresh the project, check trust and local file permissions, then review the current configuration and try again.",
+          boundary === "editor"
+            ? "profiles: Use valid named profiles with configured targets and optional loopback URLs. Correct this field and review again. This proposal was not saved."
+            : "Rehearsal could not complete this configuration review. Refresh the project, check trust and local file permissions, then review the current configuration and try again.",
         ),
       );
       expect(
@@ -642,8 +650,13 @@ describe("named profiles through the workspace host", () => {
       expect(scope.document.save).not.toHaveBeenCalled();
       expect(host.vscode.workspace.applyEdit).not.toHaveBeenCalled();
       expect(test.projects.refreshWorkspace).not.toHaveBeenCalled();
-      expect(host.filesystem.unlink).toHaveBeenCalledOnce();
-      expect(host.filesystem.rmdir).toHaveBeenCalledOnce();
+      expect(host.review).toHaveBeenCalledTimes(boundary === "core" ? 1 : 0);
+      expect(host.filesystem.unlink).toHaveBeenCalledTimes(
+        boundary === "core" ? 1 : 0,
+      );
+      expect(host.filesystem.rmdir).toHaveBeenCalledTimes(
+        boundary === "core" ? 1 : 0,
+      );
     },
   );
 

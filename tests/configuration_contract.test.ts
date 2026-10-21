@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseConfigurationMetadata } from "../src/configuration_contract.js";
+import {
+  parseConfigurationMetadata,
+  ConfigurationInputError,
+  configurationIntegerConstraints,
+  validateConfigurationFieldValue,
+} from "../src/configuration_contract.js";
 import {
   coreConfigurationControls,
   namedProfileControls,
@@ -53,6 +58,54 @@ const idleMetadata = (activity: unknown = null, timeout: unknown = null) => ({
   ],
 });
 describe("configuration metadata contract", () => {
+  it("shares exact numeric bounds between metadata validation and accessible form help", () => {
+    const field = {
+      ...metadata().fields[0],
+      path: "resources.retainedEnvironmentCount",
+      kind: "integer",
+      value: 2,
+    };
+    expect(configurationIntegerConstraints(field.path)).toEqual({
+      minimum: 1,
+      maximum: 1000,
+    });
+    for (const value of [1, 1000])
+      expect(
+        validateConfigurationFieldValue(field.path, field.kind, value),
+      ).toBe(value);
+    for (const value of [
+      0,
+      1001,
+      1.5,
+      NaN,
+      Infinity,
+      Number.MAX_SAFE_INTEGER + 1,
+    ])
+      expect(() =>
+        validateConfigurationFieldValue(field.path, field.kind, value),
+      ).toThrow();
+    const html = coreConfigurationControls({
+      workspaceName: "Fixture",
+      workspaceRoot: "/not-read",
+      availability: "not_ready",
+      configurationMetadata: parseConfigurationMetadata({
+        ...metadata(),
+        fields: [field],
+      }),
+    });
+    expect(html).toContain('name="resources.retainedEnvironmentCount"');
+    expect(html).toContain('min="1" max="1000" step="1"');
+    expect(html).toContain("Enter a whole number from 1 to 1000.");
+    expect(html).toContain(
+      'aria-describedby="core-resources-retainedEnvironmentCount-help"',
+    );
+  });
+  it("never echoes an unknown field into locally controlled input guidance", () => {
+    expect(configurationIntegerConstraints("__proto__")).toBeUndefined();
+    expect(
+      new ConfigurationInputError("PRIVATE_CANARY", "integer").message,
+    ).not.toContain("PRIVATE_CANARY");
+  });
   it.each([
     null,
     "http://localhost:1024/activity",

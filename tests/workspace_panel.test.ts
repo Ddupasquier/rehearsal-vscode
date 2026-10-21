@@ -15,6 +15,7 @@ interface CapturedReview {
   readonly canApply: () => void;
   readonly onApply: () => Promise<void | boolean>;
   readonly onReturn?: () => void;
+  readonly failureMessage?: (error: unknown) => string | undefined;
 }
 
 const editor = vi.hoisted(() => {
@@ -211,7 +212,8 @@ const editor = vi.hoisted(() => {
 });
 
 vi.mock("vscode", () => editor.module);
-vi.mock("../src/process_adapter.js", () => ({
+vi.mock("../src/process_adapter.js", async (original) => ({
+  ...(await original<typeof import("../src/process_adapter.js")>()),
   runRehearsalJson: editor.read,
   resolveWorkspaceRehearsal: editor.resolvePackage,
 }));
@@ -242,6 +244,7 @@ import { parseActivityData } from "../src/contracts.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 import { configurationFingerprint } from "../src/configuration_editor.js";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
+import { RehearsalCliError } from "../src/process_adapter.js";
 
 class Events<Value> {
   readonly listeners = new Set<(value: Value) => void>();
@@ -867,7 +870,7 @@ const reviewHarness = (
       {
         path: "runtime.applicationUrl",
         kind: "local-url",
-        value: "http://localhost:5175",
+        value: "http://localhost:5175" as unknown,
         provenance: "validated-active-configuration",
         confidence: "certain",
         reviewRequired: true,
@@ -932,7 +935,7 @@ const reviewHarness = (
     setDiskText: (value: string) => {
       diskText = value;
     },
-    review: () =>
+    review: (values: unknown = { applicationUrl: "http://localhost:5176" }) =>
       (
         fixture.owner as unknown as {
           handleMessage(
@@ -943,7 +946,7 @@ const reviewHarness = (
         }
       ).handleMessage(editor.panels[0], workspaceKey, {
         type: "reviewConfiguration",
-        values: { applicationUrl: "http://localhost:5176" },
+        values,
       }),
   };
 };
@@ -986,6 +989,131 @@ const filesystemReview = async (configPath = "rehearsal.config.mjs") => {
 };
 
 describe("in-product configuration reviews", () => {
+  it("refuses an invalid policy before review/write and permits a corrected fresh review", async () => {
+    const fixture = reviewHarness(true);
+    fixture.metadata.fields.push({
+      ...fixture.metadata.fields[0]!,
+      path: "resources.retainedEnvironmentCount",
+      kind: "integer",
+      value: 2,
+    });
+    await fixture.owner.open(key);
+    await fixture.review({
+      fields: { "resources.retainedEnvironmentCount": "1001" },
+    });
+    expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "resources.retainedEnvironmentCount: Enter a whole number from 1 to 1000.",
+      ),
+    );
+    expect(editor.review).not.toHaveBeenCalled();
+    expect(editor.temporary).not.toHaveBeenCalled();
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+    expect(
+      editor.read.mock.calls.some(
+        ([options]) => options.command.join(" ") === "configuration review",
+      ),
+    ).toBe(false);
+    editor.reviewApproval.mockResolvedValueOnce(undefined);
+    await fixture.review({
+      fields: { "resources.retainedEnvironmentCount": "3" },
+    });
+    expect(editor.review).toHaveBeenCalledOnce();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+  });
+  it("keeps a concurrent source edit and offers explicit source-review recovery without exposing its bytes", async () => {
+    const fixture = reviewHarness(true);
+    fixture.update({
+      ...fixture.snapshot,
+      configurationMetadata: parseConfigurationMetadata(fixture.metadata),
+    });
+    await fixture.owner.open(key);
+    let concurrent = "";
+    editor.reviewApproval.mockImplementationOnce(async () => {
+      concurrent = `${fixture.document.text}// PRIVATE_CANARY saved by another editor\n`;
+      fixture.document.text = concurrent;
+      fixture.persistDocument();
+      fixture.metadata.sourceSha256 = configurationFingerprint(concurrent);
+      fixture.update({
+        ...fixture.snapshot,
+        configurationMetadata: parseConfigurationMetadata(fixture.metadata),
+      });
+      return "Apply Changes";
+    });
+    await fixture.review();
+    const error = await editor.review.mock.results[0]!.value.catch(
+      (failure: unknown) => failure,
+    );
+    expect(editor.reviewOptions[0]!.failureMessage?.(error)).toContain(
+      "current configuration or workspace",
+    );
+    expect(editor.module.window.showErrorMessage).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Close review, refresh Rehearsal, and review the current source",
+      ),
+    );
+    expect(
+      JSON.stringify(editor.module.window.showErrorMessage.mock.calls),
+    ).not.toContain("PRIVATE_CANARY");
+    expect(fixture.document.text).toBe(concurrent);
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(fixture.document.save).not.toHaveBeenCalled();
+  });
+  it.each([
+    ["configuration_invalid", "CONFIGURATION_INVALID", 2, true],
+    ["configuration_invalid", "PRIVATE_CANARY", 2, false],
+    ["internal_failure", "CONFIGURATION_INVALID", 2, false],
+    ["configuration_invalid", "CONFIGURATION_INVALID", 10, false],
+  ] as const)(
+    "maps only allowlisted readonly validation failure %s/%s/%s to safe recovery",
+    async (category, code, exit, expected) => {
+      const fixture = reviewHarness(true);
+      const originalRead = editor.read.getMockImplementation()!;
+      editor.read.mockImplementation(async (options) => {
+        if (options.command.slice(0, 2).join(" ") === "configuration review")
+          throw new RehearsalCliError(
+            {
+              schemaVersion: 1,
+              rehearsalVersion: "1.0.2",
+              status: "error",
+              error: {
+                category,
+                code,
+                message:
+                  "PRIVATE_CANARY /private/source postgres://credential@host raw-provider-output",
+                suggestions: ["PRIVATE_CANARY"],
+                diagnosticId: "synthetic",
+              },
+            },
+            exit,
+          );
+        return originalRead(options);
+      });
+      await fixture.owner.open(key);
+      await fixture.review();
+      const output = JSON.stringify(
+        editor.module.window.showErrorMessage.mock.calls,
+      );
+      expect(output.includes("Core refused this configuration proposal")).toBe(
+        expected,
+      );
+      expect(output).not.toMatch(
+        /PRIVATE_CANARY|postgres:|\/private|raw-provider-output/u,
+      );
+      expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+      expect(fixture.document.save).not.toHaveBeenCalled();
+      const error = await editor.review.mock.results[0]!.value.catch(
+        (failure: unknown) => failure,
+      );
+      expect(Boolean(editor.reviewOptions[0]!.failureMessage?.(error))).toBe(
+        expected,
+      );
+      expect(
+        editor.reviewOptions[0]!.failureMessage?.(new Error("PRIVATE_CANARY")),
+      ).toBeUndefined();
+    },
+  );
   it("refuses a new configuration review when extension coexistence is unsafe", async () => {
     const fixture = reviewHarness(
       false,

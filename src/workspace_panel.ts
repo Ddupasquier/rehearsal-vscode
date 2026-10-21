@@ -17,9 +17,11 @@ import { isAbsolute, join } from "node:path";
 import {
   runRehearsalJson,
   resolveWorkspaceRehearsal,
+  RehearsalCliError,
 } from "./process_adapter.js";
 import {
   parseConfigurationMetadata,
+  ConfigurationInputError,
   type ConfigurationMetadata,
 } from "./configuration_contract.js";
 import { editLiteralConfiguration } from "./literal_configuration.js";
@@ -586,7 +588,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         ].includes(current.availability)
       )
         throw new ConfigurationReviewError(
-          "Configuration review stopped because project trust, identity or availability changed. No further review action was performed. Refresh and review again.",
+          "This review no longer matches the current configuration or workspace. Saved and unsaved edits were not reverted. Close review, refresh Rehearsal, and review the current source.",
         );
     };
     const inspectBoundary = async (savedSourceSha256?: string) => {
@@ -805,6 +807,8 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         successMessage:
           "Saved the reviewed configuration changes. Return to your project to inspect the saved values; use Refresh if its check is still pending.",
         canApply: requireUnchanged,
+        failureMessage: (error) =>
+          error instanceof ConfigurationReviewError ? error.message : undefined,
         onReturn: () => reviewPanel?.reveal(vscode.ViewColumn.Active, false),
         onApply: async () => {
           requireUnchanged();
@@ -851,6 +855,17 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
                   `--proposal=${relative(folder.uri.fsPath, input)}`,
                 ],
                 expectedCommand: "configuration review",
+              }).catch((error: unknown) => {
+                if (
+                  error instanceof RehearsalCliError &&
+                  error.exitCode === 2 &&
+                  error.result.error.category === "configuration_invalid" &&
+                  error.result.error.code === "CONFIGURATION_INVALID"
+                )
+                  throw new ConfigurationReviewError(
+                    "Core refused this configuration proposal. This review did not save it. Close review, check the proposed settings, and review again.",
+                  );
+                throw error;
               });
               requireUnchanged();
               if (
@@ -942,7 +957,8 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       });
     } catch (error) {
       void vscode.window.showErrorMessage(
-        error instanceof ConfigurationReviewError
+        error instanceof ConfigurationReviewError ||
+          error instanceof ConfigurationInputError
           ? error.message
           : "Rehearsal could not complete this configuration review. Refresh the project, check trust and local file permissions, then review the current configuration and try again.",
       );

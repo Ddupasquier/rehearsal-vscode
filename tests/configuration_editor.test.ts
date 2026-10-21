@@ -7,6 +7,7 @@ import {
   parseStructuredConfigurationValues,
 } from "../src/configuration_editor.js";
 import { editLiteralConfiguration } from "../src/literal_configuration.js";
+import { ConfigurationInputError } from "../src/configuration_contract.js";
 
 const source = `export default {
   application: {
@@ -21,6 +22,82 @@ const source = `export default {
 `;
 
 describe("configuration proposals", () => {
+  const numericMetadata = {
+    schemaVersion: 1 as const,
+    path: "rehearsal.config.mjs",
+    sourceSha256: "a".repeat(64),
+    profiles: [],
+    pathResolution: "Project root",
+    manualFields: "Manual review",
+    fields: [
+      {
+        path: "resources.retainedEnvironmentCount",
+        kind: "integer",
+        value: 2,
+        provenance: "validated-active-configuration" as const,
+        confidence: "certain" as const,
+        reviewRequired: true as const,
+      },
+    ],
+  };
+  it.each(["1", "1000"])(
+    "accepts valid retained-environment boundary %s",
+    (input) => {
+      expect(
+        parseStructuredConfigurationValues(
+          { fields: { "resources.retainedEnvironmentCount": input } },
+          numericMetadata,
+        ),
+      ).toEqual([
+        { path: "resources.retainedEnvironmentCount", value: Number(input) },
+      ]);
+    },
+  );
+  it("preserves the optional URL representation for valid named-profile proposals", () => {
+    const profile = { name: "Review", targets: ["primary"] };
+    const metadata = {
+      ...numericMetadata,
+      fields: [
+        {
+          ...numericMetadata.fields[0]!,
+          path: "profiles",
+          kind: "profiles",
+          value: [],
+        },
+      ],
+    };
+    expect(
+      parseStructuredConfigurationValues(
+        { fields: { profiles: JSON.stringify([profile]) } },
+        metadata,
+      ),
+    ).toEqual([{ path: "profiles", value: [profile] }]);
+  });
+  it.each(["0", "1001", "1.5", "NaN", "9007199254740992", "PRIVATE_CANARY"])(
+    "rejects invalid policy input %s with fixed field-specific recovery before editing",
+    (input) => {
+      try {
+        parseStructuredConfigurationValues(
+          { fields: { "resources.retainedEnvironmentCount": input } },
+          numericMetadata,
+        );
+        throw new Error("Expected an input refusal");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigurationInputError);
+        expect(String(error)).toContain(
+          "resources.retainedEnvironmentCount: Enter a whole number from 1 to 1000.",
+        );
+        expect(String(error)).toContain("review again");
+        expect(String(error)).not.toContain("PRIVATE_CANARY");
+      }
+      expect(
+        parseStructuredConfigurationValues(
+          { fields: { "resources.retainedEnvironmentCount": "3" } },
+          numericMetadata,
+        ),
+      ).toEqual([{ path: "resources.retainedEnvironmentCount", value: 3 }]);
+    },
+  );
   it("shows a profile insertion without mislabeling subsequent settings as changes", () => {
     const before =
       'export default {\n  schemaVersion: 1,\n  application: { startCommand: "npm run dev" },\n};\n';

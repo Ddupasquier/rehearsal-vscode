@@ -520,6 +520,14 @@ unambiguous literal per field; shows an exact diff; refuses dirty or concurrentl
 documents; and asks for explicit Apply in its non-modal review tab before saving. It does not parse or
 rewrite arbitrary JavaScript expressions. Core remains the authority that validates the
 complete file before any later operation.
+Known numeric fields share one editor-owned bounds contract for parsing, visible range
+help and native form constraints. Invalid input is refused before review with fixed
+field guidance; values and raw provider errors are never echoed. Complete core validation
+still runs before saving. Configuration reviews may show caller-owned, bounded recovery
+guidance for known local refusals; unknown failures retain the generic alert. A stale
+review explicitly preserves saved and unsaved edits, disables Apply, focuses Close and
+asks the user to refresh and review the current source. Other review callers do not
+inherit configuration-error details.
 The simple form proposes only semantic changes from its initial displayed values; untouched
 defaults do not become new configuration literals. Restoring form values updates the draft
 guard after the browser reset, while edits in other forms remain protected.

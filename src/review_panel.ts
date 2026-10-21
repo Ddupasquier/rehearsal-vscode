@@ -17,6 +17,8 @@ export interface ReviewOptions extends ReviewContent {
   /** Return false when a subsequent native confirmation was cancelled. */
   readonly onApply: () => Promise<void | boolean>;
   readonly onReturn?: () => void;
+  /** Caller-owned, fixed guidance only. Unknown errors retain the generic alert. */
+  readonly failureMessage?: (error: unknown) => string | undefined;
 }
 
 /** Non-modal presentation. Callers retain all authorization and save/resource guards. */
@@ -173,7 +175,22 @@ export class RehearsalReviewPanels implements vscode.Disposable {
               }
               if (closed || this.disposed) {
                 release();
-              } else await post("failed");
+              } else {
+                let message: string | undefined;
+                try {
+                  const candidate = options.failureMessage?.(error);
+                  if (
+                    typeof candidate === "string" &&
+                    candidate.length > 0 &&
+                    candidate.length <= 500 &&
+                    !/[\x00-\x1f\x7f]/u.test(candidate)
+                  )
+                    message = candidate;
+                } catch {
+                  /* A guidance failure never reveals the original error. */
+                }
+                await post("failed", message);
+              }
             }
           })();
         }),
