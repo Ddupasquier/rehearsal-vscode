@@ -59,6 +59,55 @@ const fieldKinds: Readonly<Record<string, string>> = Object.freeze({
   "resources.cleanupSchedule": "review-schedule",
   profiles: "profiles",
 });
+/** One local owner for numeric form hints and conservative editor validation. */
+export const configurationIntegerConstraints = (
+  path: string,
+): Readonly<{ minimum: number; maximum: number }> | undefined => {
+  if (
+    !Object.hasOwn(fieldKinds, path) ||
+    !["integer", "nullable-integer"].includes(fieldKinds[path]!)
+  )
+    return undefined;
+  return {
+    minimum: path === "lifecycle.openIdleTimeoutSeconds" ? 30 : 1,
+    maximum:
+      path === "lifecycle.openIdleTimeoutSeconds"
+        ? 86400
+        : path === "containerRuntime.diskWarningPercent"
+          ? 100
+          : path === "resources.retainedEnvironmentCount"
+            ? 1000
+            : Number.MAX_SAFE_INTEGER,
+  };
+};
+export const configurationIntegerHelp = (path: string): string | undefined => {
+  const bounds = configurationIntegerConstraints(path);
+  return bounds
+    ? `Enter a whole number from ${bounds.minimum} to ${bounds.maximum}.`
+    : undefined;
+};
+/** Construct only fixed guidance for a known field; never echo a proposed value. */
+export class ConfigurationInputError extends Error {
+  constructor(path: string, kind: string) {
+    const known = Object.hasOwn(fieldKinds, path) && fieldKinds[path] === kind;
+    const help = known
+      ? (configurationIntegerHelp(path) ??
+        (kind === "local-url"
+          ? "Use a supported loopback URL."
+          : kind === "boolean"
+            ? "Choose true or false."
+            : kind === "profiles"
+              ? "Use valid named profiles with configured targets and optional loopback URLs."
+              : "Use a supported value for this field."))
+      : undefined;
+    super(
+      help
+        ? `${path}: ${help} Correct this field and review again. This proposal was not saved.`
+        : "Check the proposed configuration fields and review again. This proposal was not saved.",
+    );
+    this.name = "ConfigurationInputError";
+  }
+}
 const parseProfiles = (value: unknown): readonly NamedWorkspaceProfile[] => {
   if (!Array.isArray(value) || value.length > 20)
     throw new Error("Invalid named project profiles.");
@@ -126,14 +175,12 @@ export const validateConfigurationFieldValue = (
   }
   if (kind === "integer" || kind === "nullable-integer") {
     if (kind === "nullable-integer" && value === null) return null;
+    const bounds = configurationIntegerConstraints(path)!;
     if (
       typeof value !== "number" ||
       !Number.isSafeInteger(value) ||
-      value < 1 ||
-      (path === "lifecycle.openIdleTimeoutSeconds" &&
-        (value < 30 || value > 86400)) ||
-      (path === "containerRuntime.diskWarningPercent" && value > 100) ||
-      (path === "resources.retainedEnvironmentCount" && value > 1000)
+      value < bounds.minimum ||
+      value > bounds.maximum
     )
       throw new Error("Invalid bounded configuration count.");
     return value;

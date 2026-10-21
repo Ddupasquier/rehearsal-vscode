@@ -203,7 +203,7 @@ export const renderReviewDocument = (
         cancel.disabled = false;
         cancel.textContent = 'Close review';
         status.setAttribute('role','alert');
-        status.textContent = ${JSON.stringify(FAILURE)};
+        status.textContent = typeof message.message === 'string' && message.message.length > 0 && message.message.length <= 500 && !/[\\x00-\\x1f\\x7f]/u.test(message.message) ? message.message : ${JSON.stringify(FAILURE)};
         cancel.focus();
       }
     });

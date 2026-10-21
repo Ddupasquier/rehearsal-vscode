@@ -345,6 +345,57 @@ describe("non-modal review lifecycle", () => {
     expect(input.onApply).toHaveBeenCalledOnce();
     send("cancelReview");
   });
+  it("posts only caller-approved fixed guidance for a failed configuration review", async () => {
+    class KnownFailure extends Error {}
+    const failure = new KnownFailure("PRIVATE_CANARY");
+    const input = options();
+    input.onApply.mockRejectedValue(failure);
+    const guidance =
+      "The configuration changed. Close review and inspect the current source.";
+    const pending = createOwner().review({
+      ...input,
+      failureMessage: (error) =>
+        error instanceof KnownFailure ? guidance : undefined,
+    });
+    const rejected = expect(pending).rejects.toThrow("PRIVATE_CANARY");
+    send("applyReview");
+    await rejected;
+    await vi.waitFor(() =>
+      expect(lastPanel().webview.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ state: "failed", message: guidance }),
+      ),
+    );
+    expect(
+      JSON.stringify(lastPanel().webview.postMessage.mock.calls),
+    ).not.toContain("PRIVATE_CANARY");
+    send("applyReview");
+    expect(input.onApply).toHaveBeenCalledOnce();
+    send("cancelReview");
+  });
+  it.each(["", "x".repeat(501), "unsafe\nmessage"])(
+    "falls back when guidance is empty, excessive or control-bearing",
+    async (message) => {
+      const input = options();
+      input.onApply.mockRejectedValue(new Error("PRIVATE_CANARY"));
+      const pending = createOwner().review({
+        ...input,
+        failureMessage: () => message,
+      });
+      const rejected = expect(pending).rejects.toThrow("PRIVATE_CANARY");
+      send("applyReview");
+      await rejected;
+      await vi.waitFor(() =>
+        expect(lastPanel().webview.postMessage).toHaveBeenCalledWith(
+          expect.objectContaining({ state: "failed" }),
+        ),
+      );
+      const failed = lastPanel()
+        .webview.postMessage.mock.calls.map(([value]) => value)
+        .find((value) => (value as { state?: string }).state === "failed");
+      expect(failed).not.toHaveProperty("message");
+      send("cancelReview");
+    },
+  );
 
   it("invalidates only reviews belonging to the removed workspace", async () => {
     const owner = createOwner();
@@ -400,6 +451,83 @@ describe("non-modal review lifecycle", () => {
 });
 
 describe("review keyboard/controller behavior", () => {
+  it.each([
+    "Close review, correct the proposed settings, and review again.",
+    undefined,
+    "x".repeat(501),
+    "unsafe\nmessage",
+  ])(
+    "announces bounded failure guidance and preserves close/focus/retry guards",
+    (message) => {
+      const listeners: Record<string, (event: never) => void> = {};
+      const nodes = Object.fromEntries(
+        ["heading", "apply", "cancel", "return", "status"].map((id) => [
+          `#review-${id}`,
+          {
+            disabled: false,
+            hidden: false,
+            textContent: "Apply changes",
+            focus: vi.fn(),
+            setAttribute: vi.fn(),
+            addEventListener: (
+              name: string,
+              handler: (event: never) => void,
+            ) => {
+              listeners[`${id}:${name}`] = handler;
+            },
+          },
+        ]),
+      );
+      const postMessage = vi.fn();
+      const script = /<script nonce="[^"]+">([\s\S]*?)<\/script>/u.exec(
+        renderReviewDocument(content, assets),
+      )![1]!;
+      new Script(script).runInNewContext({
+        acquireVsCodeApi: () => ({ postMessage }),
+        document: {
+          querySelector: (selector: string) => nodes[selector],
+          addEventListener: (name: string, handler: (event: never) => void) => {
+            listeners[name] = handler;
+          },
+        },
+        window: {
+          addEventListener: (name: string, handler: (event: never) => void) => {
+            listeners[name] = handler;
+          },
+        },
+      });
+      listeners["apply:click"]!({} as never);
+      listeners.message!({
+        data: {
+          type: "reviewState",
+          token: assets.scriptNonce,
+          state: "failed",
+          message,
+        },
+      } as never);
+      const expected =
+        typeof message === "string" &&
+        message.length <= 500 &&
+        !message.includes("\n")
+          ? message
+          : "The action could not be confirmed.";
+      expect(nodes["#review-status"]!.textContent).toContain(expected);
+      expect(nodes["#review-status"]!.setAttribute).toHaveBeenCalledWith(
+        "role",
+        "alert",
+      );
+      expect(nodes["#review-apply"]!.disabled).toBe(true);
+      expect(nodes["#review-cancel"]!.textContent).toBe("Close review");
+      expect(nodes["#review-cancel"]!.focus).toHaveBeenCalledOnce();
+      listeners["apply:click"]!({} as never);
+      expect(postMessage).toHaveBeenCalledTimes(1);
+      listeners.keydown!({ key: "Escape", preventDefault: vi.fn() } as never);
+      expect(postMessage).toHaveBeenLastCalledWith({
+        type: "cancelReview",
+        token: assets.scriptNonce,
+      });
+    },
+  );
   it("works without a VS Code bridge and never simulates a successful save", () => {
     const listeners: Record<string, (event: never) => void> = {};
     const nodes = Object.fromEntries(

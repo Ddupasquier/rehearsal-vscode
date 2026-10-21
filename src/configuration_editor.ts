@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   validateConfigurationFieldValue,
+  ConfigurationInputError,
   type ConfigurationMetadata,
 } from "./configuration_contract.js";
 import { editEnvironmentConfiguration } from "./environment_configuration.js";
@@ -60,45 +61,56 @@ export const parseStructuredConfigurationValues = (
     const field = metadata.fields.find((field) => field.path === path);
     if (!field || typeof input !== "string" || input.length > 65536)
       throw new Error("Unknown or unbounded configuration field.");
-    let value: unknown = input;
     if (
       field.value === null &&
       input === "" &&
       field.kind !== "nullable-integer"
     )
       continue;
-    if (field.kind === "local-url" && path === "application.activity.url") {
-      value = input === "" ? null : input;
-      value = validateConfigurationFieldValue(path, field.kind, value);
-    } else if (field.kind === "boolean") {
-      if (!["true", "false"].includes(input))
-        throw new Error("Choose true or false.");
-      value = input === "true";
-    } else if (["integer", "nullable-integer"].includes(field.kind)) {
-      value =
-        input === "" && field.kind === "nullable-integer"
-          ? null
-          : Number(input);
-      if (
-        value !== null &&
-        (!/^\d+$/u.test(input) || !Number.isSafeInteger(value))
-      )
-        throw new Error(
-          "Enter a whole-number value or leave an optional value empty.",
-        );
-      if (path === "lifecycle.openIdleTimeoutSeconds")
-        value = validateConfigurationFieldValue(path, field.kind, value);
-    } else if (field.kind === "profiles") {
-      try {
+    try {
+      let value: unknown = input;
+      if (field.kind === "local-url" && path === "application.activity.url") {
+        value = input === "" ? null : input;
+      } else if (field.kind === "boolean") {
+        if (!["true", "false"].includes(input))
+          throw new Error("Invalid boolean.");
+        value = input === "true";
+      } else if (["integer", "nullable-integer"].includes(field.kind)) {
+        value =
+          input === "" && field.kind === "nullable-integer"
+            ? null
+            : Number(input);
+        if (
+          value !== null &&
+          (!/^\d+$/u.test(input) || !Number.isSafeInteger(value))
+        )
+          throw new Error("Invalid whole-number input.");
+      } else if (field.kind === "profiles") {
         value = JSON.parse(input);
-      } catch {
-        throw new Error(
-          "Profiles must be a valid JSON list with names, configured targets, and optional local URLs.",
-        );
       }
+      if (field.kind === "profiles") {
+        // Metadata uses null for an absent URL; core proposals omit that property.
+        // Validate the public shape without rewriting the user's draft.
+        const profiles = Array.isArray(value)
+          ? value.map((entry: unknown) => {
+              if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+                const profile = entry as Record<string, unknown>;
+                if (profile.applicationUrl === null)
+                  throw new Error("Omit an unused profile URL.");
+                return Object.hasOwn(profile, "applicationUrl")
+                  ? profile
+                  : { ...profile, applicationUrl: null };
+              }
+              return entry;
+            })
+          : value;
+        validateConfigurationFieldValue(path, field.kind, profiles);
+      } else value = validateConfigurationFieldValue(path, field.kind, value);
+      if (JSON.stringify(value) !== JSON.stringify(field.value))
+        changes.push({ path, value });
+    } catch {
+      throw new ConfigurationInputError(path, field.kind);
     }
-    if (JSON.stringify(value) !== JSON.stringify(field.value))
-      changes.push({ path, value });
   }
   return changes;
 };

@@ -1,5 +1,9 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import { knownWorkspaceTargets } from "./workspace_view_state.js";
+import {
+  configurationIntegerConstraints,
+  configurationIntegerHelp,
+} from "./configuration_contract.js";
 const escape = (value: string): string =>
   value
     .replaceAll("&", "&amp;")
@@ -23,6 +27,7 @@ export const coreConfigurationControls = (
       const id = `core-${field.path.replaceAll(".", "-")}`;
       const activity = field.path === "application.activity.url";
       const idleTimeout = field.path === "lifecycle.openIdleTimeoutSeconds";
+      const numeric = configurationIntegerConstraints(field.path);
       const options =
         field.kind === "boolean"
           ? ["true", "false"]
@@ -36,7 +41,7 @@ export const coreConfigurationControls = (
       const value = field.value === null ? "" : String(field.value);
       const input = options
         ? `<select id="${id}" name="${field.path}">${options.map((option) => `<option${option === value ? " selected" : ""}>${option}</option>`).join("")}</select>`
-        : `<input id="${id}" name="${field.path}" aria-describedby="${id}-help" type="${["integer", "nullable-integer"].includes(field.kind) ? "number" : activity ? "url" : "text"}" value="${escape(value)}"${idleTimeout ? ' min="30" max="86400" step="1"' : ["integer", "nullable-integer"].includes(field.kind) ? ' min="0" step="1"' : activity ? ' maxlength="500"' : ' maxlength="1000"'} />`;
+        : `<input id="${id}" name="${field.path}" aria-describedby="${id}-help" type="${["integer", "nullable-integer"].includes(field.kind) ? "number" : activity ? "url" : "text"}" value="${escape(value)}"${numeric ? ` min="${numeric.minimum}" max="${numeric.maximum}" step="1"` : activity ? ' maxlength="500"' : ' maxlength="1000"'} />`;
       const label = activity
         ? "Application activity endpoint (opt-in)"
         : idleTimeout
@@ -46,7 +51,7 @@ export const coreConfigurationControls = (
         ? "Empty disables this signal. Your application must implement the documented activity response at the same local origin as readiness; Rehearsal does not add instrumentation."
         : idleTimeout
           ? "Empty disables automatic idle stop. 30–86,400 seconds; requires a valid activity signal, readiness URL, and stop-on-application-exit. Core validates these together."
-          : `Saved/default value · validated by core · review required${field.kind === "nullable-integer" ? " · empty disables this optional limit" : ""}`;
+          : `${configurationIntegerHelp(field.path) ?? "Saved/default value"} · validated by core · review required${field.kind === "nullable-integer" ? " · empty disables this optional limit" : ""}`;
       return `<label><span>${escape(label)}</span>${input}<small id="${id}-help">${escape(explanation)}</small></label>`;
     })
     .join(

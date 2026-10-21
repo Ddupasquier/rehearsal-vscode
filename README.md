@@ -57,12 +57,12 @@ default; installation requires an explicit option and never starts a database.
    for safe setup and baseline inputs.
 
 2. Open the [GitHub prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases).
-   Choose the **0.1.22** release and download
-   `rehearsal-db-0.1.22.vsix` and `SHA256SUMS`. If that version is absent, publication
+   Choose the **0.1.23** release and download
+   `rehearsal-db-0.1.23.vsix` and `SHA256SUMS`. If that version is absent, publication
    has not completed; a source version is not a downloadable release.
    Compare its SHA-256 with the
-   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.22.vsix`
-   on macOS or `sha256sum /path/to/rehearsal-db-0.1.22.vsix` on Linux. Stop if they differ.
+   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.23.vsix`
+   on macOS or `sha256sum /path/to/rehearsal-db-0.1.23.vsix` on Linux. Stop if they differ.
 3. Open **Extensions → … → Install from VSIX…** and choose that verified file.
    Reload the extension host if VS Code asks.
 4. Review Workspace Trust. Open the Command Palette and choose
@@ -73,7 +73,7 @@ default; installation requires an explicit option and never starts a database.
 If VS Code's `code` command is available, step 3 can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.22.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
 ```
 
 ### Move from a preview through 0.1.18
@@ -248,6 +248,9 @@ final destructive confirmation.
 Complex expression-based fields fail closed and remain available through **Open configuration**.
 Finish or dismiss a configuration review before starting another. If the source changes
 while saving, Rehearsal asks you to review the current file instead of claiming success.
+Invalid structured values identify the field and its supported range before review.
+A stale review explains how to close it and review the current source without reverting
+your saved or unsaved edits. Unknown errors remain redacted.
 
 Core releases advertising configuration review also expose the validated resource policies
 and named project profiles. A profile selects the targets shown and an optional local
@@ -398,7 +401,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.22.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

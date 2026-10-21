@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.23 — Configuration review recovery
+
+- Identify invalid structured fields and numeric ranges before opening a review.
+  Keep native form constraints and editor validation aligned; never echo proposed
+  values or raw provider errors.
+- Explain stale configuration reviews without reverting saved or unsaved edits.
+  Disable Apply, focus Close, and direct the user to refresh and review current source.
+- Retain complete core validation, exact-diff consent, file-identity checks and generic
+  redaction for unknown failures. No database action or automatic retry is added.
+
 ## 0.1.22 — Actionable migration failures and a clearer tutorial handoff
 
 - Show core-owned, redacted migration failure explanations and recovery suggestions
