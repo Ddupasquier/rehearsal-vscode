@@ -11,9 +11,10 @@ installed in each workspace. Its native project navigator opens a Rehearsal Work
 persistent navigation for Overview, Project setup, Migrations, Environments, Data & auth,
 Configuration, and Activity & reports.
 
-The repository and [reviewed VSIX previews](https://github.com/Ddupasquier/rehearsal-vscode/releases)
-are public on GitHub. Use the [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/)
-for current distribution channels. Starter is free; preview status describes stability,
+Install from the [official VS Code Marketplace listing](https://marketplace.visualstudio.com/items?itemName=rehearsal-db.rehearsal-db),
+or use the [reviewed GitHub VSIX previews](https://github.com/Ddupasquier/rehearsal-vscode/releases).
+The source repository is public on GitHub. The [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/)
+owns current distribution guidance. Starter is free; preview status describes stability,
 not a trial or a paid launch.
 
 The canonical extension identity from **0.1.19** is
@@ -29,7 +30,9 @@ canonical package. This is an explicit manual change, not an automatic rename.
 
 ## Install and open your project
 
-Use desktop VS Code 1.101 or newer on macOS or Linux, with Node.js 22, 24, or 26.
+Use desktop VS Code 1.101 or newer on macOS or Linux. Your project terminal needs
+Node.js 22, 24, or 26; [Node setup](#node-setup-and-runtime-selection) explains how this
+differs from the Node runtime already bundled with VS Code.
 No source checkout, extension build, or Test Lab installation is needed.
 For Windows desktop use, open the project with **Remote - WSL** in a WSL 2 Linux
 distribution and install Rehearsal into that Linux extension host. Keep project files,
@@ -56,25 +59,63 @@ default; installation requires an explicit option and never starts a database.
    Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
    for safe setup and baseline inputs.
 
-2. Open the [GitHub prereleases](https://github.com/Ddupasquier/rehearsal-vscode/releases).
-   Choose the **0.1.23** release and download
-   `rehearsal-db-0.1.23.vsix` and `SHA256SUMS`. If that version is absent, publication
-   has not completed; a source version is not a downloadable release.
-   Compare its SHA-256 with the
-   checksum from that same release: use `shasum -a 256 /path/to/rehearsal-db-0.1.23.vsix`
-   on macOS or `sha256sum /path/to/rehearsal-db-0.1.23.vsix` on Linux. Stop if they differ.
-3. Open **Extensions → … → Install from VSIX…** and choose that verified file.
-   Reload the extension host if VS Code asks.
-4. Review Workspace Trust. Open the Command Palette and choose
+2. Open **Extensions** and search **`@id:rehearsal-db.rehearsal-db`**, or open the
+   [official Rehearsal DB listing](https://marketplace.visualstudio.com/items?itemName=rehearsal-db.rehearsal-db).
+   Confirm publisher **`rehearsal-db`** and the full extension ID, then choose **Install**.
+   The legacy ID `rehearsal-db.rehearsal` is a different package; follow the migration
+   steps below if it is already installed. For a direct download instead, use the
+   verified GitHub VSIX instructions below.
+3. Review Workspace Trust. Open the Command Palette and choose
    **Rehearsal: Open Dashboard**, or use the dashboard button in the Rehearsal sidebar.
-5. Follow **Next best step**. Review detected facts and the active configuration;
+4. Follow **Next best step**. Review detected facts and the active configuration;
    operational actions still show their exact CLI command and required confirmations.
 
-If VS Code's `code` command is available, step 3 can instead use:
+### Direct GitHub installation
+
+The reviewed VSIX is an alternative to Marketplace. Open the
+[0.1.23 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.23)
+and download `rehearsal-db-0.1.23.vsix` and `SHA256SUMS`. If that version is absent,
+publication has not completed; a source version is not a downloadable release.
+Compare its SHA-256 with the checksum from that same release: use
+`shasum -a 256 /path/to/rehearsal-db-0.1.23.vsix` on macOS or
+`sha256sum /path/to/rehearsal-db-0.1.23.vsix` on Linux. Stop if they differ.
+Open **Extensions → … → Install from VSIX…** and choose that verified file.
+Save your work and reload the extension host only if VS Code asks.
+
+If VS Code's `code` command is available, installation can instead use:
 
 ```bash
 code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
 ```
+
+### Node setup and runtime selection
+
+Read-only dashboard inspection runs the workspace's installed Rehearsal CLI with
+VS Code's bundled Node executable. It does not need to discover a second Node
+installation on your `PATH`. Foreground actions run the reviewed `npx`, `npm` or other
+package-manager command in a normal project-scoped integrated terminal, where your
+shell's selected Node runtime applies.
+
+Before installing core or starting a foreground action, open a terminal in the project
+and check:
+
+```bash
+node --version
+npm --version
+```
+
+Use a current patched Node 22, 24 or 26 release. Follow the project's existing runtime
+selector and version-manager instructions rather than changing its version globally.
+If Node is absent or the selected version is unsupported, use the
+[official Node downloads](https://nodejs.org/en/download) or the project's existing
+manager, then open a new integrated terminal and check again. On Windows/WSL, install
+and select Linux Node inside the same WSL distribution, not the Windows executable.
+
+Rehearsal does not install Node automatically, source your shell startup files, change
+version-manager aliases or silently replace the project's selected runtime. The
+[OS setup helpers](https://github.com/Ddupasquier/rehearsal-db/blob/main/installers/README.md)
+offer prerequisite checks and separately requested setup; a detected runtime is not
+permission to start a database.
 
 ### Move from a preview through 0.1.18
 
@@ -86,14 +127,16 @@ Public 0.1.18 downloads and checksums remain unchanged. Its updater looks for th
 1. Finish every Rehearsal command in your open project windows. For an open sandbox
    app, press **Ctrl+C** once in its owning terminal and wait for the normal shell prompt
    and configured lifecycle result. Save your work before proceeding.
-2. Download and verify the reviewed canonical VSIX and checksum as described above.
+2. If using a direct download, prepare the reviewed canonical VSIX and verify its
+   checksum using [Direct GitHub installation](#direct-github-installation).
 3. In VS Code's Extensions view, search **`@id:rehearsal-db.rehearsal`**. Open that
    legacy extension's gear menu and choose **Uninstall**. Do not choose a database
    discard/reset action or **Reset Saved Editor State** as part of migration.
 4. Save any remaining files, then run **Developer: Reload Window**. Ensure the legacy
    extension is no longer installed in each profile where you intend to use the new one.
-5. Use **Install from VSIX…** to install the verified canonical package. Check its full
-   ID is **`rehearsal-db.rehearsal-db`**, then reload if VS Code asks. Reopen the dashboard
+5. Install **Rehearsal DB** from the official Marketplace listing, or use **Install
+   from VSIX…** with the verified canonical package. Check its full ID is
+   **`rehearsal-db.rehearsal-db`**, then reload if VS Code asks. Reopen the dashboard
    and review your update preferences.
 
 The canonical extension refuses activation while VS Code still reports the legacy ID.
@@ -113,8 +156,9 @@ legacy VSIX. Never run both identities together.
 
 ### Keep the canonical installation current
 
-To update manually, download and verify the next reviewed VSIX and repeat step 3.
-Or opt in to **Keep this extension up to date** in the Rehearsal update prompt.
+To update manually, choose **Update** on the official Marketplace listing, or follow
+[Direct GitHub installation](#direct-github-installation) with the next reviewed VSIX.
+You can also opt in to **Keep this extension up to date** in the Rehearsal update prompt.
 Rehearsal downloads the official release, verifies its checksum, package identity and
 compatibility, then hands it to VS Code's installer. It never forces a reload.
 Canonical updates accept only `rehearsal-db-<version>.vsix` with embedded identity
@@ -417,7 +461,8 @@ or automatic license activation.
 - SSH, Dev Containers, Codespaces, browser-only VS Code, mobile systems and other
   unlisted environments have no end-to-end support claim. A Node/controller CI pass is
   not a native editor, database, provider, accessibility or every-architecture acceptance.
-- Node.js 22, 24, or 26 in the extension host.
+- A VS Code-bundled Node runtime for read-only inspection; a project-selected Node.js
+  22, 24 or 26 runtime for foreground CLI/package-manager actions.
 - Native Tree View navigation plus a theme-aware project workbench with nonce-restricted
   in-panel navigation; no telemetry, billing, or hosted license service.
 - Read-only inspection through versioned Rehearsal JSON results; operational actions remain
