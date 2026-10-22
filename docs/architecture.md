@@ -338,6 +338,16 @@ read-only queries. When an operation is busy, stale, or invalid, the view omits 
 details that could be inconsistent and presents only the safe activity state. Runtime
 state comes exclusively from `status.data.runtimeStatus` for each configured target.
 
+The closed activity-kind allowlist additionally recognizes core's `measure impact`
+operation, including completed, failed and cancelled retained receipts. This is a
+compatibility reader only: an active measurement still blocks conflicting editor
+actions, and idle history does not make project inspection unavailable. The editor
+does not invoke impact commands, parse aggregate measurements, add measurement UI or
+equate an operation's completion with a successful rehearsal, application proof or
+safe migration. Other unknown or argument-bearing operation kinds remain refused.
+An older editor lacking this entry can reject activity/history produced by that core
+capability; core and editor versions remain separate release boundaries.
+
 Overview keeps current command activity, database liveness and recorded rehearsal/proof
 outcomes separate. The Run workflow row uses the latest unambiguous core `run` receipt,
 not a running database or an editor dispatch receipt. A passed CLI-proof label additionally

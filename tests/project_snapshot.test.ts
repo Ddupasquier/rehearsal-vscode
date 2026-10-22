@@ -1453,7 +1453,59 @@ describe("project overview", () => {
     expect(result.resources).toEqual(inventory);
   });
 
-  it("shows only safe operation activity while a mutation is active", async () => {
+  it.each(["run", "measure impact"])(
+    "shows only safe %s activity while an owned operation is active",
+    async (kind) => {
+      const observedCommands: string[] = [];
+      const result = await inspectProject({
+        workspaceName: "fixture",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: client(
+          "READY",
+          {
+            schemaVersion: 1,
+            state: "busy",
+            operation: {
+              kind,
+              startedAt: "2026-10-10T00:00:00.000Z",
+              rehearsalVersion: "0.1.0-rc.4",
+            },
+          },
+          observedCommands,
+        ),
+      });
+
+      expect(observedCommands).toEqual(["activity"]);
+      expect(result).toMatchObject({
+        availability: "operation_active",
+        activity: { state: "busy", operation: { kind } },
+      });
+      expect(result.readiness).toBeUndefined();
+      expect(result.runtime).toBeUndefined();
+    },
+  );
+
+  it("keeps a completed impact measurement receipt from making an idle project unavailable", async () => {
+    const at = "2026-10-10T00:00:00.000Z";
+    const recent = [
+      {
+        kind: "measure impact",
+        rehearsalVersion: "1.2.0",
+        progress: {
+          schemaVersion: 1 as const,
+          operationId: "f".repeat(64),
+          state: "completed" as const,
+          startedAt: at,
+          updatedAt: at,
+          elapsedMilliseconds: 0,
+          currentStage: null,
+          completedStages: [],
+          events: [],
+          truncated: { stages: false, events: false },
+        },
+      },
+    ];
     const observedCommands: string[] = [];
     const result = await inspectProject({
       workspaceName: "fixture",
@@ -1463,24 +1515,20 @@ describe("project overview", () => {
         "READY",
         {
           schemaVersion: 1,
-          state: "busy",
-          operation: {
-            kind: "run",
-            startedAt: "2026-10-10T00:00:00.000Z",
-            rehearsalVersion: "0.1.0-rc.4",
-          },
+          state: "idle",
+          operation: null,
+          recent,
         },
         observedCommands,
       ),
     });
-
-    expect(observedCommands).toEqual(["activity"]);
-    expect(result).toMatchObject({
-      availability: "operation_active",
-      activity: { state: "busy", operation: { kind: "run" } },
-    });
-    expect(result.readiness).toBeUndefined();
-    expect(result.runtime).toBeUndefined();
+    expect(result.availability).toBe("ready");
+    expect(result.activity?.recent).toEqual(recent);
+    expect(result.readiness).toBeDefined();
+    expect(result.runtime).toBeDefined();
+    expect(
+      observedCommands.filter((command) => command === "activity"),
+    ).toHaveLength(2);
   });
 
   it("discards inspected details if an operation starts during refresh", async () => {
