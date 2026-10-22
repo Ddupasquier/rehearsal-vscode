@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { basename } from "node:path";
+import { realpath } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   createNativeEditorTracker,
@@ -481,7 +482,11 @@ describe.skipIf(process.platform === "win32")(
         await tracker.cleanup();
       }
     });
-    it("accepts an actual descendant sh-to-sleep exec only with current verified ancestry", async () => {
+    it("accepts an actual descendant shell-to-sleep exec only with current verified ancestry", async () => {
+      const shellExecutable =
+        process.platform === "linux"
+          ? basename(await realpath("/bin/sh"))
+          : "sh";
       const owned = child(
         "const {spawn}=require('node:child_process');const c=spawn('/bin/sh',['-c','read ready; exec /bin/sleep 5'],{stdio:['pipe','ignore','ignore']});process.on('message',()=>c.stdin.end('ready\\n'));setInterval(()=>{},1000)",
         true,
@@ -491,14 +496,16 @@ describe.skipIf(process.platform === "win32")(
         let observation = await tracker.observe();
         let until = Date.now() + 2000;
         while (
-          !observation.remaining.some((row) => row.executable === "sh") &&
+          !observation.remaining.some(
+            (row) => row.executable === shellExecutable,
+          ) &&
           Date.now() < until
         ) {
           await delay(50);
           observation = await tracker.observe();
         }
         const before = observation.remaining.find(
-          (row) => row.executable === "sh",
+          (row) => row.executable === shellExecutable,
         )!;
         expect(before).toBeDefined();
         owned.process.send!("exec");
