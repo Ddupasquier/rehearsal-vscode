@@ -44,6 +44,119 @@ afterEach(async () => {
 describe.skipIf(process.platform === "win32")(
   "native launcher identity cleanup",
   () => {
+    it.each(["?Es", "SE", "ZEs"])(
+      "waits for a captured macOS %s exit row without adopting its changed comm or signalling it",
+      async (state) => {
+        const root: NativeProcessIdentity = {
+          pid: 100001,
+          ppid: process.pid,
+          pgid: 100001,
+          state: "S",
+          started: "Thu Oct 22 14:47:10 2026",
+          executable: "Code",
+        };
+        const rows = new Map([[root.pid, root]]);
+        const tracker = createNativeEditorTracker(
+          root.pid,
+          "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
+          async () => new Map(rows),
+          "darwin",
+        );
+        await tracker.observe();
+        const exiting = { ...root, state, executable: "(Code)" };
+        rows.set(root.pid, exiting);
+        const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+        try {
+          expect(await tracker.cleanup()).toMatchObject({
+            rootObserved: true,
+            identityUncertain: false,
+            fallbackUsed: false,
+            remaining: [],
+            unknown: [],
+            awaitingReap: [exiting],
+            execTransitions: [],
+            uncertaintyHistory: [],
+          });
+          expect(signal).not.toHaveBeenCalled();
+          rows.clear();
+          expect(await tracker.observe()).toMatchObject({
+            awaitingReap: [],
+            remaining: [],
+            unknown: [],
+            identityUncertain: false,
+          });
+        } finally {
+          signal.mockRestore();
+        }
+      },
+    );
+    it.each(["linux", "darwin"] as const)(
+      "refuses unverified or changed-birth E rows on %s without new cleanup authority",
+      async (platform) => {
+        const root: NativeProcessIdentity = {
+          pid: 100001,
+          ppid: process.pid,
+          pgid: 100001,
+          state: "S",
+          started: "Thu Oct 22 14:47:10 2026",
+          executable: "Code",
+        };
+        const rows = new Map([[root.pid, root]]);
+        const tracker = createNativeEditorTracker(
+          root.pid,
+          "Code",
+          async () => new Map(rows),
+          platform,
+        );
+        await tracker.observe();
+        rows.set(root.pid, {
+          ...root,
+          state: "?Es",
+          executable: "(Code)",
+          ...(platform === "darwin" ? { started: "different birth" } : {}),
+        });
+        const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+        try {
+          expect(await tracker.cleanup()).toMatchObject({
+            identityUncertain: true,
+            fallbackUsed: false,
+            awaitingReap: [],
+          });
+          expect(signal).not.toHaveBeenCalled();
+        } finally {
+          signal.mockRestore();
+        }
+      },
+    );
+    it("does not establish root ownership from a first-seen macOS exit row", async () => {
+      const root: NativeProcessIdentity = {
+        pid: 100001,
+        ppid: process.pid,
+        pgid: 100001,
+        state: "?Es",
+        started: "Thu Oct 22 14:47:10 2026",
+        executable: "Code",
+      };
+      const tracker = createNativeEditorTracker(
+        root.pid,
+        "Code",
+        async () => new Map([[root.pid, root]]),
+        "darwin",
+      );
+      const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        expect(await tracker.cleanup()).toMatchObject({
+          rootObserved: false,
+          identityUncertain: true,
+          fallbackUsed: false,
+          awaitingReap: [],
+          unknown: [root],
+        });
+        expect(signal).not.toHaveBeenCalled();
+      } finally {
+        signal.mockRestore();
+      }
+    });
     it.each(["MainThread", "-"])(
       "refuses an unverified %s root without granting signal authority",
       async (executable) => {

@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile, access } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+  access,
+  symlink,
+  readFile,
+} from "node:fs/promises";
 import { resolve, join } from "node:path";
 
 interface Identity {
@@ -24,6 +32,13 @@ interface Client {
   cleanup(): Promise<Cleanup>;
 }
 const helper = require("../scripts/native-editor-reads.cjs") as {
+  readRegular(
+    file: string,
+    maximumBytes?: number,
+  ): Promise<{
+    bytes: Buffer;
+    stat: { size: number; mode: number; isFile(): boolean };
+  }>;
   processArguments(platform: string): string[];
   parseProcessRows(stdout: string): Map<number, Identity>;
   processes(): Promise<Map<number, Identity>>;
@@ -32,6 +47,46 @@ const helper = require("../scripts/native-editor-reads.cjs") as {
 };
 const clients: Client[] = [],
   directories: string[] = [];
+describe("shared native scenario file boundary", () => {
+  it("reads only bounded regular bytes and preserves its observed metadata", async () => {
+    const base = resolve(__dirname, "../test-results");
+    await mkdir(base, { recursive: true });
+    const root = await mkdtemp(join(base, "native-file-unit."));
+    directories.push(root);
+    const file = join(root, "report.json");
+    await writeFile(file, "café", { mode: 0o600 });
+    const result = await helper.readRegular(file, 5);
+    expect(result.bytes.toString("utf8")).toBe("café");
+    expect(result.stat.size).toBe(5);
+    expect(result.stat.isFile()).toBe(true);
+    await expect(helper.readRegular(file, 4)).rejects.toThrow();
+    await expect(helper.readRegular(root)).rejects.toThrow();
+    for (const limit of [0, -1, NaN, Infinity, 8 * 1024 * 1024 + 1])
+      await expect(helper.readRegular(file, limit)).rejects.toThrow();
+    await expect(helper.readRegular("relative.json")).rejects.toThrow();
+  });
+  it.skipIf(process.platform === "win32")(
+    "refuses a symlink instead of reading or modifying its target",
+    async () => {
+      const base = resolve(__dirname, "../test-results");
+      await mkdir(base, { recursive: true });
+      const root = await mkdtemp(join(base, "native-file-unit."));
+      directories.push(root);
+      const file = join(root, "source.json"),
+        link = join(root, "report.json");
+      await writeFile(file, "preserved synthetic source", { mode: 0o600 });
+      await symlink(file, link);
+      await expect(helper.readRegular(link)).rejects.toThrow();
+      expect(await readFile(file, "utf8")).toBe("preserved synthetic source");
+      const directoryLink = join(root, "redirect");
+      await symlink(root, directoryLink, "dir");
+      await expect(
+        helper.readRegular(join(directoryLink, "source.json")),
+      ).rejects.toThrow();
+      expect(await readFile(file, "utf8")).toBe("preserved synthetic source");
+    },
+  );
+});
 describe("native process-state parsing", () => {
   it("reads executable paths instead of mutable Linux thread names", () => {
     expect(helper.processArguments("linux")).toEqual([

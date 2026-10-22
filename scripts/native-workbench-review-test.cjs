@@ -1,46 +1,18 @@
 /** Real installed workbench observations. Operator actions are never injected or mocked. */
 const assert = require("node:assert/strict");
 const { randomUUID, createHash } = require("node:crypto");
-const { constants } = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
 const vscode = require("vscode");
 const { readConfiguration } = require("./native-editor-driver.cjs");
-const { createReadClient, writeJson } = require("./native-editor-reads.cjs");
+const {
+  createReadClient,
+  readRegular: regular,
+  writeJson,
+} = require("./native-editor-reads.cjs");
 
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
-async function regular(file, maximumBytes = 1024 * 1024) {
-  const handle = await fs.open(
-    file,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const before = await handle.stat();
-    assert.ok(before.isFile() && before.size <= maximumBytes);
-    const bytes = Buffer.alloc(before.size + 1);
-    let length = 0;
-    while (length < bytes.length) {
-      const part = await handle.read(
-        bytes,
-        length,
-        bytes.length - length,
-        null,
-      );
-      if (!part.bytesRead) break;
-      length += part.bytesRead;
-    }
-    const after = await handle.stat();
-    assert.ok(
-      length === before.size &&
-        after.size === before.size &&
-        after.mtimeMs === before.mtimeMs,
-    );
-    return { bytes: bytes.subarray(0, length), stat: after };
-  } finally {
-    await handle.close();
-  }
-}
 async function waitFor(check, timeoutMs = 60000) {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {

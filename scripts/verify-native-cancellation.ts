@@ -47,7 +47,8 @@ export type NativeScenario =
   | "cancellation"
   | "workbench-review"
   | "presentation-review"
-  | "configuration-guidance";
+  | "configuration-guidance"
+  | "comparison-export";
 export function selectNativeScenario(
   value: unknown = "cancellation",
 ): NativeScenario {
@@ -55,8 +56,9 @@ export function selectNativeScenario(
     value === "cancellation" ||
       value === "workbench-review" ||
       value === "presentation-review" ||
-      value === "configuration-guidance",
-    "Native scenario must be cancellation, workbench-review, presentation-review or configuration-guidance; script paths are not accepted.",
+      value === "configuration-guidance" ||
+      value === "comparison-export",
+    "Native scenario must be cancellation, workbench-review, presentation-review, configuration-guidance or comparison-export; script paths are not accepted.",
   );
   return value;
 }
@@ -80,7 +82,9 @@ export function nativeCandidateForScenario(
       numericRefusal: "before-review",
     });
   if (
-    scenario !== "configuration-guidance" &&
+    ["cancellation", "workbench-review", "presentation-review"].includes(
+      scenario,
+    ) &&
     expectedSha === HISTORICAL_PUBLIC_VSIX_SHA
   )
     return Object.freeze({
@@ -126,6 +130,7 @@ const scenarioFiles: Readonly<Record<NativeScenario, string>> = Object.freeze({
   "workbench-review": "native-workbench-review-test.cjs",
   "presentation-review": "native-workbench-review-test.cjs",
   "configuration-guidance": "native-workbench-review-test.cjs",
+  "comparison-export": "native-comparison-export-test.cjs",
 });
 export function nativeZshInitialization(integrationPath: string): string {
   const expected = resolve(
@@ -194,13 +199,15 @@ export function createNativeEditorTracker(
   pid: number,
   executable: string,
   readProcesses: () => Promise<ProcessRows> = nativeProcesses.processes,
+  platform: NodeJS.Platform = process.platform,
 ) {
   assert.ok(Number.isSafeInteger(pid) && pid > 0);
   const captured: ProcessRows = new Map();
   // Reap-only identities never grant ancestry or signal authority.
   const waitOnly: ProcessRows = new Map();
   const awaitingReap = (row: NativeProcessIdentity | undefined) =>
-    row?.state?.startsWith("Z") === true;
+    row?.state?.startsWith("Z") === true ||
+    (platform === "darwin" && row?.state?.includes("E") === true);
   const result: NativeEditorCleanup = {
     rootObserved: false,
     fallbackUsed: false,
@@ -341,8 +348,9 @@ export function createNativeEditorTracker(
     result.remaining = [...captured.values()].filter((row) =>
       matches(row, rows.get(row.pid)),
     );
-    // A first-seen zombie requires current verified ancestry. Once proven, it
-    // remains wait-only after reparenting; neither case grants signal authority.
+    // Zombies and macOS E (trying to exit) rows require captured birth/group or
+    // current verified ancestry. They remain wait-only after reparenting and
+    // never grant signal/ancestry authority, even if ps changes their comm name.
     const reaping = new Set(result.awaitingReap.map((row) => row.pid));
     result.unknown = [...rows.values()].filter(
       (row) =>
@@ -1039,6 +1047,11 @@ async function main() {
       join(repository, "scripts", scenarioFiles[scenario]),
       join(harness, scenarioFiles[scenario]),
     );
+    if (scenario === "comparison-export")
+      await copyFile(
+        join(repository, "scripts/native-comparison-evidence.cjs"),
+        join(harness, "native-comparison-evidence.cjs"),
+      );
     const configPath = join(temporary, "configuration.json");
     await writeFile(
       configPath,
@@ -1295,7 +1308,9 @@ async function main() {
       assert.equal(result.sentinelPreserved, true);
       assert.equal(result.sentinelCleanedUp, true);
     } else {
-      assert.equal(result.workbenchReviewPassed, true);
+      if (scenario === "comparison-export")
+        assert.equal(result.comparisonExportPassed, true);
+      else assert.equal(result.workbenchReviewPassed, true);
       assert.equal(result.ownedReadProcessesGone, true);
       assert.equal(result.configurationRestored, true);
       assert.equal(result.baselineGenerationPreserved, true);
