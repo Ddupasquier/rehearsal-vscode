@@ -1,5 +1,22 @@
 # Editor-facing CLI audit
 
+## Current release guidance
+
+For current installation and supported-platform guidance, use the
+[official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/):
+Free Starter **0.1.23**, canonical ID **`rehearsal-db.rehearsal-db`**, paired with
+core **1.0.2**. [Issue #186](https://github.com/Ddupasquier/rehearsal-db/issues/186)
+records the migration-diagnosis and workflow fixes;
+[issue #137](https://github.com/Ddupasquier/rehearsal-db/issues/137) records the later
+configuration-recovery patch. Remaining integrated native, provider and accessibility
+acceptance is tracked separately in
+[issue #130](https://github.com/Ddupasquier/rehearsal-db/issues/130).
+
+This report preserves artifact-specific observations and describes focused companion
+checks. Historical identities, versions, publication status and resource blockers below
+belong to their recorded observations, not the current release. They do not certify
+later artifacts or unexercised native/provider/accessibility behavior.
+
 ## Historical Environment Workbench acceptance
 
 The observations below were validated against the local `@rehearsal-db/core@0.1.0-rc.4` Environment Workbench
@@ -115,6 +132,135 @@ do not become proof of row or schema equality. Root and nested configurations, s
 invalid proposals, unchanged reviewed files and the original immutable generation are
 checked independently by Lab. It does not certify native save dialogs, editor writes,
 keyboard/focus behavior or assistive technology; those need separate direct observations.
+
+## Native editor-owned cancellation companion
+
+The separate macOS-only companion exercises the installed canonical extension's real
+activation, project terminal, Activity cancellation and public CLI state. It is opt-in,
+not a new CI or release gate:
+
+```bash
+node --import tsx scripts/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json
+```
+
+The closed fixture contract in the launcher requires a fresh leased manual PostgreSQL
+session, the exact published core 1.0.2 artifact and canonical 0.1.23 VSIX, local engine
+identity, configured loopback addresses, immutable baseline generation and hashes/modes
+of preserved files. Prepare the synthetic source, baseline and runtime through Test Lab's
+maintained manual workflow first; retire its temporary reader and stop its source.
+Use `keep-until-stop` for both lifecycle policies. Do not open the application beforehand.
+Neither an existing user's sandbox nor a generic project is an accepted fixture.
+The current public VSIX is pinned by both version and SHA-256; an arbitrary caller
+checksum cannot authorize another artifact. Reports name the actual selected version,
+checksum and public/private distribution. The original 0.1.22 public-artifact scenarios
+remain available only with their historical exact checksum; the historical private
+0.1.22 candidate remains restricted to `configuration-guidance`. These are separate
+observations, never current-release native acceptance by inference.
+
+The Mac must be unlocked normally; the companion does not bypass the login screen.
+The launcher verifies exact installed inventories and creates its own editor profile.
+Its private zsh initialization loads the selected VS Code application's official shell
+integration script, resolved before startup; automatic injection is disabled only in that
+disposable profile. User shell files and settings are untouched. Missing real shell API
+events still fail acceptance; the compatibility terminal fallback is not substituted.
+Both automatic-update options are off. A real operator declines metadata checks if
+offered, approves Open Sandbox, then selects Activity's **Cancel editor-started operation**
+and confirms **Cancel Operation**. The nonce-bound phase/control files coordinate those
+observations; they never replace consent. With repeated-confirmation coverage enabled,
+the second real command must return while the original confirmation stays open.
+
+Require passing native and final verification reports: actual exact-execution start and
+terminal closure, faithfully recorded shell-exit evidence when emitted,
+matching-identity descendant cleanup, unavailable application listener, surviving unrelated
+sentinel, unchanged baseline/files/leases and a still-running database. The launcher
+reaps only its isolated editor, uninstalls its private extension copy and removes that
+profile on success. The driver uses ordinary development-host activation, not VS Code's
+automated-test mode, which deliberately suppresses real confirmation dialogs. Closing
+the isolated editor and matching-identity descendant cleanup are recorded separately
+from cancellation evidence. The caller still owns fixture databases, workspace and lease cleanup.
+Cleanup observes bounded process identities before signalling individual owned processes;
+a numeric process group or an ambiguous signal-zero error is not ownership evidence.
+Failure retains bounded evidence; fallback cleanup cannot turn failure into a pass.
+If a scenario requests recovery, actual dirty documents remain at finalization, or
+editor state cannot be verified, the driver records a failed recovery disposition and
+does not close the isolated window. Only a bounded dirty-document count/boolean is
+recorded, never buffer text or paths. The launcher then skips signalling cleanup,
+extension uninstall and profile removal, and retires its own waits while retaining
+that actual window/profile for explicit inspection and saving. Reconcile the failed
+receipt and save unknown work before manually closing or cleaning up that owned host;
+retaining a profile alone is not proof that an unsaved buffer was backed up. A proven
+clean success or clean failure retains the existing owned-editor cleanup behavior.
+
+This is not mid-migration rollback, Windows/Remote-WSL, VoiceOver or subjective layout
+acceptance. Command dispatch and control acknowledgements alone do not prove visible UI
+actions. Record actual rendered observations separately. A graceful Open close may record
+completed core history; missing exact shell-exit evidence leaves the editor receipt
+unverified, not Cancelled or successfully completed. Clean cancellation and a confirmed
+editor exit receipt are distinct observations; the companion never invents the latter.
+
+### Native workbench review scenario
+
+After cancellation acceptance finishes, the same opt-in launcher can reuse that leased
+synthetic workspace without a reset:
+
+```bash
+node --import tsx scripts/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json workbench-review
+```
+
+This fixed scenario requires the original active 10,003-row baseline and a genuinely
+retained, inactive three-row baseline with the same migration boundary. Prepare the
+inactive generation through the installed public baseline builder with `activate: false`;
+never change the active pointer, source, database or privacy key for a comparison demo.
+The synthetic fixture starts with retention 2. Its unprivileged database and application
+ports are derived from the verified manual-session lease, not a fixed machine port;
+the scenario refuses a URL outside that exact lease rather than guessing its meaning.
+
+The installed extension activates normally. Actual UI actions open and cancel a
+configuration review, apply only retention 2 → 3, and return to the project. The driver
+checks real review tabs, exact saved bytes, unchanged comments and bounded save events.
+Another review is deliberately made stale by saving one exact, harmless source comment;
+the actual stale Apply must refuse without overwriting that edit. An out-of-bounds
+resource-policy proposal must be refused before review on 0.1.23; historical 0.1.22
+instead requires complete validation to refuse its actual reviewed Apply without saving.
+A fresh valid review is then opened and cancelled. Visible
+errors require separate native observation; coordination alone never proves them.
+Restoration accepts only known clean, saved fixture revisions after the review closes;
+unknown disk or unsaved changes are preserved and fail acceptance.
+
+Two exclusively created, display-only migration files provide contrasting order/name
+controls. They are never applied; public candidate plans must remain identical across
+the coordinated display phase. Cleanup removes only matching owned file identities and
+bytes. The current native migration display has three rows, not a large-list acceptance
+claim. A separate read-only inventory phase permits keyboard/focus, theme, large-text,
+layout and assistive-technology observations without starting or stopping services.
+Comparison/export acceptance has its own workflow and is not run by this
+workbench-review scenario; both prepared baselines remain protected.
+
+Require `workbenchReviewPassed`, preserved baseline/files/leases, restored configuration,
+zero terminal executions and clean read-child closure without fallback. This certifies
+only those objective observations. Phase acknowledgements do not certify that a filter
+was visibly used, a refusal was readable, or that layout, focus, keyboard, themes or
+screen readers worked. Record those observations separately. A genuinely stopped-engine
+inspection and provider-login checks remain separate; this scenario neither stops the
+shared engine nor claims to finish every workbench ticket.
+
+For a continuation that only needs rendered inventory/migration observations, select
+`presentation-review` instead of `workbench-review`. It skips all configuration edits
+and retains the same file, baseline, zero-terminal, complete-plan and cleanup checks.
+Its longer bounded inventory phase permits direct theme, keyboard and layout work;
+it is not proof that any of those observations happened. Do not repeat already-proven
+configuration acceptance or enable spoken accessibility output without permission.
+
+The fixed `configuration-guidance` scenario accepts current public 0.1.23 or the
+separately pinned historical private candidate. It exercises a stale review refusal, an invalid numeric value
+refused before review, and correction into a fresh cancellable review. Native HTML
+validation may refuse the invalid value before a host message: observe the field help,
+no review and no save, rather than requiring a particular toast. Capture the actual
+stale alert, disabled Apply and focused Close separately. It creates no SQL files and
+does not imply that the private candidate was released or upgraded in a user's editor.
+The source supports these exact artifacts; unit and process checks of this companion
+do not establish a fresh native GUI run for 0.1.23. Native execution stays separately
+opt-in and must never enable speech or speaker output without owner authorization.
 
 ## Installed migration and endpoint companion
 

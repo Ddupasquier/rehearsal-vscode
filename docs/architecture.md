@@ -287,6 +287,12 @@ workspace folder. For a nested workspace it may follow normal package-manager ho
 up to—but never above—the containing Git repository. It validates the manifest and
 declared `rehearsal` bin, then launches that bin with the extension host's Node
 executable. It uses argument arrays and `shell: false`.
+This inspection runtime is independent of an external `node` on `PATH` and of project
+version-manager selectors. Foreground actions instead use the normal project terminal's
+selected Node and package manager. The extension does not discover or install a second
+Node runtime, source user shell initialization, alter version-manager aliases or override
+a project selector. The [Node setup guide](../README.md#node-setup-and-runtime-selection)
+owns that user-facing distinction and recovery.
 Manifest reads are bounded to 1 MiB through a regular-file handle. The executable's
 canonical path must remain inside the canonical package root; a symlink cannot redirect
 inspection to an unrelated program. Internal package-manager links remain supported.
