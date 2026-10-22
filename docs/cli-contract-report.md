@@ -302,6 +302,9 @@ coordinate actions: screenshots and direct silent observations of the rendered c
 and actual Save-dialog cancel/save remain separate evidence. Do not claim them from the
 model checks, file writes or green unit suite. Each operator acknowledgement allows up to
 180 seconds; the launcher's existing ten-minute total scenario limit still applies.
+Publish each complete acknowledgement through a new sibling file and an atomic rename
+over `control.json`. Do not edit the polled file in place: stable-byte reading correctly
+refuses a concurrent rewrite rather than accepting ambiguous control input.
 Read-command deadlines, memory preflight, cleanup and data protections are unchanged.
 Captured macOS processes with the kernel's `E` (trying to exit) state, like zombies,
 are wait-only: they grant no signal or ancestry authority. Cleanup still requires
