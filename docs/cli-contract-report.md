@@ -300,7 +300,10 @@ Dirty or changed report/configuration files are retained for explicit recovery; 
 driver never closes an editor with unknown or unsaved work. Phase acknowledgements only
 coordinate actions: screenshots and direct silent observations of the rendered comparison
 and actual Save-dialog cancel/save remain separate evidence. Do not claim them from the
-model checks, file writes or green unit suite. This tooling introduces no new CI gate,
+model checks, file writes or green unit suite. Each operator acknowledgement allows up to
+180 seconds; the launcher's existing ten-minute total scenario limit still applies.
+Read-command deadlines, memory preflight, cleanup and data protections are unchanged.
+This tooling introduces no new CI gate,
 product payload, pricing restriction, provider login or database lifecycle operation.
 
 ## Installed migration and endpoint companion

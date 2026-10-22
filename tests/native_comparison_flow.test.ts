@@ -37,7 +37,9 @@ type Mode =
   | "report-drift"
   | "dirty-report"
   | "missing-report"
-  | "unknown-report";
+  | "unknown-report"
+  | "operator-delayed"
+  | "operator-timeout";
 async function runScenario(mode: Mode) {
   const base = resolve(__dirname, "../test-results");
   await mkdir(base, { recursive: true });
@@ -105,6 +107,8 @@ async function runScenario(mode: Mode) {
     publicReads: string[] = [],
     acknowledgements: string[] = [];
   let phase = "initial",
+    clock = 0,
+    phaseStartedAt = 0,
     verified = false,
     jsonDestination: string | undefined,
     markdownDestination: string | undefined,
@@ -156,6 +160,7 @@ async function runScenario(mode: Mode) {
     await writeFile(file, JSON.stringify(value));
     if (file !== config.phasePath) return;
     phase = String(value.phase);
+    phaseStartedAt = clock;
     const instruction = String(value.instruction);
     const actions: Record<string, string> = {
       "comparison-setup": "begin-comparison",
@@ -226,7 +231,18 @@ async function runScenario(mode: Mode) {
       process: { env: {}, versions: { node: process.versions.node } },
       Buffer,
       URL,
+      Date: class extends Date {
+        static override now() {
+          return clock;
+        }
+      },
       require: (name: string) => {
+        if (name === "node:timers/promises")
+          return {
+            setTimeout: async (milliseconds: number) => {
+              clock += milliseconds;
+            },
+          };
         if (name === "vscode") return vscode;
         if (name === "./native-editor-driver.cjs")
           return { readConfiguration: async () => config };
@@ -235,6 +251,18 @@ async function runScenario(mode: Mode) {
             createReadClient: () => reads,
             writeJson,
             readRegular: async (file: string, limit?: number) => {
+              if (
+                file === config.controlPath &&
+                (mode === "operator-timeout" ||
+                  (mode === "operator-delayed" &&
+                    clock - phaseStartedAt < 90000))
+              )
+                throw Object.assign(
+                  new Error("No operator acknowledgement yet"),
+                  {
+                    code: "ENOENT",
+                  },
+                );
               if (
                 mode === "unknown-report" &&
                 phase === "export-json" &&
@@ -303,6 +331,7 @@ async function runScenario(mode: Mode) {
     acknowledgements,
     jsonDestination,
     markdownDestination,
+    clock,
   };
 }
 
@@ -359,5 +388,18 @@ describe("comparison-export orchestration with simulated UI/API (not native acce
     expect(observed.rejected).toBe(true);
     expect(observed.result.status).toBe("failed");
     expect(observed.result.comparisonExportPassed).toBe(false);
+  });
+  it("allows a real operator acknowledgement after 60 seconds but within the approved 180-second bound", async () => {
+    const observed = await runScenario("operator-delayed");
+    expect(observed.rejected).toBe(false);
+    expect(observed.result.operatorAcknowledgements).toHaveLength(6);
+    expect(observed.clock).toBe(6 * 90000);
+  });
+  it("fails at 180 seconds without an acknowledgement and preserves recovery evidence", async () => {
+    const observed = await runScenario("operator-timeout");
+    expect(observed.rejected).toBe(true);
+    expect(observed.result.comparisonExportPassed).toBe(false);
+    expect(observed.result.operatorAcknowledgements).toHaveLength(0);
+    expect(observed.clock).toBe(180000);
   });
 });

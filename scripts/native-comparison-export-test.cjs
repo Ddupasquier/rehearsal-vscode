@@ -134,7 +134,7 @@ exports.run = async () => {
           return false;
         throw error;
       }
-    });
+    }, 180000);
     result.operatorAcknowledgements.push({
       phase,
       action,
