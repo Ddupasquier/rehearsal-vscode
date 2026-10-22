@@ -35,6 +35,7 @@ describe("native companion scenario selection", () => {
     "workbench-review",
     "presentation-review",
     "configuration-guidance",
+    "comparison-export",
   ])("accepts the fixed %s scenario", (value) => {
     expect(selectNativeScenario(value)).toBe(value);
   });
@@ -54,7 +55,7 @@ describe("native companion scenario selection", () => {
     "rejects unreviewed scenario input without echoing it",
     (value) => {
       expect(() => selectNativeScenario(value)).toThrow(
-        "Native scenario must be cancellation, workbench-review, presentation-review or configuration-guidance",
+        "Native scenario must be cancellation, workbench-review, presentation-review, configuration-guidance or comparison-export",
       );
       try {
         selectNativeScenario(value);
@@ -69,6 +70,7 @@ describe("native companion scenario selection", () => {
     "workbench-review",
     "presentation-review",
     "configuration-guidance",
+    "comparison-export",
   ] as const)("uses the current exact public artifact for %s", (scenario) => {
     expect(nativeCandidateShaForScenario(scenario)).toBe(
       "468c17f604e65b1f64a726094a652126d1b696754833fb290c58ca4efc96cecd",
@@ -115,6 +117,12 @@ describe("native companion scenario selection", () => {
       ).toThrow("exact reviewed native-companion artifact");
     expect(() =>
       nativeCandidateForScenario("configuration-guidance", historicalPublic),
+    ).toThrow("exact reviewed native-companion artifact");
+    expect(() =>
+      nativeCandidateForScenario("comparison-export", historicalPublic),
+    ).toThrow("exact reviewed native-companion artifact");
+    expect(() =>
+      nativeCandidateForScenario("comparison-export", historicalPrivate),
     ).toThrow("exact reviewed native-companion artifact");
   });
   it.each(

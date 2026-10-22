@@ -47,7 +47,8 @@ export type NativeScenario =
   | "cancellation"
   | "workbench-review"
   | "presentation-review"
-  | "configuration-guidance";
+  | "configuration-guidance"
+  | "comparison-export";
 export function selectNativeScenario(
   value: unknown = "cancellation",
 ): NativeScenario {
@@ -55,8 +56,9 @@ export function selectNativeScenario(
     value === "cancellation" ||
       value === "workbench-review" ||
       value === "presentation-review" ||
-      value === "configuration-guidance",
-    "Native scenario must be cancellation, workbench-review, presentation-review or configuration-guidance; script paths are not accepted.",
+      value === "configuration-guidance" ||
+      value === "comparison-export",
+    "Native scenario must be cancellation, workbench-review, presentation-review, configuration-guidance or comparison-export; script paths are not accepted.",
   );
   return value;
 }
@@ -80,7 +82,9 @@ export function nativeCandidateForScenario(
       numericRefusal: "before-review",
     });
   if (
-    scenario !== "configuration-guidance" &&
+    ["cancellation", "workbench-review", "presentation-review"].includes(
+      scenario,
+    ) &&
     expectedSha === HISTORICAL_PUBLIC_VSIX_SHA
   )
     return Object.freeze({
@@ -126,6 +130,7 @@ const scenarioFiles: Readonly<Record<NativeScenario, string>> = Object.freeze({
   "workbench-review": "native-workbench-review-test.cjs",
   "presentation-review": "native-workbench-review-test.cjs",
   "configuration-guidance": "native-workbench-review-test.cjs",
+  "comparison-export": "native-comparison-export-test.cjs",
 });
 export function nativeZshInitialization(integrationPath: string): string {
   const expected = resolve(
@@ -1039,6 +1044,11 @@ async function main() {
       join(repository, "scripts", scenarioFiles[scenario]),
       join(harness, scenarioFiles[scenario]),
     );
+    if (scenario === "comparison-export")
+      await copyFile(
+        join(repository, "scripts/native-comparison-evidence.cjs"),
+        join(harness, "native-comparison-evidence.cjs"),
+      );
     const configPath = join(temporary, "configuration.json");
     await writeFile(
       configPath,
@@ -1295,7 +1305,9 @@ async function main() {
       assert.equal(result.sentinelPreserved, true);
       assert.equal(result.sentinelCleanedUp, true);
     } else {
-      assert.equal(result.workbenchReviewPassed, true);
+      if (scenario === "comparison-export")
+        assert.equal(result.comparisonExportPassed, true);
+      else assert.equal(result.workbenchReviewPassed, true);
       assert.equal(result.ownedReadProcessesGone, true);
       assert.equal(result.configurationRestored, true);
       assert.equal(result.baselineGenerationPreserved, true);
