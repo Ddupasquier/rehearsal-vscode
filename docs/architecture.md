@@ -489,6 +489,13 @@ and [document mirror](https://github.com/microsoft/vscode/blob/main/src/vs/edito
 source, not an observed native decoding guarantee for every encoding path. Model-backed
 regressions do not replace separately pending native acceptance.
 
+Source navigation has one shared in-flight slot per workspace-panel owner, covering
+both failure-input and static-finding opening across its projects. Repeated clicks while
+it is occupied are ignored, not queued or retried. The slot releases in `finally` on
+success/refusal and is cleared on disposal; existing disposed/current-context guards
+still prevent stale continuation. Each accepted operation retains its two sequential
+bounded raw-file checks rather than multiplying work for concurrent messages.
+
 Explicit editor cancellation observes only public activity for at most 30 seconds,
 then refreshes actual project state. This is a bounded completion check, not idle
 polling or a daemon. Removed workspaces and extension disposal abort the owned read.

@@ -98,6 +98,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
   private readonly editing = new Set<string>();
   private readonly formDraftRevisions = new Map<string, number>();
   private readonly pendingExports = new Set<string>();
+  private sourceNavigationPending = false;
   private readonly pendingConfigurationReviews = new Set<string>();
   private readonly liveDocuments = new Map<
     string,
@@ -236,6 +237,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
+    this.sourceNavigationPending = false;
     for (const subscription of this.subscriptions) subscription.dispose();
     for (const panel of this.panels.values()) panel.dispose();
     this.panels.clear();
@@ -312,12 +314,28 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
     const snapshot = this.projects.snapshotFor(workspaceKey);
     if (!snapshot) return;
-    if (message.type === "openMigrationInsight") {
-      await this.openMigrationInsight(panel, workspaceKey, message.findingId);
-      return;
-    }
-    if (message.type === "openMigrationFailure") {
-      await this.openMigrationFailure(panel, workspaceKey, message.operationId);
+    if (
+      message.type === "openMigrationInsight" ||
+      message.type === "openMigrationFailure"
+    ) {
+      if (this.disposed || this.sourceNavigationPending) return;
+      this.sourceNavigationPending = true;
+      try {
+        if (message.type === "openMigrationInsight")
+          await this.openMigrationInsight(
+            panel,
+            workspaceKey,
+            message.findingId,
+          );
+        else
+          await this.openMigrationFailure(
+            panel,
+            workspaceKey,
+            message.operationId,
+          );
+      } finally {
+        this.sourceNavigationPending = false;
+      }
       return;
     }
     if (message.type === "reviewStaleStop") {

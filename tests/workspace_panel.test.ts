@@ -558,6 +558,128 @@ describe("exact static finding navigation", () => {
       ).handleMessage(editor.panels.at(-1)!, key, message);
     return { ...fixture, snapshot, report, findingId, checked, document, send };
   };
+  it.each(["insight", "failure"] as const)(
+    "bounds repeated %s and cross-kind source clicks to one in-flight operation",
+    async (firstKind) => {
+      const failure = migrationFailureFixture(),
+        fixture = setup();
+      fixture.update({
+        ...fixture.snapshot,
+        activity: failure.snapshot.activity!,
+      });
+      const checked =
+        firstKind === "insight" ? fixture.checked : failure.checked;
+      const document =
+        firstKind === "insight" ? fixture.document : failure.document;
+      editor.module.workspace.openTextDocument.mockResolvedValue(document);
+      let release!: () => void,
+        active = 0,
+        maximum = 0,
+        calls = 0;
+      const wait = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      editor.readMigration.mockImplementation(async () => {
+        active++;
+        maximum = Math.max(maximum, active);
+        try {
+          if (++calls === 1) await wait;
+          else await Promise.resolve();
+          return checked;
+        } finally {
+          active--;
+        }
+      });
+      const insight = {
+          type: "openMigrationInsight",
+          findingId: fixture.findingId,
+        },
+        failed = {
+          type: "openMigrationFailure",
+          operationId: failure.operationId,
+        };
+      await fixture.owner.open(key);
+      const pending = fixture.send(firstKind === "insight" ? insight : failed);
+      expect(editor.readMigration).toHaveBeenCalledTimes(1);
+      await Promise.all(
+        Array.from({ length: 12 }, (_, index) =>
+          fixture.send(index % 2 ? insight : failed),
+        ),
+      );
+      expect(editor.readMigration).toHaveBeenCalledTimes(1);
+      expect(editor.module.workspace.openTextDocument).not.toHaveBeenCalled();
+      release();
+      await pending;
+      expect(maximum).toBe(1);
+      expect(active).toBe(0);
+      expect(editor.readMigration).toHaveBeenCalledTimes(2);
+      expect(editor.module.window.showTextDocument).toHaveBeenCalledTimes(1);
+      await fixture.send(firstKind === "insight" ? insight : failed);
+      expect(editor.readMigration).toHaveBeenCalledTimes(4);
+      expect(maximum).toBe(1);
+    },
+  );
+  it("keeps the same single slot while the native document API is pending", async () => {
+    const fixture = setup();
+    await fixture.owner.open(key);
+    let release!: () => void;
+    editor.module.workspace.openTextDocument.mockImplementationOnce(
+      async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return fixture.document;
+      },
+    );
+    const pending = fixture.send();
+    await vi.waitFor(() =>
+      expect(editor.module.workspace.openTextDocument).toHaveBeenCalledTimes(1),
+    );
+    await fixture.send();
+    expect(editor.readMigration).toHaveBeenCalledTimes(1);
+    expect(editor.module.workspace.openTextDocument).toHaveBeenCalledTimes(1);
+    release();
+    await pending;
+    expect(editor.readMigration).toHaveBeenCalledTimes(2);
+    expect(editor.module.window.showTextDocument).toHaveBeenCalledTimes(1);
+  });
+  it("releases source navigation after a refusal without queuing or retrying rejected work", async () => {
+    const fixture = setup();
+    await fixture.owner.open(key);
+    editor.readMigration.mockRejectedValueOnce(new Error("unavailable"));
+    await fixture.send();
+    expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+    await fixture.send();
+    expect(editor.readMigration).toHaveBeenCalledTimes(3);
+    expect(editor.module.window.showTextDocument).toHaveBeenCalledTimes(1);
+  });
+  it("releases the in-flight source guard on disposal and refuses further work or stale opening", async () => {
+    const fixture = setup();
+    await fixture.owner.open(key);
+    let release!: () => void;
+    editor.readMigration.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return fixture.checked;
+    });
+    const pending = fixture.send();
+    expect(
+      (fixture.owner as unknown as { sourceNavigationPending: boolean })
+        .sourceNavigationPending,
+    ).toBe(true);
+    fixture.owner.dispose();
+    expect(
+      (fixture.owner as unknown as { sourceNavigationPending: boolean })
+        .sourceNavigationPending,
+    ).toBe(false);
+    await fixture.send();
+    expect(editor.readMigration).toHaveBeenCalledTimes(1);
+    release();
+    await pending;
+    expect(editor.module.workspace.openTextDocument).not.toHaveBeenCalled();
+    expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+  });
   it.each(["add_index", "DropWidgets", "约束"])(
     "opens unchanged %s at the bounded exact UTF-16 finding position without execution or edits",
     async (name) => {
