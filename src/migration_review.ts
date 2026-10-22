@@ -1,5 +1,6 @@
 /** Strict bounded public migration plan; filenames never grant SQL safety. */
 import { ContractError } from "./contracts.js";
+import { isSafeMigrationFilename } from "./migration_source.js";
 export interface MigrationReviewEntry {
   readonly id: string;
   readonly target: string;
@@ -126,7 +127,7 @@ export const parseMigrationReviewPlan = (
       const migrationName = text(entry.name);
       const filename = text(entry.filename);
       if (
-        !/^[a-z0-9_]+$/u.test(migrationName) ||
+        !isSafeMigrationFilename(filename) ||
         filename !== `${version}_${migrationName}.sql` ||
         (status === "candidate"
           ? entry.warnings.length !== 1

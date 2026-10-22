@@ -218,6 +218,37 @@ rewrites or retries the migration automatically. Follow the main
 [failure-and-fix tutorial](https://ddupasquier.github.io/rehearsal-db/tutorial/) to review
 a fresh candidate, observe a safe failure, correct it and verify the result.
 
+### Static Migration Insights (source candidate)
+
+The next source candidate adds optional **Static Migration Insights** inside each
+pending migration's disclosure on **Migrations**. This is not present in public extension
+0.1.23/core 1.0.2. It appears only when a supported workspace core explicitly advertises
+the versioned Insights contract and its complete plan matches the current candidate
+digest, baseline, targets and exact file hashes. Older compatible cores keep the ordinary
+review and rehearsal controls unchanged.
+
+Insights can flag destructive operations, broad updates/deletes, new constraints and
+NOT NULL requirements with fixed explanations and review suggestions. Unsupported,
+malformed or bounded input is **unknown**, not safe. **No detected warning is neither a
+safety verdict nor proof that SQL syntax is valid.** Data impact, permissions, locks and
+production behavior still require review and proof in your disposable runtime.
+
+Core reads bounded project-local SQL without executing it, starting an engine or
+contacting a database. SQL bodies, identifiers and row values are not included in
+findings. **Open exact migration at finding** verifies unchanged UTF-8 bytes and an
+unchanged clean editor buffer before navigating to a reported lexical line/column.
+Changed, dirty, missing or redirected input requires a fresh inspection; it is never
+automatically fixed or run. This static position is separate from failure attribution,
+which still does not guess a provider error location.
+
+The analysis is limited to 1,000 pending candidates, 10,000 files in total, 10,000 entries
+per migration directory, 2 MiB per file, 16 MiB total input and 5,000 findings. The workbench shows at
+most ten findings per migration, explicitly noting any omitted findings; use
+`rehearsal inspect insights --json` for the complete bounded report. Unavailable or invalid
+optional analysis does not block ordinary MVP controls or weaken their confirmations.
+
+### Project setup and runtime review
+
 If the tutorial CLI works but the dashboard says **Project package link needs repair**,
 npm linked its package outside this repository. Keep the same project and baseline.
 Install a project-local copy:

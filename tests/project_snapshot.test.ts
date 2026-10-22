@@ -20,6 +20,7 @@ import {
 import type { SnapshotClient } from "../src/project_snapshot.js";
 import { AdapterError, RehearsalCliError } from "../src/process_adapter.js";
 import { knownWorkspaceTargets } from "../src/workspace_view_state.js";
+import { insightPlan, insightReport } from "./migration_insights_fixture.js";
 
 const envelope = <Data>(command: string, data: Data, status = "success") => ({
   result: {
@@ -329,6 +330,109 @@ describe("independent baseline scope provider consistency", () => {
       expect(nested.reviewTargets).toBeUndefined();
     },
   );
+});
+
+describe("optional Migration Insights inspection", () => {
+  const inspect = async (change = "valid") => {
+    const base = client(),
+      commands: Parameters<SnapshotClient["command"]>[0][] = [];
+    const snapshot = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: change !== "untrusted",
+      client: {
+        ...base,
+        version: async (...args) => ({
+          ...(await base.version(...args)),
+          ...(change !== "missing-plan"
+            ? { migrationReviewSchema: 1 as const }
+            : {}),
+          ...(change !== "absent"
+            ? { migrationInsightsSchema: 1 as const }
+            : {}),
+        }),
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          commands.push(options);
+          if (options.expectedCommand === "inspect plan")
+            return envelope("inspect plan", {
+              ...insightPlan(),
+              safety: {
+                readsSqlBodiesForSafety: false,
+                executesSql: false,
+                startsEngine: false,
+              },
+            }) as { result: ResultEnvelope<Data>; exitCode: number };
+          if (options.expectedCommand === "inspect insights") {
+            if (change === "failed" || change === "oversize")
+              throw new AdapterError(
+                change === "oversize" ? "output_limit" : "timeout",
+                "PRIVATE_PROVIDER_OUTPUT",
+              );
+            const raw = insightReport();
+            if (change === "invalid") raw.safety.executesSql = true;
+            if (change === "stale-hash")
+              raw.targets[0]!.entries[0]!.sha256 = "e".repeat(64);
+            if (change === "stale-digest") raw.candidateSha256 = "e".repeat(64);
+            const result = envelope("inspect insights", raw);
+            return (
+              change === "version-drift"
+                ? {
+                    ...result,
+                    result: { ...result.result, rehearsalVersion: "1.1.0" },
+                  }
+                : result
+            ) as { result: ResultEnvelope<Data>; exitCode: number };
+          }
+          return base.command<Data>(options);
+        },
+      },
+    });
+    return { snapshot, commands };
+  };
+  it("reads bounded optional static evidence without changing ordinary ready controls", async () => {
+    const { snapshot, commands } = await inspect();
+    expect(snapshot.availability).toBe("ready");
+    expect(snapshot.migrationInsights?.state).toBe("available");
+    expect(
+      commands.find((command) => command.expectedCommand === "inspect insights")
+        ?.outputLimitBytes,
+    ).toBe(8 * 1024 * 1024);
+    expect(
+      commands
+        .filter((command) => command.expectedCommand !== "inspect insights")
+        .every((command) => command.outputLimitBytes === undefined),
+    ).toBe(true);
+  });
+  it.each(["absent", "missing-plan", "untrusted"])(
+    "does not launch optional analysis when %s",
+    async (change) => {
+      const { snapshot, commands } = await inspect(change);
+      expect(snapshot.migrationInsights).toBeUndefined();
+      expect(
+        commands.some(
+          (command) => command.expectedCommand === "inspect insights",
+        ),
+      ).toBe(false);
+    },
+  );
+  it.each(["failed", "oversize", "invalid", "stale-hash", "stale-digest"])(
+    "keeps MVP controls ready while refusing %s optional evidence",
+    async (change) => {
+      const { snapshot } = await inspect(change);
+      expect(snapshot.availability).toBe("ready");
+      expect(snapshot.migrationReview).toBeDefined();
+      expect(snapshot.migrationInsights).toEqual({ state: "unavailable" });
+      expect(JSON.stringify(snapshot)).not.toContain("PRIVATE_PROVIDER_OUTPUT");
+    },
+  );
+  it("does not hide an actual package version change as an optional warning failure", async () => {
+    const { snapshot } = await inspect("version-drift");
+    expect(snapshot.availability).toBe("error");
+    expect(snapshot.migrationInsights).toBeUndefined();
+    expect(snapshot.migrationReview).toBeUndefined();
+  });
 });
 
 describe("simultaneous migration-plan inspection consistency", () => {

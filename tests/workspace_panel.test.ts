@@ -221,6 +221,10 @@ vi.mock("../src/migration_failure_source.js", async (original) => ({
   ...(await original<typeof import("../src/migration_failure_source.js")>()),
   readExactMigrationSource: editor.readMigration,
 }));
+vi.mock("../src/migration_source.js", async (original) => ({
+  ...(await original<typeof import("../src/migration_source.js")>()),
+  readExactMigrationInput: editor.readMigration,
+}));
 vi.mock("../src/review_panel.js", () => ({
   RehearsalReviewPanels: class {
     review = editor.review;
@@ -245,6 +249,11 @@ import type { ProjectSnapshot } from "../src/project_snapshot.js";
 import { configurationFingerprint } from "../src/configuration_editor.js";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
 import { RehearsalCliError } from "../src/process_adapter.js";
+import { insightPlan, insightReport } from "./migration_insights_fixture.js";
+import {
+  migrationInsightIndex,
+  parseMigrationInsights,
+} from "../src/migration_insights.js";
 
 class Events<Value> {
   readonly listeners = new Set<(value: Value) => void>();
@@ -399,9 +408,8 @@ afterEach(async () => {
     await fs.rm(directory, { recursive: true, force: true });
 });
 
-const migrationFailureFixture = () => {
+const migrationFailureFixture = (text = "select ';';\nSELEC 1;\n") => {
   const operationId = "d".repeat(64);
-  const text = "select ';';\nSELEC 1;\n";
   const path = `${editor.folder.uri.fsPath}/database/migrations/20261020000100_broken.sql`;
   const source = {
     schemaVersion: 1,
@@ -488,7 +496,260 @@ const migrationFailureFixture = () => {
   return { ...fixture, snapshot, source, document, checked, send, operationId };
 };
 
+describe("exact static finding navigation", () => {
+  const setup = (
+    name = "add_index",
+    text = "-- λ\r\nALTER TABLE example ALTER COLUMN title SET NOT NULL;\r\n",
+    modelText = text,
+    line = 2,
+    column = 20,
+  ) => {
+    const planned = insightPlan(),
+      raw = insightReport();
+    raw.targets[0]!.entries[0]!.sha256 = configurationFingerprint(text);
+    raw.targets[0]!.entries[0]!.filename = `20261009000100_${name}.sql`;
+    raw.targets[0]!.entries[0]!.workspaceRelativePath = `database/migrations/20261009000100_${name}.sql`;
+    const plan = {
+      ...planned,
+      targets: planned.targets.map((target) => ({
+        ...target,
+        entries: target.entries.map((entry) => ({
+          ...entry,
+          name,
+          filename: `20261009000100_${name}.sql`,
+          sha256: configurationFingerprint(text),
+        })),
+      })),
+    };
+    raw.targets[0]!.entries[0]!.findings[0]!.line = line;
+    raw.targets[0]!.entries[0]!.findings[0]!.column = column;
+    const report = parseMigrationInsights(raw, plan, raw.inspectorVersion),
+      findingId = [...migrationInsightIndex(report).keys()][0]!;
+    const snapshot: ProjectSnapshot = {
+      ...ready(),
+      migrationReview: plan,
+      migrationInsights: { state: "available", report },
+    };
+    const fixture = harness(snapshot),
+      path = `${editor.folder.uri.fsPath}/${raw.targets[0]!.entries[0]!.workspaceRelativePath}`;
+    const checked = { path, text, identity: "same-static-input" },
+      document = {
+        uri: editor.uri(path),
+        isDirty: false,
+        getText: () => modelText,
+        lineCount: modelText.split(/\r\n|\r|\n/gu).length,
+        lineAt: (line: number) => ({
+          text: modelText.split(/\r\n|\r|\n/gu)[line]!,
+        }),
+      };
+    editor.readMigration.mockResolvedValue(checked);
+    editor.module.workspace.openTextDocument.mockResolvedValue(document);
+    const send = async (
+      message: unknown = { type: "openMigrationInsight", findingId },
+    ) =>
+      (
+        fixture.owner as unknown as {
+          handleMessage(
+            panel: unknown,
+            key: string,
+            message: unknown,
+          ): Promise<void>;
+        }
+      ).handleMessage(editor.panels.at(-1)!, key, message);
+    return { ...fixture, snapshot, report, findingId, checked, document, send };
+  };
+  it.each(["add_index", "DropWidgets", "约束"])(
+    "opens unchanged %s at the bounded exact UTF-16 finding position without execution or edits",
+    async (name) => {
+      const fixture = setup(name);
+      await fixture.owner.open(key);
+      await fixture.send();
+      expect(editor.readMigration).toHaveBeenCalledTimes(2);
+      expect(editor.module.window.showTextDocument).toHaveBeenCalledWith(
+        fixture.document,
+        {
+          preview: true,
+          selection: {
+            start: { line: 1, character: 19 },
+            end: { line: 1, character: 19 },
+          },
+        },
+      );
+      expect(editor.read).not.toHaveBeenCalled();
+      expect(editor.write).not.toHaveBeenCalled();
+      expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    [
+      "BOM",
+      "\ufeffALTER TABLE example ALTER COLUMN title SET NOT NULL;\r\n",
+      "ALTER TABLE example ALTER COLUMN title SET NOT NULL;\n",
+      1,
+      1,
+    ],
+    [
+      "mixed EOL",
+      "-- a\r\nALTER TABLE example ALTER COLUMN title SET NOT NULL;\n-- end\r",
+      "-- a\nALTER TABLE example ALTER COLUMN title SET NOT NULL;\n-- end\n",
+      2,
+      20,
+    ],
+    [
+      "bare CR",
+      "-- a\rALTER TABLE example ALTER COLUMN title SET NOT NULL;\r",
+      "-- a\nALTER TABLE example ALTER COLUMN title SET NOT NULL;\n",
+      2,
+      20,
+    ],
+    [
+      "double BOM with one retained in model",
+      "\ufeff\ufeffALTER TABLE example ALTER COLUMN title SET NOT NULL;",
+      "\ufeffALTER TABLE example ALTER COLUMN title SET NOT NULL;",
+      1,
+      2,
+    ],
+  ] as const)(
+    "accepts only the explicit %s model projection without subtracting scanner columns",
+    async (_label, raw, model, line, column) => {
+      const fixture = setup("add_index", raw, model, line, column);
+      await fixture.owner.open(key);
+      await fixture.send();
+      expect(editor.readMigration).toHaveBeenCalledTimes(2);
+      expect(editor.module.window.showTextDocument).toHaveBeenCalledWith(
+        fixture.document,
+        {
+          preview: true,
+          selection: {
+            start: { line: line - 1, character: column - 1 },
+            end: { line: line - 1, character: column - 1 },
+          },
+        },
+      );
+      expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    },
+  );
+  it("refuses a native model that removed an extra leading BOM instead of guessing an offset", async () => {
+    const fixture = setup(
+      "add_index",
+      "\ufeff\ufeffALTER TABLE example ALTER COLUMN title SET NOT NULL;",
+      "ALTER TABLE example ALTER COLUMN title SET NOT NULL;",
+      1,
+      2,
+    );
+    await fixture.owner.open(key);
+    await fixture.send();
+    expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+  });
+  it("still refuses dirty documents whose BOM/EOL projection otherwise matches", async () => {
+    const fixture = setup(
+      "add_index",
+      "\ufeffALTER TABLE example ALTER COLUMN title SET NOT NULL;\r\n",
+      "ALTER TABLE example ALTER COLUMN title SET NOT NULL;\n",
+      1,
+      1,
+    );
+    fixture.document.isDirty = true;
+    await fixture.owner.open(key);
+    await fixture.send();
+    expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+  });
+  it.each(["trust", "workspace", "panel", "snapshot", "busy"])(
+    "refuses %s drift during the asynchronous file read",
+    async (change) => {
+      const fixture = setup();
+      await fixture.owner.open(key);
+      editor.readMigration.mockImplementationOnce(async () => {
+        if (change === "trust") editor.module.workspace.isTrusted = false;
+        if (change === "workspace")
+          editor.module.workspace.workspaceFolders = [];
+        if (change === "panel") fixture.owner.dispose();
+        if (change === "snapshot") fixture.update({ ...fixture.snapshot });
+        if (change === "busy") fixture.update(busy());
+        return fixture.checked;
+      });
+      await fixture.send();
+      expect(editor.module.workspace.openTextDocument).not.toHaveBeenCalled();
+      expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    "dirty",
+    "text",
+    "disk",
+    "identity",
+    "line",
+    "column",
+    "unbound",
+    "path",
+  ])(
+    "refuses %s without editing, clamping or leaking provider text",
+    async (change) => {
+      const fixture = setup();
+      await fixture.owner.open(key);
+      if (change === "dirty") fixture.document.isDirty = true;
+      if (change === "text") fixture.document.getText = () => "changed";
+      if (change === "disk")
+        editor.readMigration.mockRejectedValue(
+          new Error("PRIVATE_SOURCE_OUTPUT"),
+        );
+      if (change === "identity")
+        editor.readMigration
+          .mockResolvedValueOnce(fixture.checked)
+          .mockResolvedValueOnce({
+            ...fixture.checked,
+            identity: "replacement",
+          });
+      if (change === "line") fixture.document.lineCount = 1;
+      if (change === "column")
+        fixture.document.lineAt = () => ({ text: "short" });
+      await fixture.send(
+        change === "unbound"
+          ? { type: "openMigrationInsight", findingId: "e".repeat(64) }
+          : change === "path"
+            ? {
+                type: "openMigrationInsight",
+                findingId: fixture.findingId,
+                path: "/private/secret.sql",
+              }
+            : undefined,
+      );
+      expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+      expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+      expect(editor.read).not.toHaveBeenCalled();
+      expect(
+        JSON.stringify(editor.module.window.showWarningMessage.mock.calls),
+      ).not.toContain("PRIVATE_SOURCE_OUTPUT");
+    },
+  );
+});
+
 describe("exact migration input navigation", () => {
+  it.each([
+    [
+      "\ufeffselect ';';\r\nSELEC 1;\n-- tail\r",
+      "select ';';\nSELEC 1;\n-- tail\n",
+    ],
+    ["\ufeff\ufeffSELEC 1;\r", "\ufeffSELEC 1;\n"],
+  ])(
+    "uses the same explicit model projection without changing failure provenance or inventing a position",
+    async (raw, model) => {
+      const fixture = migrationFailureFixture(raw);
+      fixture.document.getText = () => model;
+      await fixture.owner.open(key);
+      await fixture.send();
+      expect(editor.readMigration).toHaveBeenCalledTimes(2);
+      expect(editor.module.window.showTextDocument).toHaveBeenCalledWith(
+        fixture.document,
+        { preview: true },
+      );
+      expect(fixture.source).toMatchObject({
+        evidence: "owned_execution_input",
+        line: null,
+        column: null,
+      });
+    },
+  );
   it("opens only the unchanged recorded file without editing it or running any command", async () => {
     const fixture = migrationFailureFixture();
     await fixture.owner.open(key);

@@ -61,10 +61,12 @@ import {
   type WorkspacePreferences,
 } from "./workspace_preferences.js";
 import { knownWorkspaceTargets } from "./workspace_view_state.js";
+import { readExactMigrationSource } from "./migration_failure_source.js";
 import {
-  migrationSourceTextSha256,
-  readExactMigrationSource,
-} from "./migration_failure_source.js";
+  migrationSourceDocumentMatches,
+  readExactMigrationInput,
+} from "./migration_source.js";
+import { findMigrationInsight } from "./migration_insights.js";
 import {
   buildVerificationReport,
   renderVerificationReportJson,
@@ -310,6 +312,10 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
     const snapshot = this.projects.snapshotFor(workspaceKey);
     if (!snapshot) return;
+    if (message.type === "openMigrationInsight") {
+      await this.openMigrationInsight(panel, workspaceKey, message.findingId);
+      return;
+    }
     if (message.type === "openMigrationFailure") {
       await this.openMigrationFailure(panel, workspaceKey, message.operationId);
       return;
@@ -968,6 +974,80 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
   }
 
+  private async openMigrationInsight(
+    panel: vscode.WebviewPanel,
+    workspaceKey: string,
+    findingId: string,
+  ): Promise<void> {
+    try {
+      const snapshot = this.projects.snapshotFor(workspaceKey);
+      if (snapshot?.migrationInsights?.state !== "available") return;
+      const report = snapshot.migrationInsights.report;
+      const initial = findMigrationInsight(report, findingId);
+      if (!initial?.entry.workspaceRelativePath) return;
+      const requireCurrent = (): string => {
+        const folder = vscode.workspace.workspaceFolders?.find(
+          (entry) => entry.uri.toString() === workspaceKey,
+        );
+        if (
+          this.disposed ||
+          this.panels.get(workspaceKey) !== panel ||
+          !vscode.workspace.isTrusted ||
+          !folder ||
+          this.projects.snapshotFor(workspaceKey) !== snapshot ||
+          snapshot.availability !== "ready" ||
+          snapshot.activity?.state !== "idle" ||
+          !snapshot.migrationReview ||
+          snapshot.migrationReview.candidateSha256 !== report.candidateSha256 ||
+          folder.uri.fsPath !== snapshot.workspaceRoot
+        )
+          throw new Error("Static migration input is no longer current.");
+        return folder.uri.fsPath;
+      };
+      const source = {
+        filename: initial.entry.filename,
+        sha256: initial.entry.sha256,
+        workspaceRelativePath: initial.entry.workspaceRelativePath,
+      };
+      const root = requireCurrent(),
+        checked = await readExactMigrationInput(root, source);
+      if (requireCurrent() !== root) throw new Error("Workspace changed.");
+      const document = await vscode.workspace.openTextDocument(
+        vscode.Uri.file(checked.path),
+      );
+      const requireExactDocument = () => {
+        requireCurrent();
+        if (
+          document.uri.scheme !== "file" ||
+          document.uri.fsPath !== checked.path ||
+          document.isDirty ||
+          !migrationSourceDocumentMatches(checked.text, document.getText()) ||
+          initial.finding.line > document.lineCount ||
+          initial.finding.column >
+            document.lineAt(initial.finding.line - 1).text.length + 1
+        )
+          throw new Error("Static migration input or position changed.");
+      };
+      requireExactDocument();
+      const confirmed = await readExactMigrationInput(root, source);
+      requireExactDocument();
+      if (confirmed.identity !== checked.identity || requireCurrent() !== root)
+        throw new Error("Migration input changed.");
+      const position = new vscode.Position(
+        initial.finding.line - 1,
+        initial.finding.column - 1,
+      );
+      await vscode.window.showTextDocument(document, {
+        preview: true,
+        selection: new vscode.Range(position, position),
+      });
+    } catch {
+      void vscode.window.showWarningMessage(
+        "This static finding no longer matches an unchanged local migration or position. Refresh and review the current migration manually. No SQL was executed and no file was changed.",
+      );
+    }
+  }
+
   private async openMigrationFailure(
     panel: vscode.WebviewPanel,
     workspaceKey: string,
@@ -1015,7 +1095,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         document.uri.scheme !== "file" ||
         document.uri.fsPath !== checked.path ||
         document.isDirty ||
-        migrationSourceTextSha256(document.getText()) !== initial.sha256
+        !migrationSourceDocumentMatches(checked.text, document.getText())
       )
         throw new Error("Migration input changed.");
       const confirmed = await readExactMigrationSource(root, initial);
@@ -1023,7 +1103,7 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         confirmed.identity !== checked.identity ||
         requireCurrent() !== root ||
         document.isDirty ||
-        migrationSourceTextSha256(document.getText()) !== initial.sha256
+        !migrationSourceDocumentMatches(checked.text, document.getText())
       )
         throw new Error("Migration input changed.");
       await vscode.window.showTextDocument(document, { preview: true });

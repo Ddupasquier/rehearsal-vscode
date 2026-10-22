@@ -371,7 +371,8 @@ baseline/candidate kind, reviewed filename, exact SHA-256 and, when safe, a proj
 path. It does not establish the actual SQL origin, and line/column remain null. Core
 supplies no project-local link for baseline inputs; Supabase batch or otherwise
 ambiguous attribution stays unknown.
-`migration_failure_source.ts` validates that projection and reads at most 2 MiB of an
+`migration_failure_source.ts` validates that projection; the shared `migration_source.ts`
+reader reads at most 2 MiB of an
 exact project-local regular file, rejecting symlink redirects, identity drift, changed
 bytes and invalid UTF-8. The Activity button sends only an operation ID, never a path.
 The host resolves it against the current failed receipt and rechecks trust, workspace,
@@ -442,6 +443,51 @@ no approval; restored checkmarks still require the same plan and baseline identi
 The maintained check executes the compiled controller without Node globals to catch
 CommonJS closure references in serialized helpers. This DOM-double check does not prove
 rendered navigation, layout or assistive-technology behavior.
+
+### Optional static Migration Insights (source candidate)
+
+This source-only addition is not a claim about public extension 0.1.23/core 1.0.2.
+Manifest capability `migrationInsights: 1`, together with `migrationReview: 1`, enables
+the public read-only `inspect insights --json` query in the trusted ready idle inspection.
+`migration_insights.ts` owns the strict closed schema and exact plan/version binding.
+The report's global and target candidate digests, count, ordered candidates, providers,
+baseline generation IDs and every file hash must match the independently validated plan.
+Fixed rule/severity/summary/suggestion, coverage, unknown-reason, limit and safety fields
+are validated. Unknown schemas, SQL-bearing additions and arbitrary prose are refused.
+
+The optional command alone uses an 8 MiB transport/parse bound. Analysis bounds remain
+1,000 candidates, 10,000 total files, 10,000 entries per migration directory, 2 MiB/file, 16 MiB total
+input and 5,000 findings. Invalid, oversized or unavailable optional results produce a
+fixed unavailable hint without blocking otherwise-valid MVP actions. An actual package
+version change or busy final activity retains the normal fail-closed snapshot behavior.
+Capability absence or missing plan v1 launches no Insights command and exposes no links.
+
+`migration_insights_view.ts` keeps warnings in collapsed existing migration rows, with
+at most ten visible findings per file and an explicit omission/CLI-report notice.
+Lexical-rule coverage is not SQL validity or safety; unsupported/malformed/bounded input
+stays unknown. No findings are copied to editor storage or report exports. SQL bodies,
+object identifiers, row values and raw provider output never enter finding markup.
+
+The opaque source ID binds the complete normalized report and exact finding, without
+accepting a path or position from a webview. The host uses the shared exact-input reader
+and refuses trust, workspace, panel, snapshot, file, dirty-buffer or byte drift before
+opening the file. It navigates only to a bounded actual UTF-16 lexical line/column in
+that unchanged document. Static source observation never becomes
+`owned_execution_input`; existing failure attribution and null positions are unchanged.
+No execution engine, autofix, safety verdict, new gate or commercial restriction is added.
+
+The common reader retains the exact UTF-8 raw text, including BOM/EOL bytes. Native
+document comparison uses an explicit projection only: remove exactly one leading BOM
+from the checked raw text and normalize its CRLF/bare-CR line endings to LF; normalize
+document line endings to LF without stripping any document BOM. Both original raw disk
+SHA/identity reads and the dirty-buffer guard remain mandatory. Additional BOM removal,
+actual content changes or an out-of-range reported position refuse rather than guessing.
+The CLI scanner already decodes away one leading BOM; the host does not subtract a
+column again. Failure-input provenance and null error positions remain unchanged.
+This follows the current [VS Code buffer builder](https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.ts)
+and [document mirror](https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/model/mirrorTextModel.ts)
+source, not an observed native decoding guarantee for every encoding path. Model-backed
+regressions do not replace separately pending native acceptance.
 
 Explicit editor cancellation observes only public activity for at most 30 seconds,
 then refreshes actual project state. This is a bounded completion check, not idle
