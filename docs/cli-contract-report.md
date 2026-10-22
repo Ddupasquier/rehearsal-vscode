@@ -303,6 +303,9 @@ and actual Save-dialog cancel/save remain separate evidence. Do not claim them f
 model checks, file writes or green unit suite. Each operator acknowledgement allows up to
 180 seconds; the launcher's existing ten-minute total scenario limit still applies.
 Read-command deadlines, memory preflight, cleanup and data protections are unchanged.
+Captured macOS processes with the kernel's `E` (trying to exit) state, like zombies,
+are wait-only: they grant no signal or ancestry authority. Cleanup still requires
+actual process absence; an unverified identity or changed birth/group remains a refusal.
 This tooling introduces no new CI gate,
 product payload, pricing restriction, provider login or database lifecycle operation.
 
