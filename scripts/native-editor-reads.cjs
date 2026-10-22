@@ -38,12 +38,22 @@ function parseProcessRows(stdout) {
   }
   return rows;
 }
-async function processes() {
-  const { stdout } = await execute(
-    "/bin/ps",
-    ["-axo", "pid=,ppid=,pgid=,stat=,lstart=,comm="],
-    { encoding: "utf8", timeout: 5000, maxBuffer: 1024 * 1024 },
+function processArguments(platform = process.platform) {
+  assert.ok(
+    platform === "darwin" || platform === "linux",
+    "Native process observation requires macOS or Linux.",
   );
+  // Linux comm is a mutable thread name (for example Node's MainThread), not
+  // executable identity. procps exe reads the kernel executable path instead.
+  const executableField = platform === "linux" ? "exe" : "comm";
+  return ["-axo", `pid=,ppid=,pgid=,stat=,lstart=,${executableField}=`];
+}
+async function processes() {
+  const { stdout } = await execute("/bin/ps", processArguments(), {
+    encoding: "utf8",
+    timeout: 5000,
+    maxBuffer: 1024 * 1024,
+  });
   return parseProcessRows(stdout);
 }
 const same = (left, right) =>
@@ -277,6 +287,7 @@ function createReadClient({
   return { publicJson, cleanup };
 }
 module.exports = {
+  processArguments,
   parseProcessRows,
   processes,
   same,

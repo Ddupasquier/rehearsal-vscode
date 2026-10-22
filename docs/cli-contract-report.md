@@ -180,6 +180,10 @@ the isolated editor and matching-identity descendant cleanup are recorded separa
 from cancellation evidence. The caller still owns fixture databases, workspace and lease cleanup.
 Cleanup observes bounded process identities before signalling individual owned processes;
 a numeric process group or an ambiguous signal-zero error is not ownership evidence.
+Linux observations use procps's kernel-backed executable-path field, not the mutable
+thread name that Node can report as `MainThread`; macOS retains its executable `comm`
+projection. PID, parent, process group and birth-time checks remain mandatory. Unknown
+identities still refuse cleanup, and no observation deadline or inventory bound changes.
 Failure retains bounded evidence; fallback cleanup cannot turn failure into a pass.
 If a scenario requests recovery, actual dirty documents remain at finalization, or
 editor state cannot be verified, the driver records a failed recovery disposition and

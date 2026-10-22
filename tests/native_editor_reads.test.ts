@@ -24,6 +24,7 @@ interface Client {
   cleanup(): Promise<Cleanup>;
 }
 const helper = require("../scripts/native-editor-reads.cjs") as {
+  processArguments(platform: string): string[];
   parseProcessRows(stdout: string): Map<number, Identity>;
   processes(): Promise<Map<number, Identity>>;
   same(left: Identity, right: Identity | undefined): boolean;
@@ -32,6 +33,19 @@ const helper = require("../scripts/native-editor-reads.cjs") as {
 const clients: Client[] = [],
   directories: string[] = [];
 describe("native process-state parsing", () => {
+  it("reads executable paths instead of mutable Linux thread names", () => {
+    expect(helper.processArguments("linux")).toEqual([
+      "-axo",
+      "pid=,ppid=,pgid=,stat=,lstart=,exe=",
+    ]);
+    expect(helper.processArguments("darwin")).toEqual([
+      "-axo",
+      "pid=,ppid=,pgid=,stat=,lstart=,comm=",
+    ]);
+    expect(() => helper.processArguments("win32")).toThrow(
+      "requires macOS or Linux",
+    );
+  });
   it("preserves real STAT zombie evidence independently of the executable spelling", () => {
     const rows = helper.parseProcessRows(
       [

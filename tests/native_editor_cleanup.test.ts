@@ -43,6 +43,72 @@ afterEach(async () => {
 describe.skipIf(process.platform === "win32")(
   "native launcher identity cleanup",
   () => {
+    it.each(["MainThread", "-"])(
+      "refuses an unverified %s root without granting signal authority",
+      async (executable) => {
+        const root: NativeProcessIdentity = {
+          pid: 100001,
+          ppid: process.pid,
+          pgid: 100001,
+          state: "S",
+          started: "Tue Oct 20 22:47:35 2026",
+          executable,
+        };
+        const tracker = createNativeEditorTracker(
+          root.pid,
+          process.execPath,
+          async () => new Map([[root.pid, root]]),
+        );
+        const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+        try {
+          expect(await tracker.cleanup()).toMatchObject({
+            rootObserved: false,
+            identityUncertain: true,
+            fallbackUsed: false,
+            unknown: [root],
+          });
+          expect(signal).not.toHaveBeenCalled();
+        } finally {
+          signal.mockRestore();
+        }
+      },
+    );
+    it.skipIf(process.platform !== "linux")(
+      "observes the actual Linux executable even when its thread title is changed",
+      async () => {
+        const owned = child(
+          "process.title='not-node-title';process.send('title-set');setInterval(()=>{},1000)",
+          true,
+        );
+        await Promise.race([
+          new Promise<void>((done) =>
+            owned.process.once("message", () => done()),
+          ),
+          delay(2000).then(() => {
+            throw new Error("Owned Linux title fixture was not ready.");
+          }),
+        ]);
+        const row = (await helper.processes()).get(owned.pid);
+        expect(row).toMatchObject({
+          pid: owned.pid,
+          ppid: process.pid,
+          pgid: owned.pid,
+          executable: basename(process.execPath),
+        });
+        const tracker = createNativeEditorTracker(owned.pid, process.execPath);
+        expect(await tracker.observe()).toMatchObject({
+          rootObserved: true,
+          identityUncertain: false,
+        });
+        expect(await tracker.cleanup()).toMatchObject({
+          fallbackUsed: true,
+          identityUncertain: false,
+          remaining: [],
+          unknown: [],
+        });
+        await owned.closed;
+      },
+    );
     it("awaits a first-seen zombie under a currently verified parent chain without adopting it", async () => {
       const root: NativeProcessIdentity = {
         pid: 100001,
