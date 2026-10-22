@@ -13,6 +13,7 @@ const scenarios = Object.freeze({
   "workbench-review": () => require("./native-workbench-review-test.cjs"),
   "presentation-review": () => require("./native-workbench-review-test.cjs"),
   "configuration-guidance": () => require("./native-workbench-review-test.cjs"),
+  "comparison-export": () => require("./native-comparison-export-test.cjs"),
 });
 let started = false;
 
@@ -27,7 +28,7 @@ function diagnostic(error) {
   const location =
     typeof error?.stack === "string"
       ? error.stack.match(
-          /native-(?:editor-driver|cancellation-test|workbench-review-test)\.cjs:\d{1,7}:\d{1,5}/u,
+          /native-(?:editor-driver|cancellation-test|workbench-review-test|comparison-export-test)\.cjs:\d{1,7}:\d{1,5}/u,
         )?.[0]
       : undefined;
   return { code, location: location ?? "native-editor-driver" };

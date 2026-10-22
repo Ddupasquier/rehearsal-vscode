@@ -299,6 +299,52 @@ The source supports these exact artifacts; unit and process checks of this compa
 do not establish a fresh native GUI run for 0.1.23. Native execution stays separately
 opt-in and must never enable speech or speaker output without owner authorization.
 
+## Native comparison and explicit local export companion
+
+The separately opt-in `comparison-export` scenario uses only the frozen public 0.1.23
+VSIX and the maintained prepared PostgreSQL fixture described above. Historical 0.1.22
+artifacts are not accepted for this new scenario. It does not create a second comparison
+engine or mutate the baseline for a demo.
+
+```bash
+node --import tsx scripts/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json comparison-export
+```
+
+In the actual Activity & reports view, compare the primary environment first with the
+active baseline and then with its retained three-row baseline. Record direct rendered
+observations of equal, different and unavailable facts; 10,003 versus 3 rows must be a
+difference, while absent evidence must never become zero or passed. Incompatible-provider,
+legacy and large-history boundaries remain covered by their independent contract tests,
+not by this single-provider native fixture.
+
+The real Save dialog is never mocked. Cancel an initial JSON export; the expected owned
+destinations must remain absent and configuration bytes unchanged. Then explicitly save
+JSON and Markdown to the unique owned paths supplied by the local phase instructions.
+The driver reads bounded, no-follow regular files and checks exact versions, baseline and
+candidate digests, all fourteen comparison facts, known private-value exclusions and
+explicit manual/unsigned-report limitations. Markdown must match the installed production
+renderer for the same report, allowing only its independently observed generation time.
+Verified exports remain in the owned evidence directory, with their leaf names and hashes
+in the native report; they are not uploaded automatically.
+
+Require `comparisonExportPassed`, cancelled destinations absent, unchanged configuration,
+baseline/key/lease preservation, no terminal executions and clean read-child closure.
+Dirty or changed report/configuration files are retained for explicit recovery; the shared
+driver never closes an editor with unknown or unsaved work. Phase acknowledgements only
+coordinate actions: screenshots and direct silent observations of the rendered comparison
+and actual Save-dialog cancel/save remain separate evidence. Do not claim them from the
+model checks, file writes or green unit suite. Each operator acknowledgement allows up to
+180 seconds; the launcher's existing ten-minute total scenario limit still applies.
+Publish each complete acknowledgement through a new sibling file and an atomic rename
+over `control.json`. Do not edit the polled file in place: stable-byte reading correctly
+refuses a concurrent rewrite rather than accepting ambiguous control input.
+Read-command deadlines, memory preflight, cleanup and data protections are unchanged.
+Captured macOS processes with the kernel's `E` (trying to exit) state, like zombies,
+are wait-only: they grant no signal or ancestry authority. Cleanup still requires
+actual process absence; an unverified identity or changed birth/group remains a refusal.
+This tooling introduces no new CI gate,
+product payload, pricing restriction, provider login or database lifecycle operation.
+
 ## Installed migration and endpoint companion
 
 Add `--workbench-review` to the Lab activity command for a separate synthetic consumer

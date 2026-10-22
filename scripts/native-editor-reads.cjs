@@ -1,6 +1,7 @@
 /** Bounded read-only native-companion children; never discovers process authority. */
 const assert = require("node:assert/strict");
 const { spawn, execFile } = require("node:child_process");
+const { constants } = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { promisify } = require("node:util");
@@ -19,6 +20,50 @@ const commands = new Set([
   "environments",
   "discover",
 ]);
+
+/** Shared native-scenario IO boundary; no-follow, regular, bounded, stable bytes. */
+async function readRegular(file, maximumBytes = 1024 * 1024) {
+  assert.ok(path.isAbsolute(file));
+  assert.ok(
+    Number.isSafeInteger(maximumBytes) &&
+      maximumBytes > 0 &&
+      maximumBytes <= 8 * 1024 * 1024,
+  );
+  assert.equal(
+    await fs.realpath(file),
+    file,
+    "Native scenario inputs must use canonical paths.",
+  );
+  const handle = await fs.open(
+    file,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const before = await handle.stat();
+    assert.ok(before.isFile() && before.size <= maximumBytes);
+    const bytes = Buffer.alloc(before.size + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const part = await handle.read(
+        bytes,
+        length,
+        bytes.length - length,
+        null,
+      );
+      if (!part.bytesRead) break;
+      length += part.bytesRead;
+    }
+    const after = await handle.stat();
+    assert.ok(
+      length === before.size &&
+        after.size === before.size &&
+        after.mtimeMs === before.mtimeMs,
+    );
+    return { bytes: bytes.subarray(0, length), stat: after };
+  } finally {
+    await handle.close();
+  }
+}
 
 function parseProcessRows(stdout) {
   const rows = new Map();
@@ -287,6 +332,7 @@ function createReadClient({
   return { publicJson, cleanup };
 }
 module.exports = {
+  readRegular,
   processArguments,
   parseProcessRows,
   processes,
