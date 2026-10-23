@@ -387,6 +387,19 @@ discovery rules.
 
 ## Contributing and local development
 
+For the source-candidate Insights native host/source check, first obtain the
+independent Lab's private `native-insights-fixture.json` from a passing
+`--insights-review` run. Use the exact reviewed VSIX and its SHA-256:
+
+```bash
+npx --no-install tsx scripts/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
+```
+
+The opt-in macOS launcher requires normal memory pressure and uses a disposable
+profile, exact synthetic source copies and no database/CLI execution. Keep the
+SQL-bearing fixture private. A passing host/source check is not rendered or keyboard
+acceptance; see the [native companion boundary](docs/architecture.md#optional-static-migration-insights-source-candidate).
+
 These steps are for developing the extension, not installing it into your application.
 Clone this repository first. The F5 launch configuration expects a sibling
 `rehearsal-test-lab` checkout; its maintained runbook owns fixture preparation and

@@ -21,6 +21,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { assertArchiveContents } from "./verify-private-vsix.js";
 import type { ActivityData } from "../src/contracts.js";
 import type { MigrationFailureSource } from "../src/migration_failure_source.js";
+import { parseNativeInsightsFixture } from "./native-insights-fixture.js";
 
 const execute = promisify(execFile);
 const repository = resolve(__dirname, "..");
@@ -64,7 +65,11 @@ async function workspaceFiles(root: string, directory = ""): Promise<string[]> {
   return files.sort();
 }
 
-async function runOwnedNative(args: string[], env: NodeJS.ProcessEnv) {
+async function runOwnedNative(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  onClosed?: () => void,
+) {
   // A new session gives this isolated editor its own process group. Never use a
   // name-based editor kill or signal the caller's/user's existing process group.
   const child = spawn(electron, args, {
@@ -121,6 +126,7 @@ async function runOwnedNative(args: string[], env: NodeJS.ProcessEnv) {
     // Also close children left after a successful Electron-parent exit. Only
     // the captured group created above is eligible for these bounded signals.
     await stopGroup();
+    onClosed?.();
   }
 }
 
@@ -148,6 +154,14 @@ async function main() {
   const activityBytes = await boundedInput(activity),
     activitySha = sha(activityBytes);
   const input = JSON.parse(activityBytes.toString("utf8"));
+  const nativeInsights =
+    input.kind === "migration-insights-native-fixture"
+      ? parseNativeInsightsFixture(input)
+      : null;
+  assert.ok(
+    !nativeInsights || !sourceInput,
+    "Insights uses only its bound private synthetic files.",
+  );
   const samples = input.kind === "migration-workbench-samples" ? input : null;
   if (samples) {
     assert.ok(activityBytes.length <= 64 * 1024);
@@ -170,9 +184,11 @@ async function main() {
     assert.match(samples.artifactSha256, /^[a-f0-9]{64}$/u);
   }
   const envelope = samples?.failureActivity ?? input;
-  assert.equal(envelope.schemaVersion, 1);
-  assert.equal(envelope.command, "activity");
-  assert.equal(envelope.status, "success");
+  if (!nativeInsights) {
+    assert.equal(envelope.schemaVersion, 1);
+    assert.equal(envelope.command, "activity");
+    assert.equal(envelope.status, "success");
+  }
   const sourceOriginal = sourceInput ? resolve(sourceInput) : null;
   const sourceBytes = sourceOriginal
     ? await boundedInput(sourceOriginal, 2 * 1024 * 1024)
@@ -249,6 +265,14 @@ async function main() {
       harness,
     ])
       await mkdir(directory, { recursive: true });
+    if (nativeInsights) {
+      for (const file of nativeInsights.files) {
+        const target = join(workspace, file.path);
+        assert.ok(target.startsWith(`${workspace}/`));
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, file.bytes, { mode: 0o600, flag: "wx" });
+      }
+    }
     if (sourceBytes) {
       const { parseActivityData } = require(
         join(packageRoot, "dist/src/contracts.js"),
@@ -306,7 +330,12 @@ async function main() {
       }),
     );
     await copyFile(
-      join(repository, "scripts/native-migration-failure-test.cjs"),
+      join(
+        repository,
+        nativeInsights
+          ? "scripts/native-insights-test.cjs"
+          : "scripts/native-migration-failure-test.cjs",
+      ),
       join(harness, "runner.cjs"),
     );
     await writeFile(
@@ -378,8 +407,10 @@ async function main() {
         workspace,
       ],
       { ...environment, REHEARSAL_NATIVE_MIGRATION_CONFIG: configPath },
+      () => {
+        nativeProcessGroupClosed = true;
+      },
     );
-    nativeProcessGroupClosed = true;
     const result = JSON.parse(await readFile(resultPath, "utf8"));
     assert.equal(result.status, "passed");
     assert.equal(result.candidateSha256, candidateSha);
@@ -388,8 +419,18 @@ async function main() {
     assert.equal(sha(await readFile(candidate)), candidateSha);
     assert.deepEqual(
       await workspaceFiles(workspace),
-      copiedSource ? [copiedSource.relativePath] : [],
+      nativeInsights
+        ? nativeInsights.files.map((file) => file.path).sort()
+        : copiedSource
+          ? [copiedSource.relativePath]
+          : [],
     );
+    if (nativeInsights)
+      for (const file of nativeInsights.files)
+        assert.equal(
+          sha(await boundedInput(join(workspace, file.path))),
+          file.sha256,
+        );
     if (copiedSource) {
       assert.equal(
         sha(

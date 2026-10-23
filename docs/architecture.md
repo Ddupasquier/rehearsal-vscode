@@ -499,6 +499,23 @@ and [document mirror](https://github.com/microsoft/vscode/blob/main/src/vs/edito
 source, not an observed native decoding guarantee for every encoding path. Model-backed
 regressions do not replace separately pending native acceptance.
 
+The developer-only native panel companion accepts the independent Lab's private
+`migration-insights-native-fixture` handoff through
+`scripts/verify-native-migration-failure.ts`. The existing launcher owns archive
+verification, exact isolated installation, fresh normal-memory checks, the bounded
+owned process group and profile teardown; historical pinned cancellation/comparison
+scenarios are not relaxed. `native-insights-fixture.ts` validates the closed schema,
+core artifact identity, whole-plan/Insights binding and bounded canonical base64
+UTF-8 source copies. Unknown paths, duplicate files and changed hashes refuse.
+The installed extension's actual production parser/panel/source handler is then
+exercised by `native-insights-test.cjs`, including BOM/EOL/UTF-16 source positions,
+dirty-buffer and changed-byte refusal, incomplete/unavailable analysis and no
+terminal creation. Only synthetic owned copies are edited and restored. The
+handoff contains SQL, stays private and is not a public report or support export.
+This is a native host/source companion, not full canonical activation, new CLI
+execution, rendered layout, webview click, actual keyboard or assistive-technology
+evidence. Those observations remain separately required where applicable.
+
 Source navigation has one shared in-flight slot per workspace-panel owner, covering
 both failure-input and static-finding opening across its projects. Repeated clicks while
 it is occupied are ignored, not queued or retried. The slot releases in `finally` on
