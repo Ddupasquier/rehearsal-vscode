@@ -6,6 +6,10 @@ import {
 } from "../src/action_review_view.js";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import {
+  insightsPreviewSnapshot,
+  readNativeInsightsFixture,
+} from "./native-insights-fixture.js";
 import { previewThemeOverrides as themeOverrides } from "./preview-themes.js";
 import type { ProjectDiscoveryData } from "../src/contracts.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
@@ -42,6 +46,10 @@ const requestedPort = Number.parseInt(
     "4178",
   10,
 );
+const insightsFixturePath = process.argv
+  .find((argument) => argument.startsWith("--insights-fixture="))
+  ?.slice("--insights-fixture=".length);
+let insightsFixture: ReturnType<typeof readNativeInsightsFixture> | undefined;
 
 if (
   !Number.isSafeInteger(requestedPort) ||
@@ -1690,6 +1698,87 @@ const snapshots: Readonly<Record<string, ProjectSnapshot>> = {
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", `http://${host}:${requestedPort}`);
+  if (url.pathname.startsWith("/migration-insights") && insightsFixturePath) {
+    if (
+      !["/migration-insights", "/migration-insights-unavailable"].includes(
+        url.pathname,
+      )
+    ) {
+      response.writeHead(404).end("Unknown Rehearsal preview state.");
+      return;
+    }
+    try {
+      insightsFixture ??= readNativeInsightsFixture(
+        resolve(insightsFixturePath),
+      );
+      const snapshot = insightsPreviewSnapshot(
+        await insightsFixture,
+        url.pathname === "/migration-insights-unavailable",
+      );
+      const origin = `http://${host}:${requestedPort}`;
+      const stylesheet = new URL("/workspace.css", origin);
+      const theme = url.searchParams.get("theme");
+      if (theme) stylesheet.searchParams.set("theme", theme);
+      response.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      const rendered = renderWorkspaceDocument(
+        snapshot,
+        {
+          resourceSource: origin,
+          stylesheetUri: stylesheet.toString(),
+          logoUri: `${origin}/rehearsal.png`,
+          actionUris: Object.fromEntries(
+            WORKSPACE_ACTION_IDS.map((action) => [
+              action,
+              `#preview-${action}`,
+            ]),
+          ) as Record<WorkspaceActionId, string>,
+          scriptNonce: "preview-navigation-nonce",
+        },
+        "migrations",
+      );
+      response.end(
+        rendered.replace(
+          "</head>",
+          `<script nonce="preview-navigation-nonce">
+        (() => {
+          let state;
+          window.acquireVsCodeApi = () => ({
+            getState: () => state,
+            setState: value => { state = value; },
+            postMessage: message => {
+              if(message.type !== 'openMigrationInsight')return;
+              const output = document.getElementById('preview-insights-event');
+              output.textContent = 'Source navigation requested (preview only; no file opened).';
+              output.dataset.findingId = message.findingId;
+              output.dataset.count = String(Number(output.dataset.count || '0') + 1);
+            }
+          });
+          document.addEventListener('DOMContentLoaded', () => {
+            const aside = document.createElement('aside');
+            aside.className = 'preview-live-controls';
+            aside.textContent = 'Synthetic browser preview · no host operations. ';
+            const output = document.createElement('output');
+            output.id = 'preview-insights-event';
+            output.setAttribute('aria-live', 'polite');
+            output.textContent = 'No source navigation requested.';
+            aside.append(output);
+            document.body.append(aside);
+          });
+        })();
+      </script></head>`,
+        ),
+      );
+    } catch {
+      response.writeHead(422, { "Content-Type": "text/plain; charset=utf-8" });
+      response.end(
+        "Private Insights fixture refused. No input or source is served.",
+      );
+    }
+    return;
+  }
   if (url.pathname === "/updates") {
     const origin = `http://${host}:${requestedPort}`;
     const stylesheet = new URL("/workspace.css", origin);

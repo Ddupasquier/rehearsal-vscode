@@ -92,6 +92,8 @@ class ViewControl {
       );
   }
   closest(selector: string) {
+    if (selector === "[data-open-migration-insight]")
+      return this.dataset.openMigrationInsight ? this : null;
     if (selector === "[data-open-migration-failure]")
       return this.dataset.openMigrationFailure ? this : null;
     if (selector === "[data-rehearsal-page]")
@@ -423,6 +425,11 @@ const exerciseViewScript = (
     },
     openMigrationFailure: (operationId: string) => {
       const control = new ViewControl({ openMigrationFailure: operationId });
+      for (const listener of documentListeners.get("click") ?? [])
+        listener({ target: control });
+    },
+    openMigrationInsight: (findingId: string) => {
+      const control = new ViewControl({ openMigrationInsight: findingId });
       for (const listener of documentListeners.get("click") ?? [])
         listener({ target: control });
     },
@@ -839,6 +846,23 @@ describe("truthful command, proof and next-step presentation", () => {
     expect(html).not.toContain("Last rehearsal completed");
     expect(html).not.toContain("CLI proof passed (recorded)");
     expect(html).toContain("Operation needs review");
+  });
+  it("delegates static finding navigation with only an opaque finding ID", () => {
+    const view = exerciseViewScript(
+        renderWorkspaceDocument(readySnapshot(), assets),
+      ),
+      findingId = "e".repeat(64);
+    view.openMigrationInsight(findingId);
+    expect(view.messages).toContainEqual({
+      type: "openMigrationInsight",
+      findingId,
+    });
+    expect(
+      view.messages.filter(
+        (message) =>
+          (message as { type?: string }).type === "openMigrationInsight",
+      ),
+    ).toHaveLength(1);
   });
   it("delegates a newly inserted migration failure control using only its operation ID", () => {
     const view = exerciseViewScript(

@@ -1651,6 +1651,11 @@ export const renderWorkspaceDocument = (
         });
         document.addEventListener("click", (event) => {
           if (!(event.target instanceof Element)) return;
+          const insight = event.target.closest("[data-open-migration-insight]");
+          if (insight) {
+            vscode?.postMessage({type:"openMigrationInsight",findingId:insight.dataset.openMigrationInsight});
+            return;
+          }
           const failure = event.target.closest("[data-open-migration-failure]");
           if (failure) {
             vscode?.postMessage({type:"openMigrationFailure",operationId:failure.dataset.openMigrationFailure});

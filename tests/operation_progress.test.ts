@@ -126,6 +126,106 @@ const snapshot = (activity: unknown): ProjectSnapshot => ({
   activity: parseActivityData(activity),
 });
 describe("safe native operation progress", () => {
+  it.each(["busy", "stale"])(
+    "accepts a known impact measurement as %s activity without inventing runtime or proof stages",
+    (state) => {
+      const view = snapshot({
+        schemaVersion: 1,
+        state,
+        operation: {
+          kind: "measure impact",
+          startedAt,
+          rehearsalVersion: "1.2.0",
+          progress: null,
+        },
+        recent: [],
+      });
+      expect(view.activity?.operation?.kind).toBe("measure impact");
+      expect(view.activity?.operation?.progress).toBeNull();
+      expect(openSandboxSessionState(view)).toBeNull();
+      const html = renderOperationProgress(view);
+      expect(html).toContain("measure impact</h2>");
+      expect(html).toContain("Phase evidence is unavailable");
+      expect(html).not.toContain("Running the application proof");
+      expect(html).not.toContain("Preparing the local database runtime");
+    },
+  );
+
+  it.each(["completed", "failed", "cancelled"] as const)(
+    "retains a %s impact receipt during idle activity without relabeling it as a rehearsal",
+    (state) => {
+      const item = {
+        kind: "measure impact",
+        rehearsalVersion: "1.2.0",
+        progress: {
+          ...ended(state),
+          currentStage: null,
+          completedStages: [],
+          events: [
+            progress().events[0],
+            {
+              sequence: 2,
+              code: `operation.${state}`,
+              phase: null,
+              target: null,
+              at: updatedAt,
+            },
+          ],
+        },
+      };
+      const view = snapshot({
+        schemaVersion: 1,
+        state: "idle",
+        operation: null,
+        recent: [item],
+      });
+      expect(view.activity?.recent).toEqual([item]);
+      const html = renderOperationProgress(view);
+      expect(html).toContain("measure impact</strong>");
+      expect(html).toContain(
+        state === "completed"
+          ? "Completed"
+          : state === "failed"
+            ? "Failed"
+            : "Cancelled",
+      );
+      expect(html).not.toContain(
+        "Recent operation evidence could not be safely read",
+      );
+      expect(html).not.toContain("Running the application proof");
+      expect(html).toContain(
+        "A recorded stage or successful command is not a complete acceptance report",
+      );
+    },
+  );
+
+  it.each([
+    "measure",
+    "inspect impact",
+    "Measure Impact",
+    "measure impact --target=primary",
+    "measure impact PRIVATE_CANARY",
+  ])(
+    "continues refusing unknown or argument-bearing activity kind %s",
+    (kind) => {
+      expect(() =>
+        parseActivityData({
+          schemaVersion: 1,
+          state: "busy",
+          operation: { kind, startedAt, rehearsalVersion: "1.2.0" },
+        }),
+      ).toThrow("Operation kind is unsupported.");
+      expect(() =>
+        parseActivityData({
+          schemaVersion: 1,
+          state: "idle",
+          operation: null,
+          recent: [{ kind, rehearsalVersion: "1.2.0", progress: ended() }],
+        }),
+      ).toThrow("Operation kind is unsupported.");
+    },
+  );
+
   it("renders an opaque exact-input link while keeping SQL line mapping unavailable", () => {
     const source = {
       schemaVersion: 1,

@@ -338,6 +338,16 @@ read-only queries. When an operation is busy, stale, or invalid, the view omits 
 details that could be inconsistent and presents only the safe activity state. Runtime
 state comes exclusively from `status.data.runtimeStatus` for each configured target.
 
+The closed activity-kind allowlist additionally recognizes core's `measure impact`
+operation, including completed, failed and cancelled retained receipts. This is a
+compatibility reader only: an active measurement still blocks conflicting editor
+actions, and idle history does not make project inspection unavailable. The editor
+does not invoke impact commands, parse aggregate measurements, add measurement UI or
+equate an operation's completion with a successful rehearsal, application proof or
+safe migration. Other unknown or argument-bearing operation kinds remain refused.
+An older editor lacking this entry can reject activity/history produced by that core
+capability; core and editor versions remain separate release boundaries.
+
 Overview keeps current command activity, database liveness and recorded rehearsal/proof
 outcomes separate. The Run workflow row uses the latest unambiguous core `run` receipt,
 not a running database or an editor dispatch receipt. A passed CLI-proof label additionally
@@ -371,7 +381,8 @@ baseline/candidate kind, reviewed filename, exact SHA-256 and, when safe, a proj
 path. It does not establish the actual SQL origin, and line/column remain null. Core
 supplies no project-local link for baseline inputs; Supabase batch or otherwise
 ambiguous attribution stays unknown.
-`migration_failure_source.ts` validates that projection and reads at most 2 MiB of an
+`migration_failure_source.ts` validates that projection; the shared `migration_source.ts`
+reader reads at most 2 MiB of an
 exact project-local regular file, rejecting symlink redirects, identity drift, changed
 bytes and invalid UTF-8. The Activity button sends only an operation ID, never a path.
 The host resolves it against the current failed receipt and rechecks trust, workspace,
@@ -442,6 +453,84 @@ no approval; restored checkmarks still require the same plan and baseline identi
 The maintained check executes the compiled controller without Node globals to catch
 CommonJS closure references in serialized helpers. This DOM-double check does not prove
 rendered navigation, layout or assistive-technology behavior.
+
+### Optional static Migration Insights (source candidate)
+
+This source-only addition is not a claim about public extension 0.1.23/core 1.0.2.
+Manifest capability `migrationInsights: 1`, together with `migrationReview: 1`, enables
+the public read-only `inspect insights --json` query in the trusted ready idle inspection.
+`migration_insights.ts` owns the strict closed schema and exact plan/version binding.
+The report's global and target candidate digests, count, ordered candidates, providers,
+baseline generation IDs and every file hash must match the independently validated plan.
+Fixed rule/severity/summary/suggestion, coverage, unknown-reason, limit and safety fields
+are validated. Unknown schemas, SQL-bearing additions and arbitrary prose are refused.
+
+The optional command alone uses an 8 MiB transport/parse bound. Analysis bounds remain
+1,000 candidates, 10,000 total files, 10,000 entries per migration directory, 2 MiB/file, 16 MiB total
+input and 5,000 findings. Invalid, oversized or unavailable optional results produce a
+fixed unavailable hint without blocking otherwise-valid MVP actions. An actual package
+version change or busy final activity retains the normal fail-closed snapshot behavior.
+Capability absence or missing plan v1 launches no Insights command and exposes no links.
+
+`migration_insights_view.ts` keeps warnings in collapsed existing migration rows, with
+at most ten visible findings per file and an explicit omission/CLI-report notice.
+Lexical-rule coverage is not SQL validity or safety; unsupported/malformed/bounded input
+stays unknown. No findings are copied to editor storage or report exports. SQL bodies,
+object identifiers, row values and raw provider output never enter finding markup.
+
+The opaque source ID binds the complete normalized report and exact finding, without
+accepting a path or position from a webview. The host uses the shared exact-input reader
+and refuses trust, workspace, panel, snapshot, file, dirty-buffer or byte drift before
+opening the file. It navigates only to a bounded actual UTF-16 lexical line/column in
+that unchanged document. Static source observation never becomes
+`owned_execution_input`; existing failure attribution and null positions are unchanged.
+No execution engine, autofix, safety verdict, new gate or commercial restriction is added.
+
+The common reader retains the exact UTF-8 raw text, including BOM/EOL bytes. Native
+document comparison uses an explicit projection only: remove exactly one leading BOM
+from the checked raw text and normalize its CRLF/bare-CR line endings to LF; normalize
+document line endings to LF without stripping any document BOM. Both original raw disk
+SHA/identity reads and the dirty-buffer guard remain mandatory. Additional BOM removal,
+actual content changes or an out-of-range reported position refuse rather than guessing.
+The CLI scanner already decodes away one leading BOM; the host does not subtract a
+column again. Failure-input provenance and null error positions remain unchanged.
+This follows the current [VS Code buffer builder](https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.ts)
+and [document mirror](https://github.com/microsoft/vscode/blob/main/src/vs/editor/common/model/mirrorTextModel.ts)
+source, not an observed native decoding guarantee for every encoding path. Model-backed
+regressions do not replace separately pending native acceptance.
+
+The developer-only native panel companion accepts the independent Lab's private
+`migration-insights-native-fixture` handoff through
+`scripts/verify-native-migration-failure.ts`. The existing launcher owns archive
+verification, exact isolated installation, fresh normal-memory checks, the bounded
+owned process group and profile teardown; historical pinned cancellation/comparison
+scenarios are not relaxed. `native-insights-fixture.ts` validates the closed schema,
+core artifact identity, whole-plan/Insights binding and bounded canonical base64
+UTF-8 source copies. Unknown paths, duplicate files and changed hashes refuse.
+The installed extension's actual production parser/panel/source handler is then
+exercised by `native-insights-test.cjs`, including BOM/EOL/UTF-16 source positions,
+dirty-buffer and changed-byte refusal, incomplete/unavailable analysis and no
+terminal creation. Only synthetic owned copies are edited and restored. The
+handoff contains SQL, stays private and is not a public report or support export.
+This is a native host/source companion, not full canonical activation, new CLI
+execution, rendered layout, webview click, actual keyboard or assistive-technology
+evidence. Those observations remain separately required where applicable.
+
+The loopback-only workspace preview accepts an explicit developer-owned
+`--insights-fixture` path for `/migration-insights` and its unavailable variant.
+The existing closed handoff parser and bounded no-follow regular-file reader feed
+only plan/report metadata to the production renderer. No route serves source bytes
+or the handoff. A labeled preview-only bridge observes actual controller source-button
+dispatch without opening files, executing commands or impersonating the native host.
+Browser rendering, focus, disclosure and keyboard observations therefore remain
+distinct from the native source companion and full canonical activation.
+
+Source navigation has one shared in-flight slot per workspace-panel owner, covering
+both failure-input and static-finding opening across its projects. Repeated clicks while
+it is occupied are ignored, not queued or retried. The slot releases in `finally` on
+success/refusal and is cleared on disposal; existing disposed/current-context guards
+still prevent stale continuation. Each accepted operation retains its two sequential
+bounded raw-file checks rather than multiplying work for concurrent messages.
 
 Explicit editor cancellation observes only public activity for at most 30 seconds,
 then refreshes actual project state. This is a bounded completion check, not idle

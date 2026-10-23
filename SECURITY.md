@@ -80,6 +80,33 @@ explicit native-editor action, not included in diagnostics, exports or saved vie
 No line/column, rollback, successful cleanup, SQL rewrite or retry is inferred from a
 failed migration or its attempted-input attribution.
 
+The source candidate's optional static Migration Insights is a different contract, not
+a fabricated failed-execution receipt. Only explicit manifest capability
+`migrationInsights: 1` plus `migrationReview: 1` enables `inspect insights --json` in a
+trusted idle refresh. The closed parser binds its schema, inspector version, complete
+candidate digest/count, ordered targets, baseline generations and every filename/hash
+to the separately validated current plan. Fixed rule/severity/remediation mappings,
+unknown coverage, limits and read-only safety declarations are checked; SQL-bearing or
+expanded findings are refused. Only this optional response has an 8 MiB transport and
+parse cap; ordinary command limits remain 1 MiB. An unavailable optional analysis does
+not deny ordinary Starter controls, and an actual core version/activity drift still
+invalidates the normal snapshot.
+
+Static finding links contain only an opaque exact-report ID, never an inbound path or
+position. `migration_source.ts` owns the shared confined exact-byte reader;
+`migration_failure_source.ts` retains the existing execution-provenance wrapper. The
+static handler independently rechecks panel/workspace/trust, current ready idle snapshot,
+file identity/hash and clean document text. A reported 1-based UTF-16 lexical position
+must exist in that exact document; positions are never clamped or inferred. No autofix,
+SQL execution, database contact, approval bypass or new paid-feature gate is added.
+
+Native model text may differ from disk bytes only by the explicit one-leading-BOM and
+line-ending projection documented in [architecture](docs/architecture.md#optional-static-migration-insights-source-candidate).
+Raw disk SHA/identity is still verified twice and dirty buffers remain refused. Document
+BOMs are not broadly stripped; additional decoding differences fail closed. Scanner
+positions are already BOM-decoded and are never shifted again. This also avoids false
+refusals for existing failure-input opening without inventing failure positions.
+
 Freshness does not change the minimum compatibility contract. A newer public version
 may be offered without labeling the installed compatible version broken. Exact-version
 core updates need explicit approval or a current, separate automatic CLI-update opt-in

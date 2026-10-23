@@ -79,6 +79,7 @@ export interface ResolvedRehearsal {
   readonly resourceInventorySchema: 1 | null;
   readonly resourceManagerSchema: 1 | null;
   readonly migrationReviewSchema: 1 | null;
+  readonly migrationInsightsSchema: 1 | null;
   readonly configurationReviewSchema: 1 | null;
 }
 
@@ -282,6 +283,7 @@ export const resolveWorkspaceRehearsal = async (
     resourceInventorySchema: contracts.resourceInventory === 1 ? 1 : null,
     resourceManagerSchema: contracts.resourceManager === 1 ? 1 : null,
     migrationReviewSchema: contracts.migrationReview === 1 ? 1 : null,
+    migrationInsightsSchema: contracts.migrationInsights === 1 ? 1 : null,
     configurationReviewSchema: contracts.configurationReview === 1 ? 1 : null,
   };
 };

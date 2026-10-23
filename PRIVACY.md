@@ -20,12 +20,23 @@ filename, digest and safe project-relative path. They exclude SQL, row values, c
 strings and raw provider details. The extension displays them without copying the raw
 CLI response or diagnosis into its own saved activity receipts.
 
-Passive inspection does not scan migration contents. If you explicitly choose **Open
-exact migration input**, the extension reads at most 2 MiB of that selected project-local
+Public extension 0.1.23/core 1.0.2 passive inspection does not scan migration contents.
+In the next source candidate, a trusted workspace whose core explicitly advertises
+Migration Insights may also run that core's bounded static SQL inspection. It reads only
+project-local regular migration files: at most 10,000 files in total, 10,000 entries per
+migration directory, 1,000 pending candidates, 2 MiB per file and 16 MiB total input. No SQL is
+executed, engine started, database contacted or source uploaded. The editor receives at
+most 5,000 fixed findings with lexical positions, exact filenames/hashes and safe relative
+paths—not SQL bodies, identifiers or row values. These optional results remain in the
+current in-memory snapshot, not saved activity receipts or view state.
+
+If you explicitly choose **Open exact migration input** or the candidate's **Open exact
+migration at finding**, the extension reads at most 2 MiB of that selected project-local
 file to verify its UTF-8 bytes, identity and recorded digest before opening it in the
 native editor. Changed or dirty files and symlink redirects are refused. SQL stays in
 that local file/editor; it is not added to the webview, diagnostic report, saved editor
-state or any upload. An attempted input does not establish an exact SQL error location.
+state or any upload. A lexical warning position is not a database error location, and
+attempted failure input still does not establish an exact SQL error location.
 
 Use **Rehearsal: Reset Saved Editor State** to remove view preferences and activity
 receipts for a project. Update consent is separate: use **Rehearsal: Configure Update
