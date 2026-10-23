@@ -395,10 +395,35 @@ independent Lab's private `native-insights-fixture.json` from a passing
 npx --no-install tsx scripts/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
 ```
 
+Optionally set `REHEARSAL_NATIVE_INSIGHTS_CORE_ARTIFACT` to the exact core tarball
+whose checksum is recorded in that handoff. The harness installs it with scripts
+disabled in the owned synthetic workspace, creates a baseline from fixed synthetic
+files, checks readiness, then activates the canonical extension and observes its real
+public-CLI inspection. It does not start a database or run a migration. Source hashes,
+findings, unknown coverage and live plan binding must match the independent handoff;
+the complete owned consumer is fingerprinted before/after. This is activation/API
+evidence, not a rendered click, keyboard or assistive-technology claim. After the
+preservation check and owned editor shutdown, teardown unlocks only the synthetic
+baseline generation directories so their intentionally read-only files can be removed.
+An optional `REHEARSAL_NATIVE_IMPACT_ACTIVITY` path accepts an actual recorded public
+Activity envelope for the separate installed-parser/Activity-renderer compatibility
+check; it never substitutes that receipt for live canonical inspection.
+
 The opt-in macOS launcher requires normal memory pressure and uses a disposable
-profile, exact synthetic source copies and no database/CLI execution. Keep the
+profile and exact synthetic source copies. By default it executes no CLI; the optional
+canonical check above runs only installation, file-baseline creation and inspection.
+Neither mode starts a database or executes a migration. Keep the
 SQL-bearing fixture private. A passing host/source check is not rendered or keyboard
 acceptance; see the [native companion boundary](docs/architecture.md#optional-static-migration-insights-source-candidate).
+
+For a separately observed real webview/keyboard source-open pass, the same launcher
+accepts `REHEARSAL_NATIVE_INSIGHTS_UI_REVIEW=1`. It exposes only an owned UI-session
+record and waits up to two minutes for a matching nonce/action acknowledgement,
+inside the unchanged three-minute native process deadline. Use the real rendered
+controls before acknowledging; the driver independently verifies the selected clean
+document and exact recorded position. Keep visual/keyboard observations separate:
+an acknowledgement alone is not evidence of either. No speech or database operation
+is involved, and full canonical activation remains a separate check.
 
 These steps are for developing the extension, not installing it into your application.
 Clone this repository first. The F5 launch configuration expects a sibling

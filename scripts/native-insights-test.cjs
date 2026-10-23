@@ -1,6 +1,6 @@
-/** Exact installed native panel/source companion; never a CLI or database runner. */
+/** Native panel/source companion; optional canonical inspection, never a database runner. */
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
+const { createHash, randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { setTimeout: delay } = require("node:timers/promises");
@@ -129,6 +129,56 @@ exports.run = async () => {
     ],
   };
   try {
+    if (config.canonicalActivation) {
+      phase = "canonical-activation";
+      const snapshotRuntime = runtime("project_snapshot.js");
+      const inspect = snapshotRuntime.inspectProject;
+      const observed = [];
+      snapshotRuntime.inspectProject = async (...args) => {
+        const snapshot = await inspect(...args);
+        observed.push(snapshot);
+        return snapshot;
+      };
+      try {
+        await extension.activate();
+        assert.equal(extension.isActive, true);
+        await vscode.commands.executeCommand("rehearsal.refresh");
+        const actual = observed.at(-1);
+        assert.ok(actual, "Canonical inspection did not complete.");
+        assert.equal(actual.availability, "ready");
+        assert.equal(actual.version, fixture.coreVersion);
+        assert.equal(actual.migrationInsights?.state, "available");
+        assert.equal(
+          actual.migrationReview?.candidateCount,
+          plan.candidateCount,
+        );
+        const live = actual.migrationInsights.report;
+        assert.equal(
+          live.candidateSha256,
+          actual.migrationReview.candidateSha256,
+        );
+        assert.deepEqual(live.summary, report.summary);
+        const bindings = (value) =>
+          value.targets.flatMap((target) =>
+            target.entries.map((entry) => ({
+              filename: entry.filename,
+              sha256: entry.sha256,
+              coverage: entry.coverage,
+              unknownReasons: entry.unknownReasons,
+              findings: entry.findings,
+            })),
+          );
+        assert.deepEqual(bindings(live), bindings(report));
+        await vscode.commands.executeCommand("rehearsal.openWorkspace", key);
+        result.checks.push(
+          "canonical installed extension activated and real public CLI inspection returned digest-bound Insights matching independently recorded source hashes, findings and unknown coverage; dashboard command completed",
+        );
+      } finally {
+        snapshotRuntime.inspectProject = inspect;
+      }
+      result.limitations[0] =
+        "Canonical activation and public CLI inspection are real; the separate source/refusal companion below uses independently recorded synthetic data and production handlers. No database start or migration execution.";
+    }
     owner = new RehearsalWorkspacePanels(
       extension.extensionUri,
       projects,
@@ -174,6 +224,61 @@ exports.run = async () => {
       3,
       "Require independently observed BOM/LF, BOM/CRLF+astral and bare-CR inputs.",
     );
+    if (config.uiReview) {
+      phase = "actual-ui-source";
+      for (const file of [config.phasePath, config.controlPath])
+        within(config.root, file);
+      const [, item] = native.find(([, entry]) =>
+        entry.entry.filename.endsWith("_bom_lf.sql"),
+      );
+      const nonce = randomUUID();
+      const phaseFile = `${config.phasePath}.new`;
+      await fs.writeFile(
+        phaseFile,
+        JSON.stringify({
+          nonce,
+          action: "source-opened",
+          expectedFile: item.entry.filename,
+          expectedLine: item.finding.line,
+          expectedColumn: item.finding.column,
+          note: "Use only the real rendered Migrations UI and keyboard. Do not edit source or run a command. Acknowledgement is not rendered/keyboard evidence by itself.",
+        }),
+        { mode: 0o600 },
+      );
+      await fs.rename(phaseFile, config.phasePath);
+      const deadline = Date.now() + 120000;
+      let acknowledged = false;
+      while (Date.now() < deadline) {
+        try {
+          const bytes = await fs.readFile(config.controlPath);
+          assert.ok(bytes.length <= 4096);
+          const control = JSON.parse(bytes.toString("utf8"));
+          if (
+            Object.keys(control).sort().join(",") === "action,nonce" &&
+            control.nonce === nonce &&
+            control.action === "source-opened"
+          ) {
+            acknowledged = true;
+            break;
+          }
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+        await delay(50);
+      }
+      assert.ok(acknowledged, "Actual UI source-open coordination timed out.");
+      const editor = vscode.window.activeTextEditor;
+      assert.equal(
+        editor?.document.uri.fsPath,
+        sources.get(item.entry.workspaceRelativePath).source,
+      );
+      assert.equal(editor.document.isDirty, false);
+      assert.equal(editor.selection.active.line, item.finding.line - 1);
+      assert.equal(editor.selection.active.character, item.finding.column - 1);
+      result.checks.push(
+        "operator-coordinated native source request reached the real host handler and unchanged document at the independently recorded position; actual UI observations are recorded separately",
+      );
+    }
     for (const [findingId, item] of native) {
       phase = `source-${item.entry.version}`;
       const source = sources.get(item.entry.workspaceRelativePath);
@@ -280,6 +385,41 @@ exports.run = async () => {
     result.checks.push(
       "unavailable optional analysis removes source actions without blocking ordinary review",
     );
+    if (config.impactActivity) {
+      phase = "impact-activity-consumer";
+      within(config.root, config.impactActivity.path);
+      const bytes = await fs.readFile(config.impactActivity.path);
+      assert.ok(bytes.length <= 256 * 1024);
+      assert.equal(sha(bytes), config.impactActivity.sha256);
+      const { parseEnvelope, parseActivityData } = runtime("contracts.js");
+      const envelope = parseEnvelope(
+        JSON.parse(bytes.toString("utf8")),
+        "activity",
+      );
+      assert.equal(envelope.rehearsalVersion, fixture.coreVersion);
+      const activity = parseActivityData(envelope.data);
+      assert.equal(activity.state, "idle");
+      const measured = activity.recent.filter(
+        (entry) => entry.kind === "measure impact",
+      );
+      assert.equal(measured.length, 4);
+      assert.deepEqual(
+        measured.map((entry) => entry.progress.state),
+        ["completed", "completed", "completed", "failed"],
+      );
+      current = { ...current, activity };
+      await owner.handleMessage(panel, key, {
+        type: "navigate",
+        page: "activity",
+      });
+      await projects.refreshWorkspace(key);
+      assert.ok(panel.webview.html.includes("measure impact"));
+      assertPrivate();
+      result.checks.push(
+        "strict installed native activity parser and production Activity renderer accept the actual Supabase measure-impact completed and stale-consent refusal receipts",
+      );
+      result.impactActivitySha256 = config.impactActivity.sha256;
+    }
     phase = "preservation";
     for (const file of fixture.files)
       assert.equal(

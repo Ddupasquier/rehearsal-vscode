@@ -1,4 +1,4 @@
-/** Opt-in macOS native panel acceptance; isolated profile, no CLI/database operation. */
+/** Opt-in macOS panel acceptance; optional file-only CLI fixture, no database operation. */
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -22,6 +22,11 @@ import { assertArchiveContents } from "./verify-private-vsix.js";
 import type { ActivityData } from "../src/contracts.js";
 import type { MigrationFailureSource } from "../src/migration_failure_source.js";
 import { parseNativeInsightsFixture } from "./native-insights-fixture.js";
+import {
+  nativeConsumerFingerprint,
+  prepareNativeConsumerRemoval,
+  prepareNativeInsightsConsumer,
+} from "./native-insights-consumer.js";
 
 const execute = promisify(execFile);
 const repository = resolve(__dirname, "..");
@@ -69,6 +74,7 @@ async function runOwnedNative(
   args: string[],
   env: NodeJS.ProcessEnv,
   onClosed?: () => void,
+  onStarted?: (pid: number) => Promise<void>,
 ) {
   // A new session gives this isolated editor its own process group. Never use a
   // name-based editor kill or signal the caller's/user's existing process group.
@@ -120,6 +126,7 @@ async function runOwnedNative(
         180000,
       );
     });
+    await Promise.race([onStarted?.(pid), timeout]);
     assert.equal(await Promise.race([exited, timeout]), 0);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
@@ -158,6 +165,32 @@ async function main() {
     input.kind === "migration-insights-native-fixture"
       ? parseNativeInsightsFixture(input)
       : null;
+  const uiReview = process.env.REHEARSAL_NATIVE_INSIGHTS_UI_REVIEW;
+  const coreArtifactInput = process.env.REHEARSAL_NATIVE_INSIGHTS_CORE_ARTIFACT;
+  const coreArtifact = coreArtifactInput ? resolve(coreArtifactInput) : null;
+  const impactInput = process.env.REHEARSAL_NATIVE_IMPACT_ACTIVITY;
+  const impactActivity = impactInput ? resolve(impactInput) : null;
+  assert.ok(
+    !impactActivity || nativeInsights,
+    "Impact activity requires the private Insights companion.",
+  );
+  const impactBytes = impactActivity
+    ? await boundedInput(impactActivity)
+    : null;
+  assert.ok(
+    !coreArtifact || nativeInsights,
+    "Canonical activation requires the private Insights fixture.",
+  );
+  if (coreArtifact)
+    assert.equal(
+      sha(await boundedInput(coreArtifact, 16 * 1024 * 1024)),
+      nativeInsights!.coreArtifactSha256,
+    );
+  assert.ok(uiReview === undefined || uiReview === "1");
+  assert.ok(
+    !uiReview || nativeInsights,
+    "UI review requires the private Insights fixture.",
+  );
   assert.ok(
     !nativeInsights || !sourceInput,
     "Insights uses only its bound private synthetic files.",
@@ -216,9 +249,10 @@ async function main() {
   for (const key of ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
     if (process.env[key]) environment[key] = process.env[key];
   environment.PATH = `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
-  const run = (command: string, args: string[]) =>
+  if (coreArtifact) environment.PATH += ":/opt/homebrew/bin:/usr/local/bin";
+  const run = (command: string, args: string[], cwd = repository) =>
     execute(command, args, {
-      cwd: repository,
+      cwd,
       env: environment,
       encoding: "utf8",
       timeout: 120000,
@@ -240,6 +274,7 @@ async function main() {
   let fixtureRemoved = false,
     nativeProcessGroupClosed = false,
     phase = "archive";
+  let consumerFingerprint: string | undefined;
   let copiedSource: {
     relativePath: string;
     sha256: string;
@@ -273,6 +308,19 @@ async function main() {
         await writeFile(target, file.bytes, { mode: 0o600, flag: "wx" });
       }
     }
+    if (coreArtifact && nativeInsights) {
+      phase = "canonical-consumer";
+      const npmConfig = join(temporary, "npm-userconfig");
+      await writeFile(npmConfig, "", { mode: 0o600, flag: "wx" });
+      environment.npm_config_userconfig = npmConfig;
+      environment.npm_config_cache = join(temporary, "npm-cache");
+      consumerFingerprint = await prepareNativeInsightsConsumer({
+        workspace,
+        coreArtifact,
+        coreVersion: nativeInsights.coreVersion,
+        run,
+      });
+    }
     if (sourceBytes) {
       const { parseActivityData } = require(
         join(packageRoot, "dist/src/contracts.js"),
@@ -304,6 +352,11 @@ async function main() {
       };
     }
     await writeFile(activityCopy, activityBytes, { mode: 0o600, flag: "wx" });
+    if (impactBytes)
+      await writeFile(join(temporary, "impact-activity.json"), impactBytes, {
+        mode: 0o600,
+        flag: "wx",
+      });
     await writeFile(
       join(userData, "User/settings.json"),
       JSON.stringify({
@@ -350,6 +403,16 @@ async function main() {
         candidateSha256: candidateSha,
         source: copiedSource,
         version: manifest.version,
+        canonicalActivation: coreArtifact !== null,
+        impactActivity: impactBytes
+          ? {
+              path: join(temporary, "impact-activity.json"),
+              sha256: sha(impactBytes),
+            }
+          : null,
+        uiReview: uiReview === "1",
+        phasePath: join(temporary, "phase.json"),
+        controlPath: join(temporary, "control.json"),
       }),
     );
     phase = "installation";
@@ -410,6 +473,22 @@ async function main() {
       () => {
         nativeProcessGroupClosed = true;
       },
+      async (pid) => {
+        if (uiReview) {
+          await writeFile(
+            join(evidence, "ui-session.json"),
+            JSON.stringify({
+              pid,
+              phasePath: join(temporary, "phase.json"),
+              controlPath: join(temporary, "control.json"),
+            }),
+            { mode: 0o600 },
+          );
+          console.log(
+            JSON.stringify({ status: "native-ui-started", evidence }),
+          );
+        }
+      },
     );
     const result = JSON.parse(await readFile(resultPath, "utf8"));
     assert.equal(result.status, "passed");
@@ -417,14 +496,27 @@ async function main() {
     assert.equal(result.activitySha256, activitySha);
     assert.equal(sha(await boundedInput(activity)), activitySha);
     assert.equal(sha(await readFile(candidate)), candidateSha);
-    assert.deepEqual(
-      await workspaceFiles(workspace),
-      nativeInsights
-        ? nativeInsights.files.map((file) => file.path).sort()
-        : copiedSource
-          ? [copiedSource.relativePath]
-          : [],
-    );
+    if (impactActivity && impactBytes)
+      assert.equal(sha(await boundedInput(impactActivity)), sha(impactBytes));
+    if (coreArtifact)
+      assert.equal(
+        sha(await boundedInput(coreArtifact, 16 * 1024 * 1024)),
+        nativeInsights!.coreArtifactSha256,
+      );
+    if (consumerFingerprint)
+      assert.equal(
+        await nativeConsumerFingerprint(workspace),
+        consumerFingerprint,
+      );
+    else
+      assert.deepEqual(
+        await workspaceFiles(workspace),
+        nativeInsights
+          ? nativeInsights.files.map((file) => file.path).sort()
+          : copiedSource
+            ? [copiedSource.relativePath]
+            : [],
+      );
     if (nativeInsights)
       for (const file of nativeInsights.files)
         assert.equal(
@@ -465,6 +557,7 @@ async function main() {
     );
     phase = "cleanup";
     await copyFile(resultPath, join(evidence, "native-result.json"));
+    if (consumerFingerprint) await prepareNativeConsumerRemoval(workspace);
     await rm(temporary, { recursive: true, force: true });
     fixtureRemoved = true;
     await writeFile(
