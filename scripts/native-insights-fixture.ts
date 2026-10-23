@@ -1,5 +1,8 @@
 /** Validate a private, synthetic Lab handoff before copying it into an owned editor. */
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import type { ProjectSnapshot } from "../src/project_snapshot.js";
 import { parseMigrationReviewPlan } from "../src/migration_review.js";
 import { parseMigrationInsights } from "../src/migration_insights.js";
 import { parseMigrationSourceInput } from "../src/migration_source.js";
@@ -101,4 +104,66 @@ export function parseNativeInsightsFixture(value: unknown) {
   } catch {
     return fail();
   }
+}
+
+/** Explicit developer input only; never serve the SQL-bearing handoff itself. */
+export async function readNativeInsightsFixture(path: string) {
+  const handle = await open(
+    path,
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  ).catch(fail);
+  try {
+    const before = await handle.stat();
+    if (!before.isFile() || before.size > 256 * 1024) return fail();
+    const bytes = Buffer.alloc(before.size + 1);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    const after = await handle.stat();
+    if (
+      bytesRead !== before.size ||
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs
+    )
+      return fail();
+    return parseNativeInsightsFixture(
+      JSON.parse(bytes.subarray(0, bytesRead).toString("utf8")),
+    );
+  } catch {
+    return fail();
+  } finally {
+    await handle.close();
+  }
+}
+
+/** The visual preview gets only the same closed metadata the product renders. */
+export function insightsPreviewSnapshot(
+  fixture: ReturnType<typeof parseNativeInsightsFixture>,
+  unavailable = false,
+): ProjectSnapshot {
+  return {
+    workspaceName: "Synthetic Migration Insights preview · no operations",
+    workspaceRoot: "/preview-only",
+    availability: "ready",
+    version: fixture.coreVersion,
+    activity: { schemaVersion: 1, state: "idle", operation: null, recent: [] },
+    migrationReview: fixture.plan,
+    migrationInsights: unavailable
+      ? { state: "unavailable" }
+      : { state: "available", report: fixture.report },
+    candidates: {
+      count: fixture.plan.candidateCount,
+      digest: fixture.plan.candidateSha256,
+      files: fixture.plan.targets.flatMap((target) =>
+        target.entries
+          .filter((entry) => entry.status === "candidate")
+          .map((entry) => ({ ...entry, target: target.name })),
+      ),
+      targets: fixture.plan.targets.map((target) => ({
+        name: target.name,
+        configPath: "rehearsal.config.mjs",
+        count: target.entries.filter((entry) => entry.status === "candidate")
+          .length,
+        digest: target.candidateSha256,
+      })),
+    },
+  };
 }

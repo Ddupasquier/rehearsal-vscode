@@ -1,6 +1,13 @@
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseNativeInsightsFixture } from "../scripts/native-insights-fixture.js";
+import {
+  insightsPreviewSnapshot,
+  parseNativeInsightsFixture,
+  readNativeInsightsFixture,
+} from "../scripts/native-insights-fixture.js";
 import { insightPlan, insightReport } from "./migration_insights_fixture.js";
 
 const fixture = (
@@ -41,6 +48,55 @@ const fixture = (
   };
 };
 describe("private native Insights handoff", () => {
+  it("projects only validated metadata into the visual preview, including unavailable fallback", () => {
+    const parsed = parseNativeInsightsFixture(fixture());
+    const snapshot = insightsPreviewSnapshot(parsed);
+    expect(snapshot.candidates?.count).toBe(parsed.plan.candidateCount);
+    expect(snapshot.candidates?.targets[0]?.count).toBe(1);
+    expect(snapshot.migrationReview).toBe(parsed.plan);
+    expect(snapshot.migrationInsights).toEqual({
+      state: "available",
+      report: parsed.report,
+    });
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("ALTER TABLE");
+    expect(serialized).not.toContain("synthetic_probe");
+    expect(serialized).not.toContain("base64");
+    expect(insightsPreviewSnapshot(parsed, true).migrationInsights).toEqual({
+      state: "unavailable",
+    });
+  });
+  it("reads only bounded regular private fixtures and refuses malformed files and links", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "insights-preview-"));
+    try {
+      const file = join(directory, "fixture.json");
+      await writeFile(file, JSON.stringify(fixture()));
+      expect((await readNativeInsightsFixture(file)).coreVersion).toBe(
+        "1.2.0-test.1",
+      );
+      const link = join(directory, "link.json");
+      await symlink(file, link);
+      await expect(readNativeInsightsFixture(link)).rejects.toThrow(
+        "private input withheld",
+      );
+      await expect(
+        readNativeInsightsFixture(join(directory, "missing.json")),
+      ).rejects.toThrow("private input withheld");
+      await writeFile(file, "PRIVATE_CANARY");
+      await expect(readNativeInsightsFixture(file)).rejects.toThrow(
+        "private input withheld",
+      );
+      await writeFile(file, " ".repeat(256 * 1024 + 1));
+      await expect(readNativeInsightsFixture(file)).rejects.toThrow(
+        "private input withheld",
+      );
+      await expect(readNativeInsightsFixture(directory)).rejects.toThrow(
+        "private input withheld",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
   it("retains exact raw UTF-8 BOM/EOL bytes and independently parses the plan/report", () => {
     const input = fixture(),
       parsed = parseNativeInsightsFixture(input);

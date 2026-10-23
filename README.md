@@ -445,6 +445,21 @@ with the same address input preserved; it is synthetic UI evidence, not a live a
 resource review buttons explain their VS Code flow without applying anything. This
 developer surface never runs Rehearsal commands or touches a project.
 
+For the source-candidate Insights visual/keyboard pass, supply the same private
+synthetic Lab handoff used by the native companion:
+
+```bash
+npm run preview -- --insights-fixture=/absolute/path/to/native-insights-fixture.json
+```
+
+Open `/migration-insights` or `/migration-insights-unavailable`, with the same theme
+options. The bounded regular-file reader validates the complete handoff; only its
+closed plan/report metadata enters the preview. The source bytes and handoff itself
+are never served. A labeled preview-only bridge records source-button dispatch so
+real click/keyboard behavior can be checked without opening files or running an
+operation. This is browser rendering/controller evidence, not native activation or
+an end-to-end VS Code source-open claim. Keep the input and local evidence private.
+
 To try the packaged extension instead:
 
 ```bash

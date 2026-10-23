@@ -516,6 +516,15 @@ This is a native host/source companion, not full canonical activation, new CLI
 execution, rendered layout, webview click, actual keyboard or assistive-technology
 evidence. Those observations remain separately required where applicable.
 
+The loopback-only workspace preview accepts an explicit developer-owned
+`--insights-fixture` path for `/migration-insights` and its unavailable variant.
+The existing closed handoff parser and bounded no-follow regular-file reader feed
+only plan/report metadata to the production renderer. No route serves source bytes
+or the handoff. A labeled preview-only bridge observes actual controller source-button
+dispatch without opening files, executing commands or impersonating the native host.
+Browser rendering, focus, disclosure and keyboard observations therefore remain
+distinct from the native source companion and full canonical activation.
+
 Source navigation has one shared in-flight slot per workspace-panel owner, covering
 both failure-input and static-finding opening across its projects. Repeated clicks while
 it is occupied are ignored, not queued or retried. The slot releases in `finally` on
