@@ -53,7 +53,7 @@ default; installation requires an explicit option and never starts a database.
    npm install --save-dev @rehearsal-db/core
    ```
 
-   This release targets core **1.0.2**; `0.1.0-rc.4` remains the minimum core contract.
+   This release targets core **1.2.0**; `0.1.0-rc.4` remains the minimum core contract.
    The new persistent migration diagnoses require core 1.0.2; an older compatible
    package cannot supply that evidence.
    Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
@@ -73,19 +73,19 @@ default; installation requires an explicit option and never starts a database.
 ### Direct GitHub installation
 
 The reviewed VSIX is an alternative to Marketplace. Open the
-[0.1.23 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.23)
-and download `rehearsal-db-0.1.23.vsix` and `SHA256SUMS`. If that version is absent,
+[0.1.24 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.24)
+and download `rehearsal-db-0.1.24.vsix` and `SHA256SUMS`. If that version is absent,
 publication has not completed; a source version is not a downloadable release.
 Compare its SHA-256 with the checksum from that same release: use
-`shasum -a 256 /path/to/rehearsal-db-0.1.23.vsix` on macOS or
-`sha256sum /path/to/rehearsal-db-0.1.23.vsix` on Linux. Stop if they differ.
+`shasum -a 256 /path/to/rehearsal-db-0.1.24.vsix` on macOS or
+`sha256sum /path/to/rehearsal-db-0.1.24.vsix` on Linux. Stop if they differ.
 Open **Extensions → … → Install from VSIX…** and choose that verified file.
 Save your work and reload the extension host only if VS Code asks.
 
 If VS Code's `code` command is available, installation can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.24.vsix --force
 ```
 
 ### Node setup and runtime selection
@@ -218,11 +218,11 @@ rewrites or retries the migration automatically. Follow the main
 [failure-and-fix tutorial](https://ddupasquier.github.io/rehearsal-db/tutorial/) to review
 a fresh candidate, observe a safe failure, correct it and verify the result.
 
-### Static Migration Insights (source candidate)
+### Static Migration Insights
 
-The next source candidate adds optional **Static Migration Insights** inside each
-pending migration's disclosure on **Migrations**. This is not present in public extension
-0.1.23/core 1.0.2. It appears only when a supported workspace core explicitly advertises
+Extension 0.1.24 with core 1.2.0 adds optional **Static Migration Insights** inside each
+pending migration's disclosure on **Migrations**. Earlier releases do not include it.
+It appears only when a supported workspace core explicitly advertises
 the versioned Insights contract and its complete plan matches the current candidate
 digest, baseline, targets and exact file hashes. Older compatible cores keep the ordinary
 review and rehearsal controls unchanged.
@@ -418,11 +418,11 @@ acceptance; see the [native companion boundary](docs/architecture.md#optional-st
 
 For a separately observed real webview/keyboard source-open pass, the same launcher
 accepts `REHEARSAL_NATIVE_INSIGHTS_UI_REVIEW=1`. It exposes only an owned UI-session
-record and waits up to two minutes for a matching nonce/action acknowledgement,
+record and waits up to two minutes for the real panel's matching source request,
 inside the unchanged three-minute native process deadline. Use the real rendered
-controls before acknowledging; the driver independently verifies the selected clean
-document and exact recorded position. Keep visual/keyboard observations separate:
-an acknowledgement alone is not evidence of either. No speech or database operation
+controls; the driver observes the request and independently verifies the selected clean
+document and exact recorded position. No acknowledgement file or timely chat reply
+is required. Keep operator visual/keyboard observations separate. No speech or database operation
 is involved, and full canonical activation remains a separate check.
 
 These steps are for developing the extension, not installing it into your application.
@@ -529,7 +529,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.24.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

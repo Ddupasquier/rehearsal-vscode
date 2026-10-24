@@ -454,9 +454,9 @@ The maintained check executes the compiled controller without Node globals to ca
 CommonJS closure references in serialized helpers. This DOM-double check does not prove
 rendered navigation, layout or assistive-technology behavior.
 
-### Optional static Migration Insights (source candidate)
+### Optional static Migration Insights
 
-This source-only addition is not a claim about public extension 0.1.23/core 1.0.2.
+This optional addition targets extension 0.1.24/core 1.2.0; older releases lack it.
 Manifest capability `migrationInsights: 1`, together with `migrationReview: 1`, enables
 the public read-only `inspect insights --json` query in the trusted ready idle inspection.
 `migration_insights.ts` owns the strict closed schema and exact plan/version binding.

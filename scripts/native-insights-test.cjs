@@ -195,6 +195,11 @@ exports.run = async () => {
     const panel = owner.panels.get(key);
     assert.ok(panel);
     await wait(() => panel.visible);
+    if (config.uiReview)
+      await owner.handleMessage(panel, key, {
+        type: "preferences",
+        preferences: { migrationQuery: "_bom_lf.sql" },
+      });
     await owner.handleMessage(panel, key, {
       type: "navigate",
       page: "migrations",
@@ -226,47 +231,46 @@ exports.run = async () => {
     );
     if (config.uiReview) {
       phase = "actual-ui-source";
-      for (const file of [config.phasePath, config.controlPath])
-        within(config.root, file);
-      const [, item] = native.find(([, entry]) =>
+      within(config.root, config.phasePath);
+      const [expectedFindingId, item] = native.find(([, entry]) =>
         entry.entry.filename.endsWith("_bom_lf.sql"),
       );
+      const receive = owner.handleMessage;
+      let sourceRequested = false;
+      // Only observe the real panel's incoming request. The companion does not
+      // dispatch a source message until this operator phase has completed.
+      owner.handleMessage = async (receivedPanel, workspaceKey, message) => {
+        await receive.call(owner, receivedPanel, workspaceKey, message);
+        if (
+          receivedPanel === panel &&
+          workspaceKey === key &&
+          message?.type === "openMigrationInsight" &&
+          message.findingId === expectedFindingId
+        )
+          sourceRequested = true;
+      };
       const nonce = randomUUID();
       const phaseFile = `${config.phasePath}.new`;
-      await fs.writeFile(
-        phaseFile,
-        JSON.stringify({
-          nonce,
-          action: "source-opened",
-          expectedFile: item.entry.filename,
-          expectedLine: item.finding.line,
-          expectedColumn: item.finding.column,
-          note: "Use only the real rendered Migrations UI and keyboard. Do not edit source or run a command. Acknowledgement is not rendered/keyboard evidence by itself.",
-        }),
-        { mode: 0o600 },
-      );
-      await fs.rename(phaseFile, config.phasePath);
-      const deadline = Date.now() + 120000;
-      let acknowledged = false;
-      while (Date.now() < deadline) {
-        try {
-          const bytes = await fs.readFile(config.controlPath);
-          assert.ok(bytes.length <= 4096);
-          const control = JSON.parse(bytes.toString("utf8"));
-          if (
-            Object.keys(control).sort().join(",") === "action,nonce" &&
-            control.nonce === nonce &&
-            control.action === "source-opened"
-          ) {
-            acknowledged = true;
-            break;
-          }
-        } catch (error) {
-          if (error.code !== "ENOENT") throw error;
-        }
-        await delay(50);
+      try {
+        await fs.writeFile(
+          phaseFile,
+          JSON.stringify({
+            nonce,
+            action: "source-opened",
+            expectedFile: item.entry.filename,
+            expectedLine: item.finding.line,
+            expectedColumn: item.finding.column,
+            note: "Use only the real rendered Migrations UI and keyboard. The driver observes the source request and actual document position directly; no acknowledgement file or timely chat reply is required.",
+          }),
+          { mode: 0o600 },
+        );
+        await fs.rename(phaseFile, config.phasePath);
+        const deadline = Date.now() + 120000;
+        while (!sourceRequested && Date.now() < deadline) await delay(50);
+      } finally {
+        owner.handleMessage = receive;
       }
-      assert.ok(acknowledged, "Actual UI source-open coordination timed out.");
+      assert.ok(sourceRequested, "Actual webview source request timed out.");
       const editor = vscode.window.activeTextEditor;
       assert.equal(
         editor?.document.uri.fsPath,
@@ -276,7 +280,7 @@ exports.run = async () => {
       assert.equal(editor.selection.active.line, item.finding.line - 1);
       assert.equal(editor.selection.active.character, item.finding.column - 1);
       result.checks.push(
-        "operator-coordinated native source request reached the real host handler and unchanged document at the independently recorded position; actual UI observations are recorded separately",
+        "real isolated webview source request reached the production host handler and unchanged document at the independently recorded position; operator keyboard/visual observations remain separate",
       );
     }
     for (const [findingId, item] of native) {

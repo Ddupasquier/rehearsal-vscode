@@ -412,7 +412,6 @@ async function main() {
           : null,
         uiReview: uiReview === "1",
         phasePath: join(temporary, "phase.json"),
-        controlPath: join(temporary, "control.json"),
       }),
     );
     phase = "installation";
@@ -480,7 +479,6 @@ async function main() {
             JSON.stringify({
               pid,
               phasePath: join(temporary, "phase.json"),
-              controlPath: join(temporary, "control.json"),
             }),
             { mode: 0o600 },
           );
