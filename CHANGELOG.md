@@ -18,6 +18,8 @@
 - Retain the free Starter license, independent automatic-update consent and existing
   platform boundaries. Native Windows database execution, new hosted services and
   paid features are not added by this release.
+- Patch a development-only publishing-tool authentication dependency; no Azure SDK
+  or new network behavior is added to the installed extension.
 
 ## 0.1.23 — Configuration review recovery
 

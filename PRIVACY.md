@@ -20,8 +20,8 @@ filename, digest and safe project-relative path. They exclude SQL, row values, c
 strings and raw provider details. The extension displays them without copying the raw
 CLI response or diagnosis into its own saved activity receipts.
 
-Public extension 0.1.23/core 1.0.2 passive inspection does not scan migration contents.
-In the next source candidate, a trusted workspace whose core explicitly advertises
+Earlier extension releases do not scan migration contents during passive inspection.
+From extension 0.1.24/core 1.2.0, a trusted workspace whose core explicitly advertises
 Migration Insights may also run that core's bounded static SQL inspection. It reads only
 project-local regular migration files: at most 10,000 files in total, 10,000 entries per
 migration directory, 1,000 pending candidates, 2 MiB per file and 16 MiB total input. No SQL is
@@ -30,7 +30,7 @@ most 5,000 fixed findings with lexical positions, exact filenames/hashes and saf
 paths—not SQL bodies, identifiers or row values. These optional results remain in the
 current in-memory snapshot, not saved activity receipts or view state.
 
-If you explicitly choose **Open exact migration input** or the candidate's **Open exact
+If you explicitly choose **Open exact migration input** or **Open exact
 migration at finding**, the extension reads at most 2 MiB of that selected project-local
 file to verify its UTF-8 bytes, identity and recorded digest before opening it in the
 native editor. Changed or dirty files and symlink redirects are refused. SQL stays in

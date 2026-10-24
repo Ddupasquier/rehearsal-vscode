@@ -1,16 +1,21 @@
 # Editor-facing CLI audit
 
-## Current release guidance
+## Published baseline and current candidate
 
 For current installation and supported-platform guidance, use the
 [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/):
-Free Starter **0.1.23**, canonical ID **`rehearsal-db.rehearsal-db`**, paired with
-core **1.0.2**. [Issue #186](https://github.com/Ddupasquier/rehearsal-db/issues/186)
+The published baseline before this candidate is Free Starter **0.1.23**, canonical ID
+**`rehearsal-db.rehearsal-db`**. Core **1.1.0** is separately published; the historical
+pair below used core **1.0.2**. [Issue #186](https://github.com/Ddupasquier/rehearsal-db/issues/186)
 records the migration-diagnosis and workflow fixes;
 [issue #137](https://github.com/Ddupasquier/rehearsal-db/issues/137) records the later
 configuration-recovery patch. Remaining integrated native, provider and accessibility
 acceptance is tracked separately in
 [issue #130](https://github.com/Ddupasquier/rehearsal-db/issues/130).
+
+The current candidate is Starter **0.1.24** with core **1.2.0**. A source version is
+not a publication claim. The release list and exact checksum-matched installed
+evidence own availability and verification; older observations below remain historical.
 
 This report preserves artifact-specific observations and describes focused companion
 checks. Historical identities, versions, publication status and resource blockers below
@@ -21,8 +26,8 @@ later artifacts or unexercised native/provider/accessibility behavior.
 
 The source candidate adds optional `rehearsalContracts.migrationInsights: 1` consumption
 through `inspect insights --json`, only with an independently validated plan v1 in a
-trusted ready idle workspace. This section does not claim public 0.1.23/core 1.0.2
-contains the feature or that a native editor observation has happened.
+trusted ready idle workspace. Older public 0.1.23/core 1.0.2 do not contain this feature.
+Native source-candidate observations are separate from final release-pair evidence.
 
 The closed schema-1 report includes the inspector version, complete candidate digest and
 count, ordered targets/providers/baseline identities, exact candidate filenames/hashes,
