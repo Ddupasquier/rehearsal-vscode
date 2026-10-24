@@ -50,15 +50,18 @@ signing keys, payment secrets, customer details or license records in Git.
 ## Maintained packaging dependency
 
 VSCE 4.0.0 currently resolves Azure Identity's affected MSAL Node 6.x range.
-The scoped, exact `@azure/msal-node` 7.1.1 override addresses
+The exact development-only `@azure/msal-node` 7.1.1 override addresses
 [GHSA-xcx6-jx8p-x3h5](https://github.com/AzureAD/microsoft-authentication-library-for-js/security/advisories/GHSA-xcx6-jx8p-x3h5)
 without downgrading the packager or suppressing the dependency audit. It affects
-development/publishing tooling only; dependencies are excluded from the VSIX.
+development/publishing tooling only; VSCE is this repository's sole consumer and
+dependencies are excluded from the VSIX. The override is flat because npm 10's
+clean installer rejects the nested VSCE/Identity override's otherwise valid npm 11
+lockfile. Keep the ordinary clean install and audit checks on Node 22/24/26.
 
 MSAL 7 changes interactive browser response-mode handling. VSCE's current Azure
 credential chain is noninteractive and does not use that removed option. Verify
 the installed dependency graph, network-disabled synthetic client-secret path,
 existing packaging/installed-artifact checks and full audit when changing this
 pin. This does not certify real Microsoft authentication or grant publisher access.
-Remove the scoped override when the maintained VSCE/Azure Identity range accepts
+Remove the override when the maintained VSCE/Azure Identity range accepts
 a fixed version, after reviewing the resulting lockfile and running those checks.
