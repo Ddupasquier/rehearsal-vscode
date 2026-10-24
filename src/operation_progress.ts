@@ -80,6 +80,7 @@ export const OPERATION_KINDS = [
   "identity connect",
   "init",
   "migrate",
+  "measure impact",
   "open",
   "privacy key",
   "refresh",

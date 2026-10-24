@@ -53,7 +53,7 @@ default; installation requires an explicit option and never starts a database.
    npm install --save-dev @rehearsal-db/core
    ```
 
-   This release targets core **1.0.2**; `0.1.0-rc.4` remains the minimum core contract.
+   This release targets core **1.2.0**; `0.1.0-rc.4` remains the minimum core contract.
    The new persistent migration diagnoses require core 1.0.2; an older compatible
    package cannot supply that evidence.
    Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
@@ -73,19 +73,19 @@ default; installation requires an explicit option and never starts a database.
 ### Direct GitHub installation
 
 The reviewed VSIX is an alternative to Marketplace. Open the
-[0.1.23 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.23)
-and download `rehearsal-db-0.1.23.vsix` and `SHA256SUMS`. If that version is absent,
+[0.1.24 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.24)
+and download `rehearsal-db-0.1.24.vsix` and `SHA256SUMS`. If that version is absent,
 publication has not completed; a source version is not a downloadable release.
 Compare its SHA-256 with the checksum from that same release: use
-`shasum -a 256 /path/to/rehearsal-db-0.1.23.vsix` on macOS or
-`sha256sum /path/to/rehearsal-db-0.1.23.vsix` on Linux. Stop if they differ.
+`shasum -a 256 /path/to/rehearsal-db-0.1.24.vsix` on macOS or
+`sha256sum /path/to/rehearsal-db-0.1.24.vsix` on Linux. Stop if they differ.
 Open **Extensions → … → Install from VSIX…** and choose that verified file.
 Save your work and reload the extension host only if VS Code asks.
 
 If VS Code's `code` command is available, installation can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.24.vsix --force
 ```
 
 ### Node setup and runtime selection
@@ -217,6 +217,37 @@ input is not a proven SQL origin and no line or column is guessed. Rehearsal nev
 rewrites or retries the migration automatically. Follow the main
 [failure-and-fix tutorial](https://ddupasquier.github.io/rehearsal-db/tutorial/) to review
 a fresh candidate, observe a safe failure, correct it and verify the result.
+
+### Static Migration Insights
+
+Extension 0.1.24 with core 1.2.0 adds optional **Static Migration Insights** inside each
+pending migration's disclosure on **Migrations**. Earlier releases do not include it.
+It appears only when a supported workspace core explicitly advertises
+the versioned Insights contract and its complete plan matches the current candidate
+digest, baseline, targets and exact file hashes. Older compatible cores keep the ordinary
+review and rehearsal controls unchanged.
+
+Insights can flag destructive operations, broad updates/deletes, new constraints and
+NOT NULL requirements with fixed explanations and review suggestions. Unsupported,
+malformed or bounded input is **unknown**, not safe. **No detected warning is neither a
+safety verdict nor proof that SQL syntax is valid.** Data impact, permissions, locks and
+production behavior still require review and proof in your disposable runtime.
+
+Core reads bounded project-local SQL without executing it, starting an engine or
+contacting a database. SQL bodies, identifiers and row values are not included in
+findings. **Open exact migration at finding** verifies unchanged UTF-8 bytes and an
+unchanged clean editor buffer before navigating to a reported lexical line/column.
+Changed, dirty, missing or redirected input requires a fresh inspection; it is never
+automatically fixed or run. This static position is separate from failure attribution,
+which still does not guess a provider error location.
+
+The analysis is limited to 1,000 pending candidates, 10,000 files in total, 10,000 entries
+per migration directory, 2 MiB per file, 16 MiB total input and 5,000 findings. The workbench shows at
+most ten findings per migration, explicitly noting any omitted findings; use
+`rehearsal inspect insights --json` for the complete bounded report. Unavailable or invalid
+optional analysis does not block ordinary MVP controls or weaken their confirmations.
+
+### Project setup and runtime review
 
 If the tutorial CLI works but the dashboard says **Project package link needs repair**,
 npm linked its package outside this repository. Keep the same project and baseline.
@@ -356,6 +387,44 @@ discovery rules.
 
 ## Contributing and local development
 
+For the source-candidate Insights native host/source check, first obtain the
+independent Lab's private `native-insights-fixture.json` from a passing
+`--insights-review` run. Use the exact reviewed VSIX and its SHA-256:
+
+```bash
+npx --no-install tsx scripts/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
+```
+
+Optionally set `REHEARSAL_NATIVE_INSIGHTS_CORE_ARTIFACT` to the exact core tarball
+whose checksum is recorded in that handoff. The harness installs it with scripts
+disabled in the owned synthetic workspace, creates a baseline from fixed synthetic
+files, checks readiness, then activates the canonical extension and observes its real
+public-CLI inspection. It does not start a database or run a migration. Source hashes,
+findings, unknown coverage and live plan binding must match the independent handoff;
+the complete owned consumer is fingerprinted before/after. This is activation/API
+evidence, not a rendered click, keyboard or assistive-technology claim. After the
+preservation check and owned editor shutdown, teardown unlocks only the synthetic
+baseline generation directories so their intentionally read-only files can be removed.
+An optional `REHEARSAL_NATIVE_IMPACT_ACTIVITY` path accepts an actual recorded public
+Activity envelope for the separate installed-parser/Activity-renderer compatibility
+check; it never substitutes that receipt for live canonical inspection.
+
+The opt-in macOS launcher requires normal memory pressure and uses a disposable
+profile and exact synthetic source copies. By default it executes no CLI; the optional
+canonical check above runs only installation, file-baseline creation and inspection.
+Neither mode starts a database or executes a migration. Keep the
+SQL-bearing fixture private. A passing host/source check is not rendered or keyboard
+acceptance; see the [native companion boundary](docs/architecture.md#optional-static-migration-insights-source-candidate).
+
+For a separately observed real webview/keyboard source-open pass, the same launcher
+accepts `REHEARSAL_NATIVE_INSIGHTS_UI_REVIEW=1`. It exposes only an owned UI-session
+record and waits up to two minutes for the real panel's matching source request,
+inside the unchanged three-minute native process deadline. Use the real rendered
+controls; the driver observes the request and independently verifies the selected clean
+document and exact recorded position. No acknowledgement file or timely chat reply
+is required. Keep operator visual/keyboard observations separate. No speech or database operation
+is involved, and full canonical activation remains a separate check.
+
 These steps are for developing the extension, not installing it into your application.
 Clone this repository first. The F5 launch configuration expects a sibling
 `rehearsal-test-lab` checkout; its maintained runbook owns fixture preparation and
@@ -401,6 +470,21 @@ with the same address input preserved; it is synthetic UI evidence, not a live a
 resource review buttons explain their VS Code flow without applying anything. This
 developer surface never runs Rehearsal commands or touches a project.
 
+For the source-candidate Insights visual/keyboard pass, supply the same private
+synthetic Lab handoff used by the native companion:
+
+```bash
+npm run preview -- --insights-fixture=/absolute/path/to/native-insights-fixture.json
+```
+
+Open `/migration-insights` or `/migration-insights-unavailable`, with the same theme
+options. The bounded regular-file reader validates the complete handoff; only its
+closed plan/report metadata enters the preview. The source bytes and handoff itself
+are never served. A labeled preview-only bridge records source-button dispatch so
+real click/keyboard behavior can be checked without opening files or running an
+operation. This is browser rendering/controller evidence, not native activation or
+an end-to-end VS Code source-open claim. Keep the input and local evidence private.
+
 To try the packaged extension instead:
 
 ```bash
@@ -445,7 +529,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.23.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.24.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

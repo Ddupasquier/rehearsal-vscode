@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.24 — Migration Insights and environment comparisons
+
+- Add optional, free static Migration Insights with core 1.2.0: bounded destructive
+  SQL warnings, explicit unknown coverage and exact unchanged-file navigation to
+  lexical findings. No warning is a syntax-validity or safety verdict. Analysis
+  starts no database, edits no SQL and never applies a migration.
+- Keep ordinary review/rehearsal available when optional analysis is absent or
+  unavailable. Refuse stale, changed, redirected or dirty source inputs and bound
+  repeated navigation requests.
+- Accept core-owned impact-measurement Activity receipts without treating a
+  read-only measurement as a migration or application-proof result. Actual
+  aggregate measurement remains the explicitly confirmed core CLI workflow.
+- Compare current/retained environment evidence and export reviewed JSON or Markdown
+  to an explicitly chosen destination. Preserve cancellation, unsupported/unknown
+  evidence, data and existing files; historical receipts are not fresh verification.
+- Retain the free Starter license, independent automatic-update consent and existing
+  platform boundaries. Native Windows database execution, new hosted services and
+  paid features are not added by this release.
+- Patch a development-only publishing-tool authentication dependency; no Azure SDK
+  or new network behavior is added to the installed extension.
+
 ## 0.1.23 — Configuration review recovery
 
 - Identify invalid structured fields and numeric ranges before opening a review.

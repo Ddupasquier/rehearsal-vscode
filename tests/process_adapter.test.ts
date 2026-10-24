@@ -458,6 +458,42 @@ if (process.argv.includes("--version")) console.log(JSON.stringify({name:"@rehea
     );
   });
 
+  it.each([undefined, 1, 2])(
+    "advertises static migration inspection only for explicit schema %s",
+    async (schema) => {
+      const root = await workspace(
+        "",
+        "9.9.9",
+        schema === undefined ? {} : { migrationInsights: schema },
+      );
+      expect(
+        (await resolveWorkspaceRehearsal(root)).migrationInsightsSchema,
+      ).toBe(schema === 1 ? 1 : null);
+    },
+  );
+
+  it("keeps larger static JSON bounded separately from the ordinary one-MiB command limit", async () => {
+    const root = await workspace(
+      `console.log(JSON.stringify({schemaVersion:1,rehearsalVersion:"9.9.9",command:"inspect insights",status:"success",startedAt:new Date(0).toISOString(),durationMs:1,warnings:[],data:{fixture:"x".repeat(1100000)}}));`,
+    );
+    const options = {
+      workspaceRoot: root,
+      command: ["inspect", "insights"],
+      expectedCommand: "inspect insights",
+    };
+    await expect(runRehearsalJson(options)).rejects.toMatchObject({
+      code: "output_limit",
+    });
+    expect(
+      (
+        await runRehearsalJson<{ fixture: string }>({
+          ...options,
+          outputLimitBytes: 8 * 1024 * 1024,
+        })
+      ).result.data.fixture.length,
+    ).toBe(1100000);
+  });
+
   it("accepts doctor not-ready exit 1 and preserves explicit config arguments", async () => {
     const root = await workspace(`
 const config = process.argv.find((value) => value.startsWith("--config="));

@@ -1,21 +1,59 @@
 # Editor-facing CLI audit
 
-## Current release guidance
+## Published baseline and current candidate
 
 For current installation and supported-platform guidance, use the
 [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/):
-Free Starter **0.1.23**, canonical ID **`rehearsal-db.rehearsal-db`**, paired with
-core **1.0.2**. [Issue #186](https://github.com/Ddupasquier/rehearsal-db/issues/186)
+The published baseline before this candidate is Free Starter **0.1.23**, canonical ID
+**`rehearsal-db.rehearsal-db`**. Core **1.1.0** is separately published; the historical
+pair below used core **1.0.2**. [Issue #186](https://github.com/Ddupasquier/rehearsal-db/issues/186)
 records the migration-diagnosis and workflow fixes;
 [issue #137](https://github.com/Ddupasquier/rehearsal-db/issues/137) records the later
 configuration-recovery patch. Remaining integrated native, provider and accessibility
 acceptance is tracked separately in
 [issue #130](https://github.com/Ddupasquier/rehearsal-db/issues/130).
 
+The current candidate is Starter **0.1.24** with core **1.2.0**. A source version is
+not a publication claim. The release list and exact checksum-matched installed
+evidence own availability and verification; older observations below remain historical.
+
 This report preserves artifact-specific observations and describes focused companion
 checks. Historical identities, versions, publication status and resource blockers below
 belong to their recorded observations, not the current release. They do not certify
 later artifacts or unexercised native/provider/accessibility behavior.
+
+## Static Migration Insights source contract
+
+The source candidate adds optional `rehearsalContracts.migrationInsights: 1` consumption
+through `inspect insights --json`, only with an independently validated plan v1 in a
+trusted ready idle workspace. Older public 0.1.23/core 1.0.2 do not contain this feature.
+Native source-candidate observations are separate from final release-pair evidence.
+
+The closed schema-1 report includes the inspector version, complete candidate digest and
+count, ordered targets/providers/baseline identities, exact candidate filenames/hashes,
+bounded lexical rule findings, fixed explanation/remediation, explicit unknown coverage,
+read-only safety and a non-safety limitation. Every binding must match the current plan;
+unknown additions or SQL-bearing prose are refused. Optional analysis unavailable/invalid
+keeps ordinary review/rehearsal controls intact. Core version/activity drift still fails
+the normal inspection closed. Older packages are not asked for this command.
+
+Only this response has an 8 MiB transport/parse cap. The accepted core analysis limits
+are 1,000 candidates, 10,000 total files, 10,000 entries per migration directory, 2 MiB/file,
+16 MiB total input and 5,000 findings. The existing migration rows show at most ten
+findings each and disclose omissions. Findings contain no SQL bodies, object identifiers
+or row values. Unknown or no-warning results never establish SQL validity, safe data
+impact, production behavior, permissions or lock impact.
+
+Static navigation uses a host-resolved opaque exact-report/finding ID. It rechecks the
+current trusted idle snapshot, canonical confined file identity, exact digest, clean
+document text and the actual UTF-16 lexical position. It neither invents failure
+provenance nor changes existing SQLSTATE attribution. No SQL is edited or executed and
+no engine, database, provider login or upload is started.
+
+Focused parser/snapshot/source/navigation tests exercise these boundaries. Pure model,
+mocked panel and file-reader checks are not native rendered/keyboard/Save-dialog,
+provider-execution, screen-reader, Windows or Remote-WSL acceptance. Exact packaged and
+installed-consumer verification remains separately required before release claims.
 
 ## Historical Environment Workbench acceptance
 

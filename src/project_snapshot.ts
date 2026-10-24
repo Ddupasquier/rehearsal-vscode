@@ -53,6 +53,11 @@ import {
   parseBaselineShapeData,
   type BaselineShapeData,
 } from "./shape_contract.js";
+import {
+  MIGRATION_INSIGHTS_OUTPUT_BYTES,
+  parseMigrationInsights,
+  type MigrationInsights,
+} from "./migration_insights.js";
 
 export type ProjectAvailability =
   | "loading"
@@ -134,6 +139,9 @@ export interface ProjectSnapshot {
     }[];
   };
   readonly migrationReview?: MigrationReviewPlan;
+  readonly migrationInsights?:
+    | { readonly state: "available"; readonly report: MigrationInsights }
+    | { readonly state: "unavailable" };
   readonly runtime?: {
     readonly state:
       "running" | "stopped" | "unavailable" | "unhealthy" | "mixed";
@@ -225,6 +233,7 @@ export interface SnapshotClient {
       readonly resourceInventorySchema?: 1 | null;
       readonly resourceManagerSchema?: 1 | null;
       readonly migrationReviewSchema?: 1 | null;
+      readonly migrationInsightsSchema?: 1 | null;
       readonly configurationReviewSchema?: 1 | null;
     }
   >;
@@ -235,6 +244,7 @@ export interface SnapshotClient {
     configPath?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
+    outputLimitBytes?: number;
   }): Promise<{ result: ResultEnvelope<Data>; exitCode: number }>;
 }
 
@@ -261,6 +271,7 @@ export const processSnapshotClient: SnapshotClient = {
         resourceInventorySchema: resolved.resourceInventorySchema,
         resourceManagerSchema: resolved.resourceManagerSchema,
         migrationReviewSchema: resolved.migrationReviewSchema,
+        migrationInsightsSchema: resolved.migrationInsightsSchema,
         configurationReviewSchema: resolved.configurationReviewSchema,
       };
     }
@@ -275,6 +286,7 @@ export const processSnapshotClient: SnapshotClient = {
       resourceInventorySchema: resolved.resourceInventorySchema,
       resourceManagerSchema: resolved.resourceManagerSchema,
       migrationReviewSchema: resolved.migrationReviewSchema,
+      migrationInsightsSchema: resolved.migrationInsightsSchema,
       configurationReviewSchema: resolved.configurationReviewSchema,
     };
   },
@@ -744,6 +756,7 @@ export const inspectProject = async ({
       resources,
       migrationReview,
       configurationMetadata,
+      migrationInsights,
     ] = await Promise.all([
       client.command<ExplainData>({
         ...common,
@@ -793,6 +806,21 @@ export const inspectProject = async ({
             expectedCommand: "configuration",
           })
         : Promise.resolve(null),
+      version.migrationReviewSchema === 1 &&
+      version.migrationInsightsSchema === 1
+        ? client
+            .command<unknown>({
+              ...common,
+              command: ["inspect", "insights"],
+              expectedCommand: "inspect insights",
+              outputLimitBytes: MIGRATION_INSIGHTS_OUTPUT_BYTES,
+            })
+            .catch((error: unknown) => {
+              if (error instanceof RehearsalCliError)
+                requireRehearsalVersion(version.version, [error.result]);
+              return null;
+            })
+        : Promise.resolve(undefined),
     ]);
     const finalActivityExecution = await client.command<ActivityData>({
       ...common,
@@ -809,6 +837,7 @@ export const inspectProject = async ({
       finalActivityExecution.result,
       ...(migrationReview ? [migrationReview.result] : []),
       ...(configurationMetadata ? [configurationMetadata.result] : []),
+      ...(migrationInsights ? [migrationInsights.result] : []),
     ]);
     const finalActivity = parseActivityData(finalActivityExecution.result.data);
     if (finalActivity.state !== "idle") {
@@ -857,6 +886,23 @@ export const inspectProject = async ({
         throw new ContractError(
           "Migration plan and project target identities disagree. Refresh the project.",
         );
+    }
+    let parsedMigrationInsights: ProjectSnapshot["migrationInsights"];
+    if (migrationInsights !== undefined && parsedMigrationReview) {
+      try {
+        if (!migrationInsights || migrationInsights.result.status !== "success")
+          throw new Error("Optional static inspection is unavailable.");
+        parsedMigrationInsights = {
+          state: "available",
+          report: parseMigrationInsights(
+            migrationInsights.result.data,
+            parsedMigrationReview,
+            version.version,
+          ),
+        };
+      } catch {
+        parsedMigrationInsights = { state: "unavailable" };
+      }
     }
     const baseline = {
       ...baselineExecution,
@@ -1003,6 +1049,9 @@ export const inspectProject = async ({
       ...(isLocalEndpoint(applicationUrl) ? { applicationUrl } : {}),
       ...(parsedMigrationReview
         ? { migrationReview: parsedMigrationReview }
+        : {}),
+      ...(parsedMigrationInsights
+        ? { migrationInsights: parsedMigrationInsights }
         : {}),
       ...(configurationMetadata
         ? {
