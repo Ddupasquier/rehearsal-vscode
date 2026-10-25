@@ -13,6 +13,11 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { assertArchiveContents } from "./verify-private-vsix.js";
+import { storageEnvironment } from "../src/platform_runtime.js";
+import {
+  nativeStorageRoot,
+  createNativeTemporaryDirectory,
+} from "./native-development-storage.js";
 
 const execute = promisify(execFile);
 const repository = resolve(__dirname, "..");
@@ -32,12 +37,7 @@ async function main() {
   const legacy = resolve(legacyInput);
   assert.equal(sha(await readFile(candidate)), candidateSha);
   assert.equal(sha(await readFile(legacy)), legacySha);
-  const evidence = await mkdtemp(
-    join(repository, "test-results/marketplace-migration."),
-  );
-  // Keep IPC paths short and every generated profile on the development volume.
-  const temporary = await mkdtemp(join(dirname(repository), ".mp-migrate-"));
-  const environment: NodeJS.ProcessEnv = {};
+  const environment: NodeJS.ProcessEnv = storageEnvironment(process.env);
   for (const key of ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
     if (process.env[key]) environment[key] = process.env[key];
   environment.PATH = `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
@@ -62,6 +62,13 @@ async function main() {
       1,
       "Native identity verification deferred: macOS memory pressure is not normal.",
     );
+  await normalPressure();
+  await nativeStorageRoot();
+  const evidence = await mkdtemp(
+    join(repository, "test-results/marketplace-migration."),
+  );
+  // Keep IPC paths short and every generated profile on the development volume.
+  const temporary = await createNativeTemporaryDirectory("mp-");
   let completed = false;
   try {
     for (const [archive, name, version] of [

@@ -1,4 +1,11 @@
 import { resolve } from "node:path";
+import {
+  engineLifecycleMarkup,
+  applyEngineShutdownUpdate,
+  ENGINE_SHUTDOWN_UI_LABELS,
+  type EngineShutdownUiState,
+} from "./engine_lifecycle_view.js";
+import { ENGINE_LIFECYCLE_REASON_LABELS } from "./engine_lifecycle_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import {
   extensionReleasePresentation,
@@ -68,6 +75,7 @@ import {
 } from "./configuration_view.js";
 
 export interface WorkspaceViewAssets {
+  readonly engineShutdownState?: EngineShutdownUiState;
   readonly extensionVersion?: string;
   readonly extensionRelease?: ExtensionReleaseEvidence | undefined;
   readonly formDraftRevision?: number;
@@ -849,7 +857,7 @@ const resourceInventoryMarkup = (
   const disk = inventory.engine.disk;
   return `<div class="resource-inventory">
     <div class="metrics-grid">
-      ${metric("Docker engine", inventory.engine.state, inventory.engine.context ?? "Current Docker context")}
+      ${metric("Docker resource inspection", inventory.engine.state === "running" ? "Available" : "Unavailable", inventory.engine.context ?? "Current Docker context")}
       ${metric("Disk used", disk ? `${disk.usedPercent}%` : "Unavailable", disk ? `${formatGiB(disk.availableBytes)} free of ${formatGiB(disk.totalBytes)}` : "This engine does not expose a portable measurement", disk && disk.usedPercent >= 80 ? "warning" : "muted")}
       ${metric("Owned containers", formatCount(inventory.environments.reduce((total, entry) => total + entry.containerCount, 0)), `${formatCount(inventory.environments.reduce((total, entry) => total + entry.runningContainerCount, 0))} running`)}
       ${metric("Cleanup review", formatCount(inventory.stale.stoppedCount), inventory.stale.stoppedCount ? "Stopped environments need an exact preview" : "Nothing stale in this project", inventory.stale.stoppedCount ? "warning" : "success")}
@@ -1320,6 +1328,8 @@ export const renderWorkspaceDocument = (
           </div>
         </header>
 
+        ${engineLifecycleMarkup(snapshot, assets.actionUris.shutdownVm, true, assets.engineShutdownState)}
+
         ${isLoading ? `<div class="inspection-banner" role="status" aria-live="polite"><span class="loading-spinner" aria-hidden="true"></span><span><strong>Checking ${safeName}</strong><small>Reading safe local project information. Existing results remain visible while this finishes.</small></span></div>` : ""}
 
         <section id="overview" class="workspace-page${activePage === "overview" ? " workspace-page--active" : ""}"${activePage === "overview" ? "" : " hidden"}>
@@ -1394,7 +1404,7 @@ export const renderWorkspaceDocument = (
               <p id="workspace-scope-summary" class="control-note" role="status">${escapeHtml(viewScope.warning ?? `Showing ${viewScope.targets.length} of ${configuredTargets.length} configured targets. Display only; project operations retain all targets.`)}</p>
               ${namedProfileControls(snapshot)}
               ${targetMarkup(snapshot)}
-              ${snapshot.availability === "ready" ? (verifiedRuntimeState(snapshot) === "available" ? actionGroup(permittedAction("openSandbox", "Open sandbox", "primary"), permittedAction("startRuntime", "Start all targets"), permittedAction("verify", "Verify project"), permittedAction("stopRuntime", "Stop all targets")) : actionGroup(permittedAction("runRehearsal", "Create sandbox", "primary"), permittedAction("cleanupPreview", "Inspect local resources"))) : ""}
+              ${snapshot.availability === "ready" ? (verifiedRuntimeState(snapshot) === "available" ? actionGroup(permittedAction("openSandbox", "Open sandbox", "primary"), permittedAction("startRuntime", "Start all targets"), permittedAction("verify", "Verify project"), permittedAction("stopRuntime", "Stop project services")) : actionGroup(permittedAction("runRehearsal", "Create sandbox", "primary"), permittedAction("cleanupPreview", "Inspect local resources"))) : ""}
               ${verifiedRuntimeState(snapshot) === "available" && workspaceExecutionState(snapshot).applicationMode === "database_only" ? '<p class="control-note">Database-only testing is configured. A browser application and HTTP readiness endpoint are not required for the CLI proof.</p>' : ""}
             </article>
             <article class="surface">
@@ -1410,6 +1420,7 @@ export const renderWorkspaceDocument = (
           </div>
           <article class="surface environment-resources">
             <div class="surface-heading"><span><small>Local resources</small><h2>Capacity and ownership</h2></span><span class="state-chip">preview first</span></div>
+              ${engineLifecycleMarkup(snapshot, assets.actionUris.shutdownVm, false, assets.engineShutdownState)}
               ${resourceInventoryMarkup(snapshot, preferences)}
             ${actionGroup(actionButton(assets, "refresh", "Refresh inventory"), permittedAction("cleanupPreview", "Preview safe cleanup"), ...(snapshot.configurationMetadata ? ['<button id="review-stale-stop" type="button" class="button button--secondary">Review long-running environments</button>'] : []))}
             ${snapshot.configurationMetadata ? '<p class="control-note">Uses your configured stale cutoff. Age is not proof of inactivity; exact reviewed stop retains all data and the shared engine.</p>' : ""}
@@ -1609,11 +1620,13 @@ export const renderWorkspaceDocument = (
           },true);
         });
         document.querySelector('#review-stale-stop')?.addEventListener('click',()=>vscode?.postMessage({type:'reviewStaleStop'}));
+        document.querySelectorAll('[data-engine-shutdown-control]').forEach(control=>control.addEventListener('click',()=>{if(!control.disabled)vscode?.postMessage({type:'reviewVmShutdown'});}));
         document.querySelector('#discard-form-drafts')?.addEventListener('click',()=>vscode?.postMessage({type:'editing',editing:false}));
         const applyOperationProgressUpdate = ${applyOperationProgressUpdate.toString()};
         const applyExtensionReleaseUpdate = ${applyExtensionReleaseUpdate.toString()};
+        const applyEngineShutdownUpdate = ${applyEngineShutdownUpdate.toString()};
         const sandboxSessionPresentation = ${sandboxSessionPresentation.toString()};
-        window.addEventListener('message',event=>{ if(event.data?.type==='extensionReleaseUpdated') { applyExtensionReleaseUpdate(document,event.data); } else if(event.data?.type==='operationProgressUpdated') { applyOperationProgressUpdate(document,{type:event.data.type,html:event.data.html}); const session=sandboxSessionPresentation(event.data.sandboxSessionState); if(session) { document.querySelectorAll('[data-sandbox-session-label]').forEach(node=>{node.textContent=session.label;}); document.querySelectorAll('[data-sandbox-session-detail]').forEach(node=>{node.textContent=session.detail;}); document.querySelectorAll('[data-sandbox-session-guidance]').forEach(node=>{node.textContent=session.guidance;}); } } else if(event.data?.type==='inspectionUpdated') { const notice=document.querySelector('#inspection-draft-notice'); if(notice) notice.hidden=false; } });
+        window.addEventListener('message',event=>{ if(event.data?.type==='engineShutdownUpdated'){applyEngineShutdownUpdate(document,event.data,${JSON.stringify({ outcomes: ENGINE_SHUTDOWN_UI_LABELS, reasons: ENGINE_LIFECYCLE_REASON_LABELS })});} else if(event.data?.type==='extensionReleaseUpdated') { applyExtensionReleaseUpdate(document,event.data); } else if(event.data?.type==='operationProgressUpdated') { applyOperationProgressUpdate(document,{type:event.data.type,html:event.data.html}); const session=sandboxSessionPresentation(event.data.sandboxSessionState); if(session) { document.querySelectorAll('[data-sandbox-session-label]').forEach(node=>{node.textContent=session.label;}); document.querySelectorAll('[data-sandbox-session-detail]').forEach(node=>{node.textContent=session.detail;}); document.querySelectorAll('[data-sandbox-session-guidance]').forEach(node=>{node.textContent=session.guidance;}); } } else if(event.data?.type==='inspectionUpdated') { const notice=document.querySelector('#inspection-draft-notice'); if(notice) notice.hidden=false; } });
         ${RESOURCE_MANAGER_SCRIPT}
         ${SUMMARY_LIST_SCRIPT}
         let displayedPage = ${JSON.stringify(activePage)};

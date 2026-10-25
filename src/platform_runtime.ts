@@ -1,4 +1,49 @@
-import { win32 } from "node:path";
+import { isAbsolute, win32 } from "node:path";
+
+const storageKeys = [
+  "TMPDIR",
+  "TMP",
+  "TEMP",
+  "NODE_COMPILE_CACHE",
+  "NPM_CONFIG_CACHE",
+  "NPM_CONFIG_LOGS_DIR",
+  "REHEARSAL_USER_STATE_DIRECTORY",
+] as const;
+
+/** Storage overrides only: never inherit npm auth/config files or Node preload options. */
+export const storageEnvironment = (
+  source: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv => {
+  const result: NodeJS.ProcessEnv = {};
+  for (const key of storageKeys) {
+    const values = Object.entries(source)
+      .filter(
+        ([name, value]) =>
+          value !== undefined &&
+          (platform === "win32" || key.startsWith("NPM_CONFIG_")
+            ? name.toUpperCase() === key
+            : name === key),
+      )
+      .map(([, value]) => value!);
+    const value = values[0];
+    if (values.length === 0) continue;
+    if (
+      !value ||
+      values.some((entry) => entry !== value) ||
+      /[\0\r\n]/u.test(value)
+    )
+      throw new Error(
+        "Conflicting or invalid storage overrides; child launch refused.",
+      );
+    if (!(platform === "win32" ? win32.isAbsolute(value) : isAbsolute(value)))
+      throw new Error(
+        "Storage overrides must be absolute paths; child launch refused.",
+      );
+    result[key] = value;
+  }
+  return result;
+};
 
 export type TerminalShellFamily = "posix" | "powershell";
 
@@ -26,7 +71,6 @@ const infrastructureKeys = [
   "LANG",
   "LC_ALL",
   "PATH",
-  "TMPDIR",
   "USER",
   "XDG_CONFIG_HOME",
   "XDG_DATA_HOME",
@@ -39,8 +83,6 @@ const windowsKeys = [
   "USERNAME",
   "APPDATA",
   "LOCALAPPDATA",
-  "TEMP",
-  "TMP",
   "ComSpec",
   "PATHEXT",
 ];
@@ -71,7 +113,7 @@ export const infrastructureEnvironment = (
       conflicts.add(canonical);
     } else environment[canonical] = value;
   }
-  return environment;
+  return { ...environment, ...storageEnvironment(source, platform) };
 };
 
 /** Only a Windows drive letter is intrinsically case-insensitive. */

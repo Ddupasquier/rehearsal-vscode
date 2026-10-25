@@ -19,8 +19,19 @@ import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { assertArchiveContents } from "./verify-private-vsix.js";
+import { storageEnvironment } from "../src/platform_runtime.js";
+import {
+  nativeStorageRoot,
+  createNativeTemporaryDirectory,
+} from "./native-development-storage.js";
 import type { ActivityData } from "../src/contracts.js";
 import type { MigrationFailureSource } from "../src/migration_failure_source.js";
+import {
+  nativeEngineLaunchMode,
+  waitForNativeEngineResult,
+} from "./native-engine-launch.js";
+import { prepareNativeEngineConsumer } from "./native-engine-consumer.js";
+import { parseNativeEngineFixture } from "./engine-lifecycle-fixture.js";
 import { parseNativeInsightsFixture } from "./native-insights-fixture.js";
 import {
   nativeConsumerFingerprint,
@@ -75,6 +86,7 @@ async function runOwnedNative(
   env: NodeJS.ProcessEnv,
   onClosed?: () => void,
   onStarted?: (pid: number) => Promise<void>,
+  completeOnStarted = false,
 ) {
   // A new session gives this isolated editor its own process group. Never use a
   // name-based editor kill or signal the caller's/user's existing process group.
@@ -127,7 +139,10 @@ async function runOwnedNative(
       );
     });
     await Promise.race([onStarted?.(pid), timeout]);
-    assert.equal(await Promise.race([exited, timeout]), 0);
+    if (completeOnStarted) {
+      await stopGroup();
+      await Promise.race([exited, timeout]);
+    } else assert.equal(await Promise.race([exited, timeout]), 0);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     // Also close children left after a successful Electron-parent exit. Only
@@ -165,6 +180,30 @@ async function main() {
     input.kind === "migration-insights-native-fixture"
       ? parseNativeInsightsFixture(input)
       : null;
+  const nativeEngine =
+    input.kind === "engine-lifecycle-native-fixture"
+      ? parseNativeEngineFixture(input)
+      : null;
+  const engineArtifact = nativeEngine
+    ? process.env.REHEARSAL_NATIVE_ENGINE_CORE_ARTIFACT
+    : undefined;
+  if (nativeEngine) {
+    assert.equal(nativeEngine.candidateSha256, candidateSha);
+    assert.equal(sourceInput, undefined);
+    const artifact = engineArtifact;
+    assert.ok(
+      artifact && resolve(artifact) === artifact,
+      "Pass the exact recorded Core artifact for synthetic native provenance.",
+    );
+    assert.equal(
+      sha(await boundedInput(artifact, 16 * 1024 * 1024)),
+      nativeEngine.coreArtifactSha256,
+    );
+  }
+  const engineUiReview = process.env.REHEARSAL_NATIVE_ENGINE_UI_REVIEW;
+  assert.ok(
+    engineUiReview === undefined || (engineUiReview === "1" && nativeEngine),
+  );
   const uiReview = process.env.REHEARSAL_NATIVE_INSIGHTS_UI_REVIEW;
   const coreArtifactInput = process.env.REHEARSAL_NATIVE_INSIGHTS_CORE_ARTIFACT;
   const coreArtifact = coreArtifactInput ? resolve(coreArtifactInput) : null;
@@ -217,7 +256,7 @@ async function main() {
     assert.match(samples.artifactSha256, /^[a-f0-9]{64}$/u);
   }
   const envelope = samples?.failureActivity ?? input;
-  if (!nativeInsights) {
+  if (!nativeInsights && !nativeEngine) {
     assert.equal(envelope.schemaVersion, 1);
     assert.equal(envelope.command, "activity");
     assert.equal(envelope.status, "success");
@@ -228,24 +267,7 @@ async function main() {
     : null;
   if (sourceBytes)
     assert.ok(Buffer.from(sourceBytes.toString("utf8")).equals(sourceBytes));
-  await mkdir(join(repository, "test-results"), { recursive: true });
-  const evidence = await mkdtemp(
-    join(repository, "test-results/native-migration-failure."),
-  );
-  // Short task-owned IPC/profile paths remain on the development volume.
-  const temporary = await mkdtemp(
-    join(dirname(repository), ".migration-native-"),
-  );
-  const userData = join(temporary, "user"),
-    extensions = join(temporary, "extensions"),
-    workspace = join(temporary, "empty"),
-    harness = join(temporary, "harness"),
-    frozen = join(temporary, "frozen");
-  const resultPath = join(temporary, "result.json"),
-    configPath = join(temporary, "configuration.json"),
-    activityCopy = join(temporary, "activity.json"),
-    candidateCopy = join(temporary, "candidate.vsix");
-  const environment: NodeJS.ProcessEnv = {};
+  const environment: NodeJS.ProcessEnv = storageEnvironment(process.env);
   for (const key of ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
     if (process.env[key]) environment[key] = process.env[key];
   environment.PATH = `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
@@ -271,10 +293,53 @@ async function main() {
       1,
       "Native panel verification deferred: memory pressure is not normal.",
     );
+  await normalPressure();
+  await nativeStorageRoot();
+  await mkdir(join(repository, "test-results"), { recursive: true });
+  const evidence = await mkdtemp(
+    join(repository, "test-results/native-migration-failure."),
+  );
+  // Short task-owned IPC/profile paths remain on the development volume.
+  const temporary = await createNativeTemporaryDirectory("m-");
+  const userData = join(temporary, "user"),
+    extensions = join(temporary, "extensions"),
+    workspace = join(temporary, "empty"),
+    harness = join(temporary, "harness"),
+    frozen = join(temporary, "frozen");
+  const resultPath = join(temporary, "result.json"),
+    configPath = join(temporary, "configuration.json"),
+    activityCopy = join(temporary, "activity.json"),
+    candidateCopy = join(temporary, "candidate.vsix");
+  const preserveEngineScreenshots = async () => {
+    if (!engineUiReview) return;
+    await copyFile(
+      join(temporary, "engine-ui-consent.json"),
+      join(evidence, "engine-ui-consent.json"),
+    ).catch(() => {});
+    for (const name of [
+      "engine-ui-unbound-review.json",
+      "engine-ui-dashboard-visibility.json",
+    ])
+      await copyFile(join(temporary, name), join(evidence, name)).catch(
+        () => {},
+      );
+    for (const theme of ["dark", "light", "high-contrast", "unbound"])
+      await copyFile(
+        join(temporary, `engine-ui-${theme}-return.json`),
+        join(evidence, `engine-ui-${theme}-return.json`),
+      ).catch(() => {});
+    for (const theme of ["dark", "light", "high-contrast", "unbound"])
+      for (const view of ["dashboard", "review", "returned"])
+        await copyFile(
+          join(temporary, `engine-ui-${theme}-${view}.png`),
+          join(evidence, `engine-ui-${theme}-${view}.png`),
+        ).catch(() => {});
+  };
   let fixtureRemoved = false,
     nativeProcessGroupClosed = false,
     phase = "archive";
   let consumerFingerprint: string | undefined;
+  let engineFingerprint: string | undefined;
   let copiedSource: {
     relativePath: string;
     sha256: string;
@@ -300,6 +365,12 @@ async function main() {
       harness,
     ])
       await mkdir(directory, { recursive: true });
+    if (nativeEngine)
+      engineFingerprint = await prepareNativeEngineConsumer(
+        workspace,
+        temporary,
+        nativeEngine,
+      );
     if (nativeInsights) {
       for (const file of nativeInsights.files) {
         const target = join(workspace, file.path);
@@ -314,6 +385,7 @@ async function main() {
       await writeFile(npmConfig, "", { mode: 0o600, flag: "wx" });
       environment.npm_config_userconfig = npmConfig;
       environment.npm_config_cache = join(temporary, "npm-cache");
+      environment.NPM_CONFIG_CACHE = environment.npm_config_cache;
       consumerFingerprint = await prepareNativeInsightsConsumer({
         workspace,
         coreArtifact,
@@ -366,11 +438,13 @@ async function main() {
         "extensions.autoUpdate": false,
         "extensions.autoCheckUpdates": false,
         "workbench.startupEditor": "none",
+        ...(engineUiReview ? { "window.dialogStyle": "custom" } : {}),
         "rehearsal.openDashboardAutomatically": false,
         "rehearsal.automaticUpdates": { extension: false, cli: false },
         "terminal.integrated.enablePersistentSessions": false,
       }),
     );
+    const launchMode = nativeEngineLaunchMode(engineUiReview === "1", harness);
     await writeFile(
       join(harness, "package.json"),
       JSON.stringify({
@@ -380,17 +454,27 @@ async function main() {
         private: true,
         engines: { vscode: "^1.101.0" },
         main: "./runner.cjs",
+        ...(launchMode.activationEvents.length
+          ? { activationEvents: launchMode.activationEvents }
+          : {}),
       }),
     );
     await copyFile(
       join(
         repository,
-        nativeInsights
-          ? "scripts/native-insights-test.cjs"
-          : "scripts/native-migration-failure-test.cjs",
+        nativeEngine
+          ? "scripts/native-engine-lifecycle-test.cjs"
+          : nativeInsights
+            ? "scripts/native-insights-test.cjs"
+            : "scripts/native-migration-failure-test.cjs",
       ),
       join(harness, "runner.cjs"),
     );
+    if (nativeEngine)
+      await copyFile(
+        join(repository, "scripts/native-engine-ui-contract.cjs"),
+        join(harness, "native-engine-ui-contract.cjs"),
+      );
     await writeFile(
       configPath,
       JSON.stringify({
@@ -411,6 +495,7 @@ async function main() {
             }
           : null,
         uiReview: uiReview === "1",
+        engineUiReview: engineUiReview === "1",
         phasePath: join(temporary, "phase.json"),
       }),
     );
@@ -462,17 +547,41 @@ async function main() {
       [
         ...isolated,
         `--extensionDevelopmentPath=${harness}`,
-        `--extensionTestsPath=${join(harness, "runner.cjs")}`,
+        ...launchMode.testArguments,
+        ...(engineUiReview
+          ? [
+              "--remote-debugging-address=127.0.0.1",
+              "--remote-debugging-port=0",
+            ]
+          : []),
         "--skip-welcome",
         "--skip-release-notes",
         "--disable-updates",
         workspace,
       ],
-      { ...environment, REHEARSAL_NATIVE_MIGRATION_CONFIG: configPath },
+      {
+        ...environment,
+        REHEARSAL_NATIVE_MIGRATION_CONFIG: configPath,
+        ...(engineUiReview
+          ? { REHEARSAL_NATIVE_ENGINE_NORMAL_ACTIVATION: "1" }
+          : {}),
+      },
       () => {
         nativeProcessGroupClosed = true;
       },
       async (pid) => {
+        if (engineUiReview) {
+          await run(process.execPath, [
+            join(repository, "scripts/native-engine-ui-driver.cjs"),
+            userData,
+            temporary,
+          ]);
+          await waitForNativeEngineResult(
+            resultPath,
+            candidateSha!,
+            activitySha,
+          );
+        }
         if (uiReview) {
           await writeFile(
             join(evidence, "ui-session.json"),
@@ -487,6 +596,7 @@ async function main() {
           );
         }
       },
+      launchMode.completeOnStarted,
     );
     const result = JSON.parse(await readFile(resultPath, "utf8"));
     assert.equal(result.status, "passed");
@@ -501,10 +611,20 @@ async function main() {
         sha(await boundedInput(coreArtifact, 16 * 1024 * 1024)),
         nativeInsights!.coreArtifactSha256,
       );
+    if (nativeEngine && engineArtifact)
+      assert.equal(
+        sha(await boundedInput(engineArtifact, 16 * 1024 * 1024)),
+        nativeEngine.coreArtifactSha256,
+      );
     if (consumerFingerprint)
       assert.equal(
         await nativeConsumerFingerprint(workspace),
         consumerFingerprint,
+      );
+    else if (engineFingerprint)
+      assert.equal(
+        await nativeConsumerFingerprint(workspace),
+        engineFingerprint,
       );
     else
       assert.deepEqual(
@@ -554,6 +674,7 @@ async function main() {
       false,
     );
     phase = "cleanup";
+    await preserveEngineScreenshots();
     await copyFile(resultPath, join(evidence, "native-result.json"));
     if (consumerFingerprint) await prepareNativeConsumerRemoval(workspace);
     await rm(temporary, { recursive: true, force: true });
@@ -569,8 +690,9 @@ async function main() {
           nativeProcessGroupClosed,
           fixtureRemoved,
           workspaceUnchanged: true,
-          workspacePreservation:
-            "Final file inventory and attempted-input bytes match the initial fixture; the deliberate source-byte refusal control was restored.",
+          workspacePreservation: nativeEngine
+            ? "The synthetic consumer package and immutable configuration file inventory and bytes match the initial fixture. No real Core or database operation was executed."
+            : "Final file inventory and attempted-input bytes match the initial fixture; the deliberate source-byte refusal control was restored.",
         },
         null,
         2,
@@ -586,6 +708,7 @@ async function main() {
       }),
     );
   } catch {
+    await preserveEngineScreenshots();
     await copyFile(resultPath, join(evidence, "native-result.json")).catch(
       () => {},
     );

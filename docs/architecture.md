@@ -1,5 +1,11 @@
 # Architecture decisions
 
+Local suite drive placement is owned by one shared document discoverable through
+`dt b open --json`. Repository module/build/evidence boundaries below remain intact.
+Native harnesses use explicit developer-owned storage; shared coordination and existing
+fixture/evidence migration require all affected owners. No system-temp fallback or
+implicit sibling Lab checkout is selected by the suite development entry point.
+
 ## Product identity
 
 | Decision      | Product-candidate contract                                                 |
@@ -137,7 +143,7 @@ The core's independent Windows WSL workflow owns real Linux-filesystem PostgreSQ
   fail closed, with no automatic retry or overwrite.
 - Guided actions remain available from the keyboard. Read-only refreshes stay inside the
   adapter; approved operations open their exact public command in a project-scoped
-  integrated terminal.
+  integrated terminal, except the explicitly reviewed VM shutdown described below.
 - English is the only reviewed prototype language. User-facing strings must remain easy
   to extract before a public localization commitment.
 - Development checkouts update through Git. Packaged GitHub prereleases support explicit
@@ -145,6 +151,51 @@ The core's independent Windows WSL workflow owns real Linux-filesystem PostgreSQ
   npm-package automatic updates have an independent user choice.
 
 ## Runtime boundary
+
+### Visible VM shutdown
+
+The development candidate reads `engine status --json` only when the installed core
+advertises `containerEngineLifecycle: 1`. This configuration-independent evidence is
+separate from project readiness, project runtime state and the selected Docker endpoint.
+The persistent dashboard control and Command Palette entry remain discoverable when
+configuration, capability or verified backend support is missing, with specific guidance.
+An unreachable selected engine never establishes that a separately observed VM stopped.
+
+`engine_lifecycle_contract.ts` owns the closed, bounded public status, impact review and
+shutdown-result readers. `engine_lifecycle_view.ts` renders independent selected-engine
+and Colima-profile states. Core owns backend qualification, exact workload/VM identities,
+shared coordination and the digest-bound graceful shutdown. The editor never calls an
+engine tool or selects a data-delete, force-stop or global context-switch operation.
+
+VM shutdown is a narrow exception to terminal-based mutation dispatch: its explicit
+impact review and final native confirmation authorize one bounded JSON command through
+the existing process adapter. Manifest/executable identity, package version, workspace,
+trust and known operation state are rechecked. A single owned in-flight request blocks
+other terminal dispatch and is cancellable; transport timeout or cancellation after
+dispatch produces uncertainty and fresh inspection. Only positive profile-stopped and
+exact-VM-process-absent evidence establishes confirmed shutdown. A profile already
+stopped without a prior process binding remains partial evidence. The editor parses no
+terminal output, persists no CLI result and adds no periodic watcher or lifecycle service.
+While configuration drafts are open, fixed engine-state messages patch only the engine
+labels, associated guidance and native shutdown buttons. This preserves the form nodes,
+focus and scroll while disabling conflicting requests. The message contains only closed
+state/reason enums and an eligibility boolean; review requests contain one fixed type.
+
+Genuine native-dialog acceptance uses the owned companion's normal startup activation,
+without `--extensionTestsPath`: installed VS Code intentionally refuses prompt dialogs
+in its extension-test mode. The same exact VSIX checks, external isolated profile,
+normal-pressure guard and captured process-group cleanup remain. The launcher requires
+both the bounded UI driver and a hash-bound passing result before normal completion;
+unknown/failure retains evidence. Other historical file-only test modes are unchanged.
+
+VM reviews explicitly use the optional Beside review column; other reviews default
+to Active. This keeps the existing dashboard visible, including unbound configuration
+drafts whose identity guard correctly refuses persisted restoration. Review navigation
+uses a bounded review-owner return event keyed to the exact workspace. The owning panel reveals that dashboard in its existing column with focus, preserving its page
+and existing persisted draft restoration; specialized caller return callbacks retain
+priority. Back remains visible for ready/cancelled/failed/succeeded states and is
+disabled during apply, with the same host-side pending guard. Hidden dashboards
+continue to discard their DOM under the existing resource policy.
 
 ### Optional release advisories
 

@@ -121,7 +121,7 @@ export const renderReviewDocument = (
       <div class="action-group">
         <button id="review-cancel" type="button" class="button button--secondary">Cancel</button>
         <button id="review-apply" type="button" class="button button--primary" aria-describedby="review-description">${escapeHtml(content.applyLabel ?? "Apply changes")}</button>
-        <button id="review-return" type="button" class="button button--primary" hidden>Return to project</button>
+        <button id="review-return" type="button" class="button button--secondary">Back to Rehearsal</button>
       </div>
     </footer>
   </main>
@@ -145,6 +145,7 @@ export const renderReviewDocument = (
       pending = true;
       apply.disabled = true;
       cancel.disabled = true;
+      returnButton.disabled = true;
       status.setAttribute('role','status');
       status.textContent = 'Processing your reviewed action. Please wait for the result.';
       apply.textContent = 'Please wait…';
@@ -163,7 +164,8 @@ export const renderReviewDocument = (
     });
     cancel.addEventListener('click', close);
     returnButton.addEventListener('click', () => {
-      if (!succeeded) return;
+      if (!vscode) { previewOnly(); return; }
+      if (pending) return;
       vscode.postMessage({type:'returnFromReview',token});
     });
     document.addEventListener('keydown', event => {
@@ -182,6 +184,7 @@ export const renderReviewDocument = (
         apply.disabled = false;
         apply.textContent = applyLabel;
         cancel.disabled = false;
+        returnButton.disabled = false;
         status.textContent = 'Confirmation cancelled. No operation was started. You can review the details or close this review.';
         cancel.focus();
       }
@@ -191,6 +194,7 @@ export const renderReviewDocument = (
         apply.hidden = true;
         cancel.hidden = true;
         returnButton.hidden = false;
+        returnButton.disabled = false;
         status.setAttribute('role','status');
         status.textContent = typeof message.message === 'string' && message.message.length <= 2000 ? message.message : 'Review completed.';
         returnButton.focus();
@@ -201,6 +205,7 @@ export const renderReviewDocument = (
         apply.disabled = true;
         apply.textContent = 'Action not confirmed';
         cancel.disabled = false;
+        returnButton.disabled = false;
         cancel.textContent = 'Close review';
         status.setAttribute('role','alert');
         status.textContent = typeof message.message === 'string' && message.message.length > 0 && message.message.length <= 500 && !/[\\x00-\\x1f\\x7f]/u.test(message.message) ? message.message : ${JSON.stringify(FAILURE)};

@@ -2,10 +2,53 @@ import { describe, expect, it } from "vitest";
 import {
   canonicalPathMatches,
   infrastructureEnvironment,
+  storageEnvironment,
   terminalShellFamily,
 } from "../src/platform_runtime.js";
 
 describe("bounded platform runtime policy", () => {
+  it("preserves absolute storage paths across child scrubbing without allowing executable or credential configuration", () => {
+    const paths = {
+      TMPDIR: "/external/shared",
+      TMP: "/external/shared",
+      TEMP: "/external/shared",
+      NODE_COMPILE_CACHE: "/external/compile",
+      NPM_CONFIG_CACHE: "/external/npm",
+      NPM_CONFIG_LOGS_DIR: "/external/npm/_logs",
+      REHEARSAL_USER_STATE_DIRECTORY: "/external/state",
+    };
+    expect(
+      infrastructureEnvironment(
+        {
+          ...paths,
+          NPM_TOKEN: "private",
+          NODE_OPTIONS: "--require=private",
+          NPM_CONFIG_USERCONFIG: "/private/npmrc",
+        },
+        "darwin",
+      ),
+    ).toEqual(paths);
+    expect(
+      storageEnvironment({ npm_config_cache: "/external/npm" }, "linux"),
+    ).toEqual({ NPM_CONFIG_CACHE: "/external/npm" });
+    for (const source of [
+      { TMPDIR: "relative" },
+      { NODE_COMPILE_CACHE: "/external/compile\nother" },
+      { npm_config_cache: "/first", NPM_CONFIG_CACHE: "/second" },
+    ])
+      expect(() => storageEnvironment(source, "linux")).toThrow(
+        "child launch refused",
+      );
+    expect(
+      storageEnvironment(
+        { temp: "C:\\external\\tmp", npm_config_cache: "C:\\external\\npm" },
+        "win32",
+      ),
+    ).toEqual({
+      TEMP: "C:\\external\\tmp",
+      NPM_CONFIG_CACHE: "C:\\external\\npm",
+    });
+  });
   it.each([
     ["/bin/zsh", "darwin", "posix"],
     ["/usr/bin/bash", "linux", "posix"],
@@ -74,7 +117,6 @@ describe("bounded platform runtime policy", () => {
           Path: "other",
           HOME: "/home",
           USERPROFILE: "private",
-          TEMP: "private",
         },
         "linux",
       ),

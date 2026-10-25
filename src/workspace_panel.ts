@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { engineShutdownUpdateFor } from "./engine_lifecycle_view.js";
 import { constants as filesystemConstants } from "node:fs";
 import {
   extensionReleasePresentation,
@@ -118,6 +119,19 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
   ) {
     this.reviewPanels = reviewPanels ?? new RehearsalReviewPanels(extensionUri);
     this.subscriptions = [
+      ...(this.reviewPanels.onDidRequestReturn
+        ? [
+            this.reviewPanels.onDidRequestReturn((workspaceKey) => {
+              const panel = this.panels.get(workspaceKey);
+              if (panel)
+                panel.reveal(
+                  panel.viewColumn ?? vscode.ViewColumn.Active,
+                  false,
+                );
+              else void this.open(workspaceKey).catch(() => {});
+            }),
+          ]
+        : []),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
         for (const key of this.extensionReleases.keys())
           if (
@@ -342,6 +356,10 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
       await this.actions.reviewStaleStop(workspaceKey);
       return;
     }
+    if (message.type === "reviewVmShutdown") {
+      await this.actions.reviewVmShutdown(workspaceKey);
+      return;
+    }
     if (message.type === "cleanupImages") {
       await this.actions.cleanupImages(workspaceKey, message.ids);
       return;
@@ -506,6 +524,12 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         throw new Error("Report export context or local destination changed.");
       const report = buildVerificationReport(snapshot, new Date(), {
         extensionVersion: this.extensionVersion,
+        ...(this.actions.engineShutdownStateFor?.(workspaceKey)
+          ? {
+              engineShutdownState:
+                this.actions.engineShutdownStateFor(workspaceKey)!,
+            }
+          : {}),
         ...(comparison ? { comparison } : {}),
       });
       const content =
@@ -1161,6 +1185,11 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         "untrusted",
       ].includes(snapshot.availability);
     if (this.editing.has(workspaceKey) && !unsafe) {
+      const shutdownState = this.actions.engineShutdownStateFor?.(workspaceKey);
+      if (snapshot.engineLifecycle !== undefined || shutdownState !== undefined)
+        void panel.webview.postMessage(
+          engineShutdownUpdateFor(snapshot, shutdownState),
+        );
       void panel.webview.postMessage({
         type: "inspectionUpdated",
         loading: this.projects.inspectionStateFor(workspaceKey) === "loading",

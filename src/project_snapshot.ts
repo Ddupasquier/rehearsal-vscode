@@ -1,4 +1,8 @@
 import { realpath } from "node:fs/promises";
+import {
+  parseEngineLifecycleStatus,
+  type EngineLifecycleObservation,
+} from "./engine_lifecycle_contract.js";
 import { basename, relative, sep } from "node:path";
 import type {
   ActivityData,
@@ -214,6 +218,7 @@ export interface ProjectSnapshot {
     };
   };
   readonly resources?: ResourceInventoryData;
+  readonly engineLifecycle?: EngineLifecycleObservation;
   readonly error?: {
     readonly code: string;
     readonly message: string;
@@ -235,6 +240,7 @@ export interface SnapshotClient {
       readonly migrationReviewSchema?: 1 | null;
       readonly migrationInsightsSchema?: 1 | null;
       readonly configurationReviewSchema?: 1 | null;
+      readonly engineLifecycleSchema?: 1 | null;
     }
   >;
   command<Data>(options: {
@@ -273,6 +279,7 @@ export const processSnapshotClient: SnapshotClient = {
         migrationReviewSchema: resolved.migrationReviewSchema,
         migrationInsightsSchema: resolved.migrationInsightsSchema,
         configurationReviewSchema: resolved.configurationReviewSchema,
+        engineLifecycleSchema: resolved.engineLifecycleSchema,
       };
     }
     const version = await runVersion(workspaceRoot, {
@@ -288,6 +295,7 @@ export const processSnapshotClient: SnapshotClient = {
       migrationReviewSchema: resolved.migrationReviewSchema,
       migrationInsightsSchema: resolved.migrationInsightsSchema,
       configurationReviewSchema: resolved.configurationReviewSchema,
+      engineLifecycleSchema: resolved.engineLifecycleSchema,
     };
   },
   command: (options) => runRehearsalJson(options),
@@ -386,6 +394,7 @@ const failureSnapshot = (
   observedVersion?: ObservedVersion,
   partial: Pick<ProjectSnapshot, "activity" | "readiness"> & {
     readonly discovery?: ProjectSnapshot["discovery"];
+    readonly engineLifecycle?: EngineLifecycleObservation;
   } = {},
 ): ProjectSnapshot => {
   const observed = observedVersion
@@ -407,6 +416,9 @@ const failureSnapshot = (
       }
     : {};
   const partialEvidence = {
+    ...(partial.engineLifecycle
+      ? { engineLifecycle: partial.engineLifecycle }
+      : {}),
     ...(partial.activity ? { activity: partial.activity } : {}),
     ...(partial.readiness ? { readiness: partial.readiness } : {}),
   };
@@ -501,12 +513,14 @@ const activityOnlySnapshot = ({
   version,
   packageLocation,
   activity,
+  engineLifecycle,
 }: {
   workspaceName: string;
   workspaceRoot: string;
   version: string;
   packageLocation?: string;
   activity: ActivityData;
+  engineLifecycle?: EngineLifecycleObservation;
 }): ProjectSnapshot => ({
   workspaceName,
   workspaceRoot,
@@ -516,6 +530,7 @@ const activityOnlySnapshot = ({
   ...(packageLocation ? { packageLocation } : {}),
   compatibility: coreCompatibilityFor(version),
   activity,
+  ...(engineLifecycle ? { engineLifecycle } : {}),
 });
 
 export const inspectProject = async ({
@@ -547,6 +562,7 @@ export const inspectProject = async ({
       ? { source: "bootstrap", profile: bootstrapDiscovery }
       : undefined;
   let observedReadiness: ProjectSnapshot["readiness"] | undefined;
+  let observedEngine: EngineLifecycleObservation | undefined;
   try {
     const version = await client.version(workspaceRoot, signal, timeoutMs);
     observedVersion = version;
@@ -587,14 +603,48 @@ export const inspectProject = async ({
         },
       };
     }
+    const activityOptions = {
+      workspaceRoot,
+      ...(signal ? { signal } : {}),
+      ...(timeoutMs ? { timeoutMs } : {}),
+    };
     const common = {
       workspaceRoot,
       ...(configPath ? { configPath } : {}),
       ...(signal ? { signal } : {}),
       ...(timeoutMs ? { timeoutMs } : {}),
     };
+    observedEngine = { state: "unsupported" };
+    if (version.engineLifecycleSchema === 1) {
+      observedEngine = { state: "unavailable" };
+      let engineVersion: string | undefined;
+      try {
+        const execution = await client.command<unknown>({
+          workspaceRoot,
+          command: ["engine", "status"],
+          expectedCommand: "engine status",
+          ...(signal ? { signal } : {}),
+          ...(timeoutMs ? { timeoutMs } : {}),
+        });
+        engineVersion = execution.result.rehearsalVersion;
+        requireRehearsalVersion(version.version, [execution.result]);
+        if (execution.result.status !== "success")
+          throw new ContractError("Engine inspection was not successful.");
+        observedEngine = {
+          state: "available",
+          report: parseEngineLifecycleStatus(execution.result.data),
+        };
+      } catch (error) {
+        if (
+          signal?.aborted ||
+          (engineVersion !== undefined && engineVersion !== version.version)
+        )
+          throw error;
+        observedEngine = { state: "unavailable" };
+      }
+    }
     const activityExecution = await client.command<ActivityData>({
-      ...common,
+      ...activityOptions,
       command: ["activity"],
       expectedCommand: "activity",
     });
@@ -610,6 +660,7 @@ export const inspectProject = async ({
           ? { packageLocation: version.packageLocation }
           : {}),
         activity,
+        engineLifecycle: observedEngine,
       });
     }
     const discovery =
@@ -711,7 +762,7 @@ export const inspectProject = async ({
         }
       }
       const finalActivityExecution = await client.command<ActivityData>({
-        ...common,
+        ...activityOptions,
         command: ["activity"],
         expectedCommand: "activity",
       });
@@ -728,6 +779,7 @@ export const inspectProject = async ({
             ? { packageLocation: version.packageLocation }
             : {}),
           activity: finalActivity,
+          engineLifecycle: observedEngine,
         });
       return {
         workspaceName,
@@ -740,6 +792,7 @@ export const inspectProject = async ({
           ? { packageLocation: version.packageLocation }
           : {}),
         activity: finalActivity,
+        engineLifecycle: observedEngine,
         ...discoverySnapshot,
         readiness,
         ...(configurationMetadata
@@ -823,7 +876,7 @@ export const inspectProject = async ({
         : Promise.resolve(undefined),
     ]);
     const finalActivityExecution = await client.command<ActivityData>({
-      ...common,
+      ...activityOptions,
       command: ["activity"],
       expectedCommand: "activity",
     });
@@ -849,6 +902,7 @@ export const inspectProject = async ({
           ? { packageLocation: version.packageLocation }
           : {}),
         activity: finalActivity,
+        engineLifecycle: observedEngine,
       });
     }
     const statusData = parseStatusData(status.result.data);
@@ -946,6 +1000,7 @@ export const inspectProject = async ({
         ? { packageLocation: version.packageLocation }
         : {}),
       activity: finalActivity,
+      engineLifecycle: observedEngine,
       ...discoverySnapshot,
       configPath: safeWorkspaceRelativePath(
         workspaceRoot,
@@ -1110,6 +1165,7 @@ export const inspectProject = async ({
         ...(observedActivity ? { activity: observedActivity } : {}),
         ...(observedDiscovery ? { discovery: observedDiscovery } : {}),
         ...(observedReadiness ? { readiness: observedReadiness } : {}),
+        ...(observedEngine ? { engineLifecycle: observedEngine } : {}),
       },
     );
   }

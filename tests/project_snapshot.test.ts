@@ -21,6 +21,8 @@ import type { SnapshotClient } from "../src/project_snapshot.js";
 import { AdapterError, RehearsalCliError } from "../src/process_adapter.js";
 import { knownWorkspaceTargets } from "../src/workspace_view_state.js";
 import { insightPlan, insightReport } from "./migration_insights_fixture.js";
+import { engineShutdownAvailable } from "../src/engine_lifecycle_view.js";
+import { lifecycleStatus } from "./engine_lifecycle_fixture.js";
 
 const envelope = <Data>(command: string, data: Data, status = "success") => ({
   result: {
@@ -1718,5 +1720,128 @@ describe("project overview", () => {
         ],
       },
     });
+  });
+});
+
+describe("configuration-independent engine lifecycle inspection", () => {
+  const engineClient = (
+    activity: ActivityData = {
+      schemaVersion: 1,
+      state: "idle",
+      operation: null,
+    },
+    fail: boolean | "version-drift" = false,
+  ) => {
+    const base = client("NOT READY", activity),
+      commands: Parameters<SnapshotClient["command"]>[0][] = [];
+    const capable: SnapshotClient = {
+      ...base,
+      version: async (...args) => ({
+        ...(await base.version(...args)),
+        engineLifecycleSchema: 1,
+      }),
+      command: async <Data>(
+        request: Parameters<SnapshotClient["command"]>[0],
+      ) => {
+        commands.push(request);
+        if (request.expectedCommand === "activity" && request.configPath)
+          throw new Error(
+            "Explicit project configuration is missing or unsafe.",
+          );
+        if (request.expectedCommand === "engine status") {
+          if (fail === true) throw Error("private provider failure");
+          const result = envelope("engine status", lifecycleStatus());
+          return (fail === "version-drift"
+            ? {
+                ...result,
+                result: { ...result.result, rehearsalVersion: "9.9.9" },
+              }
+            : result) as unknown as {
+            result: ResultEnvelope<Data>;
+            exitCode: number;
+          };
+        }
+        return base.command<Data>(request);
+      },
+    };
+    return { capable, commands };
+  };
+  it("reads engine facts before missing-configuration readiness without passing a config path", async () => {
+    const { capable, commands } = engineClient();
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      configPath: "missing.mjs",
+      client: capable,
+    });
+    expect(result.availability).toBe("not_ready");
+    expect(result.engineLifecycle).toEqual({
+      state: "available",
+      report: lifecycleStatus(),
+    });
+    expect(commands[0]).toMatchObject({ command: ["engine", "status"] });
+    expect(commands[0]).not.toHaveProperty("configPath");
+    expect(
+      commands
+        .filter((command) => command.expectedCommand === "activity")
+        .every((command) => command.configPath === undefined),
+    ).toBe(true);
+    expect(
+      commands.find((command) => command.expectedCommand === "doctor")
+        ?.configPath,
+    ).toBe("missing.mjs");
+    expect(result.activity?.state).toBe("idle");
+    expect(engineShutdownAvailable(result)).toBe(true);
+  });
+  it("retains independent engine facts while project activity blocks mutations", async () => {
+    const { capable, commands } = engineClient({
+      schemaVersion: 1,
+      state: "busy",
+      operation: {
+        kind: "run",
+        startedAt: "2026-10-25T00:00:00Z",
+        rehearsalVersion: "0.1.0-rc.4",
+      },
+    });
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: capable,
+    });
+    expect(result.availability).toBe("operation_active");
+    expect(result.engineLifecycle?.state).toBe("available");
+    expect(commands.map((request) => request.expectedCommand)).toEqual([
+      "engine status",
+      "activity",
+    ]);
+  });
+  it("keeps optional inspection failure unavailable without hiding Doctor guidance", async () => {
+    const { capable } = engineClient(undefined, true);
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: capable,
+    });
+    expect(result.availability).toBe("not_ready");
+    expect(result.engineLifecycle).toEqual({ state: "unavailable" });
+    expect(JSON.stringify(result)).not.toContain("private provider failure");
+  });
+  it("never hides actual package version drift as an optional unavailable result", async () => {
+    const { capable, commands } = engineClient(undefined, "version-drift");
+    const result = await inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: capable,
+    });
+    expect(result.availability).toBe("error");
+    expect(result.error?.code).toBe("invalid_cli_contract");
+    expect(result.engineLifecycle).toEqual({ state: "unavailable" });
+    expect(commands.map((entry) => entry.expectedCommand)).toEqual([
+      "engine status",
+    ]);
   });
 });

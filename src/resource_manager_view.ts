@@ -106,7 +106,7 @@ export const resourceManagerMarkup = (
     `<label><span>${html(name)}</span><select id="resource-${name.toLowerCase()}">${options.map(([key, label]) => `<option value="${key}"${value === key ? " selected" : ""}>${label}</option>`).join("")}</select></label>`;
   const pagination = resourcePaginationMarkup;
   return `<div class="local-resource-manager">
-    ${observedCatalog === null ? '<div class="empty-state"><strong>Docker is stopped; resource contents are not checked.</strong><span>You can still review environment names and protection. Start your engine explicitly, then refresh to inspect images and volume attachments.</span></div>' : ""}
+    ${observedCatalog === null ? '<div class="empty-state"><strong>Engine inspection is unavailable; resource contents are not checked.</strong><span>You can still review environment names and protection. This does not prove a VM is stopped. Review the engine controls, then refresh to inspect images and volume attachments.</span></div>' : ""}
     <p id="resource-preview-notice" class="control-note" role="status" hidden></p>
     <nav class="resource-categories" aria-label="Local resource categories">${[
       ["all", "All resources"],

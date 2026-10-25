@@ -11,8 +11,20 @@ import {
 import * as vscode from "vscode";
 import {
   assertInspectionPlatform,
+  captureEnginePackageBinding,
+  runEngineShutdown,
   runRehearsalJson,
 } from "./process_adapter.js";
+import {
+  parseEngineShutdownPreview,
+  ENGINE_LIFECYCLE_REASON_LABELS,
+} from "./engine_lifecycle_contract.js";
+import {
+  engineShutdownAvailable,
+  engineLifecyclePresentation,
+  ENGINE_SHUTDOWN_UI_LABELS,
+  type EngineShutdownUiState,
+} from "./engine_lifecycle_view.js";
 import { parseActivityData } from "./contracts.js";
 import { EXTENSION_ID } from "./extension_identity.js";
 import { terminalShellFamily } from "./platform_runtime.js";
@@ -38,6 +50,7 @@ import {
 } from "./workspace_activity.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
+class EngineShutdownReviewError extends Error {}
 
 const previewCommand = (arguments_: readonly string[]): string => {
   const shell = terminalShellFamily(vscode.env?.shell);
@@ -152,6 +165,13 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
   private readonly unverifiedTerminals = new Set<vscode.Terminal>();
   private readonly fallbackTerminals = new Set<vscode.Terminal>();
   private readonly pendingCancellations = new Set<string>();
+  private readonly pendingEngineReviews = new Set<string>();
+  private readonly engineShutdownStates = new Map<
+    string,
+    EngineShutdownUiState
+  >();
+  private engineShutdownController: AbortController | undefined;
+  private engineShutdownWorkspace: string | undefined;
   private readonly workspaceTokens = new Map<string, string>();
   private readonly completionObservers = new Map<
     string,
@@ -183,6 +203,9 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
         for (const folder of removed) {
           const key = folder.uri.toString();
           this.reviews?.releaseWorkspace(key);
+          this.engineShutdownStates.delete(key);
+          if (this.engineShutdownWorkspace === key)
+            this.engineShutdownController?.abort();
           this.completionObservers.get(key)?.dispose();
           this.completionObservers.delete(key);
           this.activeMonitors.get(key)?.observer.dispose();
@@ -279,6 +302,15 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       await this.refresh(workspaceKey, true);
       return;
     }
+    if (
+      this.engineShutdownController &&
+      !["refresh", "showOutput", "documentation"].includes(action)
+    ) {
+      void vscode.window.showInformationMessage(
+        "Wait for the current VM shutdown outcome before starting another Rehearsal action.",
+      );
+      return;
+    }
     const actionSnapshot =
       resourceTarget !== undefined && snapshot.resources
         ? {
@@ -336,6 +368,9 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     }
 
     switch (plan.kind) {
+      case "review_engine_shutdown":
+        await this.reviewVmShutdown(workspaceKey);
+        return;
       case "check_updates":
         await vscode.commands.executeCommand(
           "rehearsal.checkUpdates",
@@ -431,6 +466,8 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
+    this.engineShutdownController?.abort();
+    this.engineShutdownStates.clear();
     for (const subscription of this.subscriptions) subscription.dispose();
     this.terminalWorkspaces.clear();
     this.workspaceTokens.clear();
@@ -552,7 +589,6 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
           workspaceRoot: folder.uri.fsPath,
           command: ["activity"],
           expectedCommand: "activity",
-          ...(snapshot.configPath ? { configPath: snapshot.configPath } : {}),
         });
         if (
           !contextCurrent() ||
@@ -850,6 +886,257 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     this.activityEmitter.fire(workspaceKey);
   }
 
+  engineShutdownStateFor(
+    workspaceKey: string,
+  ): EngineShutdownUiState | undefined {
+    return this.engineShutdownController
+      ? "running"
+      : this.engineShutdownStates.get(workspaceKey);
+  }
+  private publishEngineShutdownState(): void {
+    for (const folder of vscode.workspace.workspaceFolders ?? [])
+      this.activityEmitter.fire(folder.uri.toString());
+  }
+
+  /** Whole-VM review is independent of project configuration and uses only public CLI. */
+  async reviewVmShutdown(workspaceKey: string): Promise<void> {
+    if (
+      !this.mayStartWork() ||
+      this.disposed ||
+      this.pendingEngineReviews.has(workspaceKey)
+    )
+      return;
+    if (this.engineShutdownController) {
+      void vscode.window.showInformationMessage(
+        "Wait for the current VM shutdown outcome before starting another Rehearsal action.",
+      );
+      return;
+    }
+    const folder = vscode.workspace.workspaceFolders?.find(
+      (entry) => entry.uri.toString() === workspaceKey,
+    );
+    const snapshot = this.projects.snapshotFor(workspaceKey);
+    if (!folder || !snapshot) return;
+    if (!vscode.workspace.isTrusted || !engineShutdownAvailable(snapshot)) {
+      void vscode.window.showInformationMessage(
+        engineLifecyclePresentation(snapshot).detail,
+      );
+      return;
+    }
+    if (!this.reviews) {
+      void vscode.window.showInformationMessage(
+        "Open the Rehearsal dashboard to review VM shutdown. No shutdown was requested.",
+      );
+      return;
+    }
+    const blockedWork = () =>
+      [...this.terminalWorkspaces.keys()].some(
+        (terminal) =>
+          terminal.exitStatus === undefined &&
+          (this.terminalActivities.has(terminal) ||
+            this.shellExecutions.has(terminal) ||
+            this.unverifiedTerminals.has(terminal) ||
+            this.settlingTerminals.has(terminal)),
+      ) ||
+      vscode.workspace.workspaceFolders?.some((entry) => {
+        const activity = this.projects.snapshotFor(
+          entry.uri.toString(),
+        )?.activity;
+        return activity !== undefined && activity.state !== "idle";
+      }) === true;
+    const guard = this.resourceReviewGuard(
+      workspaceKey,
+      folder,
+      snapshot,
+      (current) => engineShutdownAvailable(current) && !blockedWork(),
+    );
+    this.pendingEngineReviews.add(workspaceKey);
+    try {
+      guard();
+      const packageBinding = await captureEnginePackageBinding(
+        folder.uri.fsPath,
+      );
+      guard();
+      const execution = await runRehearsalJson<unknown>({
+        workspaceRoot: folder.uri.fsPath,
+        command: ["engine", "stop"],
+        expectedCommand: "engine stop",
+      });
+      guard();
+      if (execution.result.rehearsalVersion !== snapshot.version)
+        throw new EngineShutdownReviewError(
+          "The Rehearsal package changed. Refresh and review VM shutdown again.",
+        );
+      const preview = parseEngineShutdownPreview(execution.result.data);
+      if (
+        preview.state !== "review-required" ||
+        !preview.engine ||
+        !preview.impact ||
+        !preview.consentDigest
+      ) {
+        void vscode.window.showInformationMessage(
+          ENGINE_LIFECYCLE_REASON_LABELS[preview.reason],
+        );
+        await this.refresh(workspaceKey, false);
+        return;
+      }
+      const impact = preview.impact,
+        engine = preview.engine,
+        digest = preview.consentDigest;
+      await this.reviews.review({
+        workspaceKey,
+        workspaceName: snapshot.workspaceName,
+        title: "Review VM shutdown",
+        viewColumn: vscode.ViewColumn.Beside,
+        description:
+          "Shut down the shared Colima VM. Every workload listed below is affected, including other projects.",
+        detail: `VM: Colima default\nReviewed engine context: ${engine.context}\nRunning containers: ${impact.runningCount}\n\n${impact.containers.map((container) => `${container.name} · ${container.state}\n${container.id}`).join("\n\n") || "No containers observed."}\n\nThis gracefully shuts down the whole VM. Other projects may lose their running services. Database volumes, images, baselines and recovery files are not selected for deletion. Rehearsal revalidates the exact engine, VM and workload snapshot before dispatch.`,
+        format: "text",
+        applyLabel: "Continue to VM shutdown confirmation",
+        successMessage:
+          "VM shutdown confirmed: the Colima profile stopped and the exact VM process exited.",
+        canApply: guard,
+        failureMessage: (error) =>
+          error instanceof EngineShutdownReviewError
+            ? error.message
+            : undefined,
+        onApply: async () => {
+          guard();
+          const approved = await vscode.window.showWarningMessage(
+            "Shut down this shared VM?",
+            {
+              modal: true,
+              detail: `Stop the Colima default VM and interrupt its ${impact.runningCount} running container${impact.runningCount === 1 ? "" : "s"}, including other projects. Persistent database volumes, baselines and recovery files are not selected for deletion.`,
+            },
+            "Shut Down VM",
+          );
+          guard();
+          if (approved !== "Shut Down VM") return false;
+          if (
+            (await captureEnginePackageBinding(folder.uri.fsPath)) !==
+            packageBinding
+          )
+            throw new EngineShutdownReviewError(
+              "The reviewed Rehearsal package changed. Refresh and review again.",
+            );
+          guard();
+          const activity = await runRehearsalJson<unknown>({
+            workspaceRoot: folder.uri.fsPath,
+            command: ["activity"],
+            expectedCommand: "activity",
+          });
+          guard();
+          if (
+            activity.result.rehearsalVersion !== snapshot.version ||
+            parseActivityData(activity.result.data).state !== "idle"
+          )
+            throw new EngineShutdownReviewError(
+              "A Rehearsal operation changed during review. Finish it and review VM shutdown again.",
+            );
+          const controller = new AbortController();
+          this.engineShutdownController = controller;
+          this.engineShutdownWorkspace = workspaceKey;
+          this.engineShutdownStates.set(workspaceKey, "running");
+          this.publishEngineShutdownState();
+          let dispatched = false;
+          try {
+            const result = await vscode.window.withProgress(
+              {
+                location: vscode.ProgressLocation.Notification,
+                title: "Shutting down the shared VM",
+                cancellable: true,
+              },
+              async (_progress, token) => {
+                const subscription = token.onCancellationRequested(() =>
+                  controller.abort(),
+                );
+                if (token.isCancellationRequested) controller.abort();
+                try {
+                  return await runEngineShutdown({
+                    workspaceRoot: folder.uri.fsPath,
+                    confirmationDigest: digest,
+                    packageBinding,
+                    signal: controller.signal,
+                    onDispatched: () => {
+                      guard();
+                      dispatched = true;
+                    },
+                  });
+                } finally {
+                  subscription.dispose();
+                }
+              },
+            );
+            const confirmed =
+              (result.status === "stopped" ||
+                result.status === "already-stopped") &&
+              result.confirmed.profileStopped &&
+              result.confirmed.vmProcessAbsent;
+            if (
+              confirmed &&
+              JSON.stringify(result.engine) !== JSON.stringify(engine)
+            ) {
+              this.engineShutdownStates.set(workspaceKey, "uncertain");
+              throw new EngineShutdownReviewError(
+                "The shutdown result did not match the reviewed VM. Refresh and inspect the engine state; shutdown is not confirmed.",
+              );
+            }
+            if (confirmed) {
+              this.engineShutdownStates.set(workspaceKey, "confirmed");
+              void vscode.window.showInformationMessage(
+                ENGINE_SHUTDOWN_UI_LABELS.confirmed,
+              );
+              return;
+            }
+            const state =
+              result.status === "already-stopped"
+                ? "already-stopped"
+                : result.status === "unknown" ||
+                    result.reason === "cancelled-after-dispatch"
+                  ? "uncertain"
+                  : "refused";
+            this.engineShutdownStates.set(workspaceKey, state);
+            throw new EngineShutdownReviewError(
+              state === "already-stopped"
+                ? ENGINE_SHUTDOWN_UI_LABELS[state]
+                : ENGINE_LIFECYCLE_REASON_LABELS[result.reason],
+            );
+          } catch (error) {
+            if (!(error instanceof EngineShutdownReviewError)) {
+              this.engineShutdownStates.set(
+                workspaceKey,
+                dispatched ? "uncertain" : "refused",
+              );
+              throw new EngineShutdownReviewError(
+                dispatched
+                  ? ENGINE_SHUTDOWN_UI_LABELS.uncertain
+                  : "VM shutdown was not verified or dispatched. Refresh and review again.",
+              );
+            }
+            throw error;
+          } finally {
+            try {
+              if (!this.disposed) await this.refresh(workspaceKey, false);
+            } finally {
+              this.engineShutdownController = undefined;
+              this.engineShutdownWorkspace = undefined;
+              if (this.disposed) this.engineShutdownStates.delete(workspaceKey);
+              else this.publishEngineShutdownState();
+            }
+          }
+        },
+      });
+    } catch (error) {
+      void vscode.window.showWarningMessage(
+        error instanceof EngineShutdownReviewError
+          ? error.message
+          : "VM shutdown could not be reviewed safely. Refresh and review the current engine; no successful shutdown is inferred.",
+      );
+    } finally {
+      this.pendingEngineReviews.delete(workspaceKey);
+    }
+  }
+
   async reviewStaleStop(workspaceKey: string): Promise<void> {
     if (!this.mayStartWork() || !vscode.workspace.isTrusted) return;
     const snapshot = this.projects.snapshotFor(workspaceKey);
@@ -989,6 +1276,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     if (!this.terminalHostSupported(revealTerminal)) return false;
     const canLaunch = () =>
       !this.disposed &&
+      !this.engineShutdownController &&
       this.terminalHostSupported(false) &&
       this.mayStartWork() &&
       vscode.workspace.isTrusted &&
@@ -1194,12 +1482,6 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
               workspaceRoot: folder.uri.fsPath,
               command: ["activity"],
               expectedCommand: "activity",
-              ...(this.projects.snapshotFor(workspaceKey)?.configPath
-                ? {
-                    configPath:
-                      this.projects.snapshotFor(workspaceKey)!.configPath!,
-                  }
-                : {}),
               signal,
               timeoutMs: 10_000,
             })
@@ -1408,7 +1690,6 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     });
     this.completionObservers.set(workspaceKey, observer);
     try {
-      const configPath = this.projects.snapshotFor(workspaceKey)?.configPath;
       const completion = await vscode.window.withProgress(
         {
           location: vscode.ProgressLocation.Notification,
@@ -1426,7 +1707,6 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
                     workspaceRoot: folder.uri.fsPath,
                     command: ["activity"],
                     expectedCommand: "activity",
-                    ...(configPath ? { configPath } : {}),
                     signal,
                     timeoutMs: 30000,
                   })

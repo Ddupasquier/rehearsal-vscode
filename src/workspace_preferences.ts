@@ -154,6 +154,7 @@ export type WorkspaceMessage =
   | { readonly type: "openMigrationInsight"; readonly findingId: string }
   | { readonly type: "openMigrationFailure"; readonly operationId: string }
   | { readonly type: "reviewStaleStop" }
+  | { readonly type: "reviewVmShutdown" }
   | { readonly type: "editing"; readonly editing: boolean }
   | { readonly type: "cleanupImages"; readonly ids: unknown }
   | {
@@ -199,6 +200,10 @@ export const parseWorkspaceMessage = (
       ? { type: "openMigrationFailure", operationId: message.operationId }
       : null;
   if (message.type === "reviewStaleStop") return { type: "reviewStaleStop" };
+  if (message.type === "reviewVmShutdown")
+    return Object.keys(message).length === 1 && Object.hasOwn(message, "type")
+      ? { type: "reviewVmShutdown" }
+      : null;
   if (message.type === "editing" && typeof message.editing === "boolean")
     return { type: "editing", editing: message.editing };
   if (message.type === "cleanupImages")

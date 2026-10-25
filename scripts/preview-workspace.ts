@@ -1,4 +1,9 @@
 import { createServer } from "node:http";
+import {
+  enginePreviewState,
+  enginePreviewSnapshot,
+  enginePreviewBridge,
+} from "./engine-lifecycle-fixture.js";
 import { renderUpdatePromptDocument } from "../src/update_prompt_view.js";
 import {
   renderReviewDocument,
@@ -1779,6 +1784,45 @@ const server = createServer(async (request, response) => {
     }
     return;
   }
+  if (url.pathname === "/engine-review-document") {
+    const origin = `http://${host}:${requestedPort}`;
+    const token = "preview-engine-review-token";
+    const content: ReviewContent = {
+      title: "Review VM shutdown",
+      description:
+        "Synthetic UI fixture. No VM or native host operation occurs.",
+      workspaceName: "Synthetic shared VM",
+      detail:
+        "VM: Colima default\nRunning containers: 1\n\nSynthetic other-project workload · running\n\nEvery workload on this VM is affected. This preview cannot shut down a VM.",
+      format: "text",
+      applyLabel: "Continue to VM shutdown confirmation",
+    };
+    const bridge = `<script nonce="${token}">(() => {
+      window.acquireVsCodeApi = () => ({ postMessage: message => {
+        if(!message || message.token !== '${token}' || Object.keys(message).sort().join(',') !== 'token,type') return;
+        if(message.type === 'cancelReview') { location.href = '/engine-running'; return; }
+        if(message.type !== 'applyReview') return;
+        const confirmed = window.confirm('UI fixture only: simulate final whole-VM confirmation? No VM operation occurs.');
+        const uncertain = new URL(location.href).searchParams.get('outcome') === 'uncertain';
+        window.postMessage({type:'reviewState',token:'${token}',state:confirmed ? 'failed' : 'cancelled'},location.origin);
+        const notice = document.getElementById('preview-engine-review-result');
+        notice.textContent = confirmed ? (uncertain ? 'Simulated uncertain outcome. Inspect current facts before retrying. No VM operation occurred.' : 'Simulated confirmation accepted. This fixture does not prove VM shutdown.') : 'Simulated confirmation cancelled. No operation started.';
+      }});
+      document.addEventListener('DOMContentLoaded', () => { const notice = document.createElement('p'); notice.id = 'preview-engine-review-result'; notice.setAttribute('role','status'); notice.textContent = 'UI fixture only · browser confirmation is not native VS Code confirmation.'; document.body.append(notice); });
+    })();</script>`;
+    response.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    response.end(
+      renderReviewDocument(content, {
+        resourceSource: origin,
+        stylesheetUri: `${origin}/workspace.css`,
+        scriptNonce: token,
+      }).replace("</head>", `${bridge}</head>`),
+    );
+    return;
+  }
   if (url.pathname === "/updates") {
     const origin = `http://${host}:${requestedPort}`;
     const stylesheet = new URL("/workspace.css", origin);
@@ -1890,7 +1934,15 @@ const server = createServer(async (request, response) => {
     );
     return;
   }
-  const snapshot = snapshots[url.pathname];
+  const engineState = url.pathname.startsWith("/engine-")
+    ? enginePreviewState(url.pathname.slice("/engine-".length))
+    : undefined;
+  const snapshot = engineState
+    ? {
+        ...(engineState === "missing-config" ? {} : readySnapshot),
+        ...enginePreviewSnapshot(engineState),
+      }
+    : snapshots[url.pathname];
   if (!snapshot) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("Unknown Rehearsal preview state.");
@@ -1945,6 +1997,11 @@ const server = createServer(async (request, response) => {
     [],
     url.pathname === "/loading" ? "loading" : "idle",
   );
+  if (engineState)
+    document = document.replace(
+      "</head>",
+      `${enginePreviewBridge(engineState)}</head>`,
+    );
   if (
     ["/progress", "/sandbox-starting"].includes(url.pathname) &&
     url.searchParams.get("live") === "1"

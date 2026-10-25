@@ -196,6 +196,14 @@ export const activate = (context: vscode.ExtensionContext): void => {
       },
     ),
     vscode.commands.registerCommand(
+      "rehearsal.shutdownVm",
+      async (workspaceKey: unknown) => {
+        if (!mayStartWork()) return;
+        const selected = await selectWorkspaceKey(workspaceKey);
+        if (selected) await actions.reviewVmShutdown(selected);
+      },
+    ),
+    vscode.commands.registerCommand(
       "rehearsal.configureUpdateChecks",
       async (workspaceKey: unknown) => {
         if (!mayStartWork()) return;

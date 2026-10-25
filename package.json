@@ -53,6 +53,7 @@
   "activationEvents": [
     "onView:rehearsal.projects",
     "onCommand:rehearsal.refresh",
+    "onCommand:rehearsal.shutdownVm",
     "onCommand:rehearsal.checkUpdates",
     "onCommand:rehearsal.configureUpdateChecks",
     "onCommand:rehearsal.openWorkspace",
@@ -116,6 +117,11 @@
     ],
     "commands": [
       {
+        "command": "rehearsal.shutdownVm",
+        "title": "Rehearsal: Shut Down VM",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "rehearsal.checkUpdates",
         "title": "Rehearsal: Check for Updates",
         "icon": "$(cloud-download)"
@@ -161,6 +167,11 @@
     ],
     "menus": {
       "view/title": [
+        {
+          "command": "rehearsal.shutdownVm",
+          "when": "view == rehearsal.projects",
+          "group": "navigation@3"
+        },
         {
           "command": "rehearsal.openWorkspace",
           "when": "view == rehearsal.projects",

@@ -77,6 +77,7 @@ const editor = vi.hoisted(() => {
     return {
       assignments,
       title: "",
+      viewColumn: 1,
       get visible() {
         return visible;
       },
@@ -246,6 +247,8 @@ vi.mock("node:fs/promises", async (original) => ({
 import { RehearsalWorkspacePanels } from "../src/workspace_panel.js";
 import { parseActivityData } from "../src/contracts.js";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
+import type { EngineShutdownUiState } from "../src/engine_lifecycle_view.js";
+import { engineSnapshot } from "./engine_lifecycle_fixture.js";
 import { configurationFingerprint } from "../src/configuration_editor.js";
 import { parseConfigurationMetadata } from "../src/configuration_contract.js";
 import { RehearsalCliError } from "../src/process_adapter.js";
@@ -336,11 +339,16 @@ const harness = (
   }>();
   const inspections = new Events<{ workspaceKey: string }>();
   const activity = new Events<string>();
+  const returns = new Events<string>();
   const actions = {
     onDidRecordActivity: activity.event,
     registerWorkspace: vi.fn(() => "opaque-workspace-token"),
     releaseWorkspace: vi.fn(),
     activityFor: vi.fn(() => []),
+    engineShutdownStateFor: vi.fn(
+      () => undefined as EngineShutdownUiState | undefined,
+    ),
+    reviewVmShutdown: vi.fn(async () => {}),
   };
   const projects = {
     onDidUpdateSnapshot: snapshots.event,
@@ -356,13 +364,19 @@ const harness = (
     actions as never,
     { get: vi.fn(), update: vi.fn(async () => {}) } as never,
     "0.1.2",
-    undefined,
+    {
+      review: editor.review,
+      releaseWorkspace: editor.releaseReviewWorkspace,
+      dispose: editor.disposeReviews,
+      onDidRequestReturn: returns.event,
+    } as never,
     mayStartWork,
   );
   owners.push(owner);
   return {
     owner,
     actions,
+    returns,
     snapshots,
     inspections,
     activity,
@@ -2751,5 +2765,72 @@ describe("live workspace progress presentation", () => {
     expect(fixture.snapshots.listeners.size).toBe(0);
     expect(fixture.inspections.listeners.size).toBe(0);
     expect(fixture.activity.listeners.size).toBe(0);
+  });
+});
+
+describe("VM state with preserved configuration drafts", () => {
+  it("patches VM state and disables its control without replacing the dirty dashboard", async () => {
+    const fixture = harness({
+      ...ready(),
+      engineLifecycle: engineSnapshot().engineLifecycle!,
+    });
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    panel.receive({ type: "editing", editing: true });
+    fixture.actions.engineShutdownStateFor.mockReturnValue("running");
+    fixture.activity.fire(key);
+    expect(panel.assignments).toHaveLength(1);
+    expect(panel.webview.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "engineShutdownUpdated",
+        state: "running",
+        canReview: false,
+        selectedState: "running",
+        profileState: "running",
+      }),
+    );
+    expect(panel.webview.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "inspectionUpdated" }),
+    );
+  });
+  it("dispatches only the fixed VM review message through its current workspace owner", async () => {
+    const fixture = harness();
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    const send = (message: unknown) =>
+      (
+        fixture.owner as unknown as {
+          handleMessage(
+            panel: unknown,
+            key: string,
+            message: unknown,
+          ): Promise<void>;
+        }
+      ).handleMessage(panel, key, message);
+    await send({ type: "reviewVmShutdown" });
+    expect(fixture.actions.reviewVmShutdown).toHaveBeenCalledWith(key);
+    fixture.actions.reviewVmShutdown.mockClear();
+    await send({ type: "reviewVmShutdown", command: "docker stop" });
+    expect(fixture.actions.reviewVmShutdown).not.toHaveBeenCalled();
+  });
+});
+
+describe("review dashboard return", () => {
+  it("reveals the exact existing dashboard with focus without rewriting a dirty page", async () => {
+    const fixture = harness();
+    await fixture.owner.open(key);
+    const panel = editor.panels[0]!;
+    panel.receive({ type: "navigate", page: "configuration" });
+    panel.receive({ type: "editing", editing: true });
+    const assignments = panel.assignments.length;
+    panel.viewColumn = 2;
+    fixture.returns.fire(key);
+    expect(editor.panels).toHaveLength(1);
+    expect(panel.reveal).toHaveBeenCalledWith(2, false);
+    expect(panel.assignments).toHaveLength(assignments);
+    fixture.owner.dispose();
+    panel.reveal.mockClear();
+    fixture.returns.fire(key);
+    expect(panel.reveal).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,8 @@ import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { performance } from "node:perf_hooks";
+import { createHash } from "node:crypto";
+import { parseEngineShutdownResult } from "./engine_lifecycle_contract.js";
 import { infrastructureEnvironment } from "./platform_runtime.js";
 import {
   ContractError,
@@ -81,6 +83,7 @@ export interface ResolvedRehearsal {
   readonly migrationReviewSchema: 1 | null;
   readonly migrationInsightsSchema: 1 | null;
   readonly configurationReviewSchema: 1 | null;
+  readonly engineLifecycleSchema: 1 | null;
 }
 
 export interface RunOptions {
@@ -285,6 +288,7 @@ export const resolveWorkspaceRehearsal = async (
     migrationReviewSchema: contracts.migrationReview === 1 ? 1 : null,
     migrationInsightsSchema: contracts.migrationInsights === 1 ? 1 : null,
     configurationReviewSchema: contracts.configurationReview === 1 ? 1 : null,
+    engineLifecycleSchema: contracts.containerEngineLifecycle === 1 ? 1 : null,
   };
 };
 
@@ -296,6 +300,23 @@ export const editorEnvironment = (
   NO_COLOR: "1",
   REHEARSAL_EDITOR_CLIENT: "1",
 });
+
+/** Preserve explicit lifecycle selectors for Core validation, including refusal signals. */
+export const engineLifecycleEnvironment = (
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv => {
+  const environment = editorEnvironment(source);
+  for (const key of [
+    "DOCKER_TLS",
+    "DOCKER_TLS_VERIFY",
+    "DOCKER_CERT_PATH",
+    "LIMA_HOME",
+    "COLIMA_PROFILE",
+    "REHEARSAL_USER_STATE_DIRECTORY",
+  ])
+    if (source[key] !== undefined) environment[key] = source[key];
+  return environment;
+};
 
 const stopOwnedProcess = (
   child: ReturnType<typeof spawn>,
@@ -588,7 +609,12 @@ export const runRehearsalJson = async <Data>(
     binPath: resolved.binPath,
     arguments: arguments_,
     cwd: options.workspaceRoot,
-    environment: editorEnvironment(options.environment),
+    environment:
+      options.command.length === 2 &&
+      options.command[0] === "engine" &&
+      ["status", "stop"].includes(options.command[1] ?? "")
+        ? engineLifecycleEnvironment(options.environment)
+        : editorEnvironment(options.environment),
     ...(options.signal ? { signal: options.signal } : {}),
     timeoutMs: options.timeoutMs ?? 60_000,
     outputLimitBytes: options.outputLimitBytes ?? DEFAULT_OUTPUT_LIMIT,
@@ -620,4 +646,161 @@ export const runRehearsalJson = async <Data>(
     );
   }
   return { result: parsed, exitCode: execution.exitCode };
+};
+
+/** A review binds its installed manifest and executable; paths never enter the webview. */
+export const captureEnginePackageBinding = async (
+  workspaceRoot: string,
+): Promise<string> => {
+  const resolved = await resolveWorkspaceRehearsal(workspaceRoot);
+  if (resolved.engineLifecycleSchema !== 1)
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "Update Rehearsal before reviewing VM shutdown.",
+    );
+  const fingerprints = [];
+  for (const [path, maximum] of [
+    [resolved.manifestPath, MAXIMUM_MANIFEST_BYTES],
+    [resolved.binPath, 2 * 1024 * 1024],
+  ] as const) {
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const before = await handle.stat();
+      if (!before.isFile() || before.size > maximum)
+        throw new Error("Unbounded package input.");
+      const bytes = Buffer.alloc(maximum + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const part = await handle.read(
+          bytes,
+          length,
+          bytes.length - length,
+          null,
+        );
+        if (!part.bytesRead) break;
+        length += part.bytesRead;
+      }
+      const after = await handle.stat();
+      if (
+        length !== before.size ||
+        length > maximum ||
+        before.dev !== after.dev ||
+        before.ino !== after.ino ||
+        before.mtimeMs !== after.mtimeMs ||
+        before.ctimeMs !== after.ctimeMs ||
+        after.size !== before.size
+      )
+        throw new Error("Package changed.");
+      fingerprints.push({
+        path,
+        dev: before.dev,
+        ino: before.ino,
+        size: before.size,
+        mtime: before.mtimeMs,
+        ctime: before.ctimeMs,
+        sha256: createHash("sha256")
+          .update(bytes.subarray(0, length))
+          .digest("hex"),
+      });
+    } finally {
+      await handle.close();
+    }
+  }
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        root: resolved.packageRoot,
+        version: resolved.version,
+        fingerprints,
+      }),
+    )
+    .digest("hex");
+};
+
+/** Explicitly approved VM shutdown needs its typed outcome, including nonzero replies. */
+export const runEngineShutdown = async (options: {
+  workspaceRoot: string;
+  confirmationDigest: string;
+  packageBinding: string;
+  signal?: AbortSignal;
+  onDispatched?: () => void;
+}) => {
+  assertInspectionPlatform();
+  if (
+    !/^[a-f0-9]{64}$/u.test(options.confirmationDigest) ||
+    (await captureEnginePackageBinding(options.workspaceRoot)) !==
+      options.packageBinding
+  )
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "The reviewed Rehearsal package changed. Refresh and review VM shutdown again.",
+    );
+  options.signal?.throwIfAborted();
+  const resolved = await resolveWorkspaceRehearsal(options.workspaceRoot);
+  options.onDispatched?.();
+  const execution = await runProcess({
+    binPath: resolved.binPath,
+    arguments: [
+      "engine",
+      "stop",
+      "--json",
+      `--confirm-engine-stop=${options.confirmationDigest}`,
+    ],
+    cwd: options.workspaceRoot,
+    environment: engineLifecycleEnvironment(),
+    ...(options.signal ? { signal: options.signal } : {}),
+    timeoutMs: 120_000,
+    outputLimitBytes: DEFAULT_OUTPUT_LIMIT,
+    timeoutMessage:
+      "VM shutdown did not return a verified outcome within 120 seconds. Refresh the engine state.",
+  });
+  const raw = parseJson(execution.stdout);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw))
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "The VM shutdown outcome could not be verified. Refresh the engine state.",
+    );
+  const envelope = raw as Record<string, unknown>;
+  if (
+    envelope.schemaVersion !== 1 ||
+    envelope.command !== "engine stop" ||
+    envelope.rehearsalVersion !== resolved.version ||
+    !["success", "error", "not_ready"].includes(String(envelope.status))
+  )
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "The VM shutdown outcome could not be verified. Refresh the engine state.",
+    );
+  const result = parseEngineShutdownResult(envelope.data);
+  const confirmed =
+    (result.status === "stopped" || result.status === "already-stopped") &&
+    result.confirmed.profileStopped &&
+    result.confirmed.vmProcessAbsent;
+  const partial =
+    result.status === "already-stopped" &&
+    result.confirmed.profileStopped &&
+    !result.confirmed.vmProcessAbsent;
+  if (
+    confirmed
+      ? execution.exitCode !== 0 || envelope.status !== "success"
+      : partial
+        ? execution.exitCode !== 1 || envelope.status !== "not_ready"
+        : ![1, 130].includes(execution.exitCode) || envelope.status !== "error"
+  )
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "The VM shutdown outcome contradicts its command result. Refresh the engine state.",
+    );
+  if (
+    (await captureEnginePackageBinding(options.workspaceRoot)) !==
+    options.packageBinding
+  )
+    throw new AdapterError(
+      "invalid_cli_contract",
+      "The Rehearsal package changed during VM shutdown. Its outcome needs a fresh inspection.",
+    );
+  return result;
 };
