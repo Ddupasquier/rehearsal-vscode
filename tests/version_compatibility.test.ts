@@ -5,7 +5,7 @@ import {
 } from "../src/version_compatibility.js";
 
 describe("Rehearsal core compatibility", () => {
-  it.each(["0.1.0-rc.4", "0.1.0", "0.1.1", "0.2.0-beta.1"])(
+  it.each(["0.1.0-rc.4", "0.1.0", "0.1.1", "0.2.0-beta.1", "2.0.0"])(
     "accepts %s",
     (version) => {
       expect(coreCompatibilityFor(version)).toEqual({

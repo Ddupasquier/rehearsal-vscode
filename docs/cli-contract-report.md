@@ -4,8 +4,9 @@
 
 For current installation and supported-platform guidance, use the
 [official installation guide](https://ddupasquier.github.io/rehearsal-db/vscode/).
-Free Starter **0.1.24**, canonical ID **`rehearsal-db.rehearsal-db`**, and core
-**1.2.0** are published. Starter and core have independent versions and releases;
+The previously published baseline recorded here is Free Starter **0.1.24**,
+canonical ID **`rehearsal-db.rehearsal-db`**, with core **1.2.0**. Starter and core
+have independent versions and releases;
 use that guide for current availability rather than treating a source version as
 published. The historical pair below used core **1.0.2**.
 [Issue #186](https://github.com/Ddupasquier/rehearsal-db/issues/186)
@@ -23,6 +24,41 @@ This report preserves artifact-specific observations and describes focused compa
 checks. Historical identities, versions, publication status and resource blockers below
 belong to their recorded observations, not the current release. They do not certify
 later artifacts or unexercised native/provider/accessibility behavior.
+
+## 0.1.25 / core 2.0.0 release candidate
+
+Source Starter **0.1.25** targets core **2.0.0**. This is release preparation, not a
+claim that either artifact is published. Earlier engineering UI/physical observations
+retain their exact original artifact scope; the final pair requires its own recorded
+identity, checksums and applicable acceptance. Existing 0.1.24 assets remain immutable.
+
+Core 2 changes omitted lifecycle settings to stop targets after run/application exit,
+while preserving data volumes and reconstruction receipts. Explicit `keep-until-stop`
+remains available. The editor's minimum contract is unchanged; capability/schema checks
+control optional features. Automatic CLI updates continue to refuse 1.x → 2.x and direct
+that upgrade to manual compatibility review.
+
+### Configuration-independent engine lifecycle contract
+
+`rehearsalContracts.containerEngineLifecycle: 1` permits `engine status --json` and
+`engine stop --json` review without project configuration. Activity reads likewise omit
+`--config`; project-specific commands retain their explicit configuration binding.
+Selected-engine availability and the default Colima profile state remain separate.
+Initial shutdown qualification is macOS Apple Silicon, Colima 0.10.3, VZ/default only.
+
+Whole-VM apply is a narrow exception to terminal-based mutations: an exact shared-impact
+review and native confirmation precede bounded public CLI JSON dispatch with
+`--confirm-engine-stop=DIGEST`. The host rechecks trust, workspace/package identity,
+activity and concurrent work. Typed nonzero results remain available: unknown/refused
+uses error/exit 1; a partial already-stopped result uses not_ready/exit 1. Only matching
+reviewed engine identity plus positive stopped-profile and exact-process-exit proofs
+confirm shutdown. Cancellation after dispatch, timeout and contradictory evidence never
+become success. No force or data deletion is requested.
+
+The persistent control, native command and resource view share this contract. VM reviews
+open beside the dashboard to preserve even unbound drafts; Back returns to its original
+pane and stays disabled during apply. Native screenshots/keyboard checks and physical
+Core shutdown/data-preservation checks remain distinct evidence owners.
 
 ## Static Migration Insights contract
 
@@ -110,7 +146,8 @@ two-field contract.
 - Resolve the workspace-local manifest, or a repository-local hoisted manifest for a
   nested workspace, and use its declared bin. Never use `npx`, PATH lookup, a global
   package, a shell, or private package imports. Never search above the repository root.
-- Use the workspace folder as `cwd` and pass `--config=<relative-path>` when configured.
+- Use the workspace folder as `cwd`. Pass `--config=<relative-path>` to configured
+  project commands; omit it for configuration-independent engine and activity reads.
 - Pass only a documented infrastructure environment allowlist.
 - Bound stdout and stderr independently to 1 MiB.
 - Use the resource-scoped 15–300 second inspection timeout (90 seconds by default) for

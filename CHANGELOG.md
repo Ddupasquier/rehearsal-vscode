@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.25 — VM shutdown and Back navigation
 
+- Target core 2.0.0 for the new engine controls. Review its changed default lifecycle
+  behavior before a manual upgrade from 1.x; automatic CLI updates never cross majors.
 - Keep primary button boundaries visible in high-contrast themes.
 - Add a persistent VM state and shutdown control, separate from stopping project
   services. Review every affected workload and confirm the whole-VM shutdown before

@@ -3,6 +3,7 @@ import {
   comparePublishedVersions,
   fetchUpdateMetadata,
   isPublishedVersion,
+  isEligibleCoreUpdate,
   parseCoreUpdate,
   parseExtensionUpdate,
   UpdateAdvisoryController,
@@ -101,6 +102,18 @@ function fixture(initial: unknown = state()) {
 afterEach(() => vi.useRealTimers());
 
 describe("bounded public update metadata", () => {
+  it.each([
+    ["1.3.0", "2.0.0", false],
+    ["1.3.0", "2.0.0-beta.1", false],
+    ["2.0.0", "2.0.1", true],
+    ["2.0.0", "3.0.0", false],
+  ] as const)(
+    "keeps automatic update boundaries for %s → %s",
+    (installed, available, eligible) => {
+      expect(isEligibleCoreUpdate(installed, available)).toBe(eligible);
+    },
+  );
+
   it.each([
     ["0.1.0-rc.10", "0.1.0-rc.2", 1],
     ["0.1.0", "0.1.0-rc.9", 1],
