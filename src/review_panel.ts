@@ -13,6 +13,8 @@ const MAXIMUM_TOTAL_BYTES = 8 * 1024 * 1024;
 
 export interface ReviewOptions extends ReviewContent {
   readonly workspaceKey: string;
+  /** Explicit shared-resource reviews may keep the dashboard visible beside them. */
+  readonly viewColumn?: vscode.ViewColumn;
   readonly canApply: () => void;
   /** Return false when a subsequent native confirmation was cancelled. */
   readonly onApply: () => Promise<void | boolean>;
@@ -28,6 +30,8 @@ export class RehearsalReviewPanels implements vscode.Disposable {
     readonly bytes: number;
     readonly workspaceKey: string;
   }>();
+  private readonly returnEmitter = new vscode.EventEmitter<string>();
+  readonly onDidRequestReturn = this.returnEmitter.event;
   private bytes = 0;
   private disposed = false;
 
@@ -47,7 +51,7 @@ export class RehearsalReviewPanels implements vscode.Disposable {
     const panel = vscode.window.createWebviewPanel(
       "rehearsal.review",
       `${options.title} · Rehearsal`,
-      vscode.ViewColumn.Active,
+      options.viewColumn ?? vscode.ViewColumn.Active,
       {
         enableScripts: true,
         enableCommandUris: false,
@@ -82,6 +86,14 @@ export class RehearsalReviewPanels implements vscode.Disposable {
         if (!applying) settle(applied);
         if (!closed) panel.dispose();
         if (!applying) release();
+      };
+      const returnToWorkspace = () => {
+        try {
+          if (options.onReturn) options.onReturn();
+          else this.returnEmitter.fire(options.workspaceKey);
+        } finally {
+          close();
+        }
       };
       const post = async (state: string, message?: string) => {
         if (closed) return;
@@ -125,18 +137,14 @@ export class RehearsalReviewPanels implements vscode.Disposable {
             )
           )
             return;
-          if (message.type === "cancelReview") {
-            close();
-            return;
-          }
-          if (message.type === "returnFromReview") {
-            if (!applied) return;
+          if (
+            message.type === "cancelReview" ||
+            message.type === "returnFromReview"
+          ) {
             try {
-              options.onReturn?.();
+              returnToWorkspace();
             } catch {
-              // A stale dashboard cannot turn a completed save into a retry.
-            } finally {
-              close();
+              /* Navigation cannot retry an operation. */
             }
             return;
           }
@@ -218,5 +226,6 @@ export class RehearsalReviewPanels implements vscode.Disposable {
     if (this.disposed) return;
     this.disposed = true;
     for (const entry of [...this.reviews]) entry.panel.dispose();
+    this.returnEmitter.dispose();
   }
 }

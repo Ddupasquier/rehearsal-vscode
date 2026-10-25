@@ -385,7 +385,35 @@ it does not execute project code. Once core advertises the versioned Project Pro
 contract, the extension uses `rehearsal discover --json` and stops duplicating broader
 discovery rules.
 
+### VM shutdown — development candidate
+
+The candidate adds an always-visible **Shut down VM…** control below the dashboard
+header, plus **Rehearsal: Shut Down VM** in the Command Palette and Projects title bar.
+**Stop project services** stops this project's services; shutting down the shared VM
+also interrupts other projects. Review the listed workloads and confirm before shutdown.
+Data volumes, baselines and recovery files are not selected for deletion.
+
+The installed core must advertise `containerEngineLifecycle: 1`; older packages and
+unsupported backends show guidance instead of guessing a shutdown command. The selected
+engine and the Colima profile have separate status labels. An unreachable engine is not
+proof of a stopped VM. Confirmed shutdown requires both the profile stopped and the
+exact VM process exited; timeout or cancellation after dispatch stays uncertain.
+
+**Back to Rehearsal** returns from a ready, cancelled, failed or completed review to
+the same workspace dashboard and saved page, with existing draft restoration. It is
+disabled while apply is pending. VM reviews open beside the dashboard so even drafts
+without a validated configuration identity remain visible and intact. Back focuses the
+dashboard in its original editor group. Hidden dashboards retain the existing
+resource-saving lifecycle.
+
 ## Contributing and local development
+
+For owner-managed suite development, retrieve `dt b open --json` for the shared
+drive-layout document and command launcher before starting npm, Node or tsx.
+The launcher supplies temporary/cache paths, an explicit `REHEARSAL_TEST_LAB_ROOT`
+and the approved short native editor-test root. No sibling Lab or system-temp
+fallback is assumed. Shared locks, leases and retained recovery fixtures require
+coordinated ownership; neither repository migrates them independently.
 
 For the source-candidate Insights native host/source check, first obtain the
 independent Lab's private `native-insights-fixture.json` from a passing
@@ -469,6 +497,16 @@ live progress preserves the document, evidence disclosures, focus and scrolling.
 with the same address input preserved; it is synthetic UI evidence, not a live app.
 resource review buttons explain their VS Code flow without applying anything. This
 developer surface never runs Rehearsal commands or touches a project.
+
+VM-control fixtures use `/engine-running`, `/engine-missing-config`,
+`/engine-unsupported`, `/engine-already-stopped`, `/engine-review`,
+`/engine-cancel`, and `/engine-uncertain`. The production workspace controller
+handles the real HTML buttons; a labeled synthetic bridge records requests and
+applies closed engine-state updates. Use the uncertainty patch button while a
+form contains a draft to inspect value, focus and scroll preservation.
+`/engine-review-document` uses the production review renderer, with a browser
+confirmation explicitly labeled as simulation. These routes never invoke Core,
+a native confirmation or a VM, and do not establish physical shutdown evidence.
 
 For the source-candidate Insights visual/keyboard pass, supply the same private
 synthetic Lab handoff used by the native companion:

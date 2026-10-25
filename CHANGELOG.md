@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Keep primary button boundaries visible in high-contrast themes.
+- Add a persistent VM state and shutdown control, separate from stopping project
+  services. Review every affected workload and confirm the whole-VM shutdown before
+  dispatch; database volumes, baselines and recovery files are not selected for deletion.
+- Keep VM reviews beside the dashboard to preserve unsaved forms, including projects
+  without a validated configuration. Back to Rehearsal returns to the original editor
+  group and remains unavailable while apply is pending.
+- Initially qualify VM shutdown for macOS arm64 with Colima 0.10.3, its VZ backend
+  and default profile. Other setups show explicit unsupported or unknown guidance;
+  confirmed shutdown requires both the stopped profile and verified VM process exit.
+
 ## 0.1.24 — Migration Insights and environment comparisons
 
 - Add optional, free static Migration Insights with core 1.2.0: bounded destructive

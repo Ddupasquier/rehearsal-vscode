@@ -26,6 +26,11 @@ import {
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { assertArchiveContents } from "./verify-private-vsix.js";
+import { storageEnvironment } from "../src/platform_runtime.js";
+import {
+  nativeStorageRoot,
+  createNativeTemporaryDirectory,
+} from "./native-development-storage.js";
 
 const repository = resolve(__dirname, "..");
 const code =
@@ -755,7 +760,7 @@ async function main() {
     urls.map((url) => url.pathname),
     ["/", "/health", "/summary"],
   );
-  const environment: NodeJS.ProcessEnv = {};
+  const environment: NodeJS.ProcessEnv = storageEnvironment(process.env);
   for (const name of [
     "HOME",
     "USER",
@@ -931,11 +936,13 @@ async function main() {
   const vsix = resolve(vsixInput);
   const vsixBytes = await regular(vsix, 16 * 1024 * 1024);
   assert.equal(sha(vsixBytes), candidateSha);
+  await pressure();
+  await nativeStorageRoot();
   await mkdir(join(repository, "test-results"), { recursive: true });
   const evidence = await mkdtemp(
     join(repository, `test-results/native-${scenario}.`),
   );
-  const temporary = await mkdtemp(join(dirname(repository), ".cancel-native-"));
+  const temporary = await createNativeTemporaryDirectory("c-");
   const user = join(temporary, "user"),
     extensions = join(temporary, "extensions"),
     harness = join(temporary, "harness"),
@@ -1005,6 +1012,7 @@ async function main() {
             path: "/bin/zsh",
             args: ["-i"],
             env: {
+              ...storageEnvironment(environment),
               ZDOTDIR: shell,
               DOCKER_HOST: fixture.pinnedDockerEndpoint,
               DOCKER_CONTEXT: null,

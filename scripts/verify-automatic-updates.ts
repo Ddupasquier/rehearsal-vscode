@@ -14,6 +14,11 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { assertArchiveContents } from "./verify-private-vsix.js";
+import { storageEnvironment } from "../src/platform_runtime.js";
+import {
+  nativeStorageRoot,
+  createNativeTemporaryDirectory,
+} from "./native-development-storage.js";
 
 const execute = promisify(execFile);
 const repository = resolve(__dirname, "..");
@@ -39,11 +44,29 @@ async function main() {
   const previous = resolve(previousArgument);
   assert.equal(sha(await readFile(candidate)), candidateSha256);
   assert.equal(sha(await readFile(previous)), previousSha256);
+  if (!prepareOnly) {
+    const pressure = await execute(
+      "/usr/sbin/sysctl",
+      ["-n", "kern.memorystatus_vm_pressure_level"],
+      {
+        env: storageEnvironment(process.env),
+        encoding: "utf8",
+        timeout: 10_000,
+        maxBuffer: 1024,
+      },
+    );
+    assert.equal(
+      Number(pressure.stdout.trim()),
+      1,
+      "Native verification deferred before fixture allocation: memory pressure is not normal.",
+    );
+  }
+  await nativeStorageRoot();
   const evidence = await mkdtemp(
     join(repository, "test-results/automatic-execution-180."),
   );
   // Short, task-owned paths avoid macOS IPC socket-length limits.
-  const temporary = await mkdtemp(join(dirname(repository), ".au-exec-"));
+  const temporary = await createNativeTemporaryDirectory("au-");
   const runtimeRoot = join(temporary, "frozen/extension");
   const projectRoot = join(temporary, "consumer");
   const emptyRoot = join(temporary, "empty");
@@ -68,7 +91,7 @@ async function main() {
     cliBefore: "0.1.0-rc.8",
     cliTarget: "0.1.0-rc.9",
   };
-  const environment: NodeJS.ProcessEnv = {};
+  const environment: NodeJS.ProcessEnv = storageEnvironment(process.env);
   for (const key of ["HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
     if (process.env[key]) environment[key] = process.env[key];
   environment.PATH = `${dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`;
@@ -182,6 +205,7 @@ async function main() {
         },
         "terminal.integrated.defaultProfile.osx": "Isolated verification",
         "terminal.integrated.env.osx": {
+          ...storageEnvironment(environment),
           PATH: environment.PATH,
           ZDOTDIR: join(temporary, "shell"),
           NPM_CONFIG_USERCONFIG: environment.NPM_CONFIG_USERCONFIG,

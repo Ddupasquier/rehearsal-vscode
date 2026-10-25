@@ -11,6 +11,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProjectSnapshot } from "../src/project_snapshot.js";
 import { activityStorageKey } from "../src/workspace_activity.js";
+import { engineLifecyclePresentation } from "../src/engine_lifecycle_view.js";
+import {
+  engineSnapshot,
+  lifecyclePreview,
+  lifecycleResult,
+} from "./engine_lifecycle_fixture.js";
 interface ResourceReviewOptions {
   readonly detail: string;
   readonly workspaceKey: string;
@@ -25,6 +31,8 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(),
   error: vi.fn(),
   read: vi.fn(),
+  binding: vi.fn(),
+  shutdown: vi.fn(),
   execute: vi.fn(),
   terminal: vi.fn(),
   refresh: vi.fn(),
@@ -61,6 +69,7 @@ const mocks = vi.hoisted(() => ({
     | undefined,
 }));
 vi.mock("vscode", () => ({
+  ViewColumn: { Active: 1, Beside: 2 },
   env: {
     openExternal: mocks.openExternal,
     get shell() {
@@ -122,6 +131,8 @@ vi.mock("vscode", () => ({
 vi.mock("../src/process_adapter.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/process_adapter.js")>()),
   runRehearsalJson: mocks.read,
+  captureEnginePackageBinding: mocks.binding,
+  runEngineShutdown: mocks.shutdown,
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
@@ -2534,4 +2545,237 @@ describe("reviewed resource actions", () => {
     );
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+describe("explicit reviewed VM shutdown", () => {
+  const prepare = () => {
+    current = engineSnapshot();
+    mocks.binding.mockReset().mockResolvedValue("a".repeat(64));
+    mocks.shutdown
+      .mockReset()
+      .mockImplementation(async (options: { onDispatched: () => void }) => {
+        options.onDispatched();
+        return lifecycleResult();
+      });
+    mocks.read
+      .mockReset()
+      .mockImplementation(async (options: { expectedCommand: string }) => ({
+        result: {
+          schemaVersion: 1,
+          rehearsalVersion: current.version,
+          command: options.expectedCommand,
+          status: "success",
+          data:
+            options.expectedCommand === "activity"
+              ? { schemaVersion: 1, state: "idle", operation: null }
+              : lifecyclePreview(),
+        },
+        exitCode: 0,
+      }));
+    return actions();
+  };
+  it("reviews all shared workloads and requires native approval before one bounded typed apply", async () => {
+    const runner = prepare();
+    await runner.reviewVmShutdown("file:///workspace");
+    expect(mocks.review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        detail: expect.stringContaining("another-project"),
+        viewColumn: 2,
+      }),
+    );
+    expect(mocks.confirm).toHaveBeenCalledWith(
+      "Shut down this shared VM?",
+      expect.objectContaining({ modal: true }),
+      "Shut Down VM",
+    );
+    expect(mocks.shutdown).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceRoot: "/workspace",
+        confirmationDigest: "b".repeat(64),
+        packageBinding: "a".repeat(64),
+        signal: expect.any(AbortSignal),
+      }),
+    );
+    expect(runner.engineShutdownStateFor("file:///workspace")).toBe(
+      "confirmed",
+    );
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.refresh).toHaveBeenCalled();
+  });
+  it("cancelled native approval never applies or creates a terminal", async () => {
+    const runner = prepare();
+    mocks.confirm.mockResolvedValue(undefined);
+    await runner.reviewVmShutdown("file:///workspace");
+    expect(mocks.shutdown).not.toHaveBeenCalled();
+    expect(mocks.terminal).not.toHaveBeenCalled();
+  });
+  it("rejects source snapshot and package drift during review", async () => {
+    const runner = prepare();
+    mocks.reviewApproval.mockImplementation(async () => {
+      current = { ...current };
+      return true;
+    });
+    await runner.reviewVmShutdown("file:///workspace");
+    expect(mocks.shutdown).not.toHaveBeenCalled();
+    const second = prepare();
+    mocks.reviewApproval.mockResolvedValue(true);
+    mocks.binding
+      .mockResolvedValueOnce("a".repeat(64))
+      .mockResolvedValue("c".repeat(64));
+    await second.reviewVmShutdown("file:///workspace");
+    expect(mocks.shutdown).not.toHaveBeenCalled();
+  });
+  it("shows post-dispatch transport uncertainty without claiming a stopped VM", async () => {
+    const runner = prepare();
+    mocks.shutdown.mockImplementation(
+      async (options: { onDispatched: () => void }) => {
+        options.onDispatched();
+        throw Error("PRIVATE PROVIDER ERROR");
+      },
+    );
+    await runner.reviewVmShutdown("file:///workspace");
+    expect(runner.engineShutdownStateFor("file:///workspace")).toBe(
+      "uncertain",
+    );
+    expect(
+      mocks.confirm.mock.calls.some((call) =>
+        String(call[0]).includes("outcome is uncertain"),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(mocks.confirm.mock.calls)).not.toContain(
+      "PRIVATE PROVIDER ERROR",
+    );
+    expect(mocks.refresh).toHaveBeenCalled();
+  });
+  it("keeps partial already-stopped evidence distinct from confirmed VM exit", async () => {
+    const runner = prepare();
+    mocks.shutdown.mockResolvedValue({
+      ...lifecycleResult(),
+      status: "already-stopped",
+      reason: "profile-stopped",
+      confirmed: { profileStopped: true, vmProcessAbsent: false },
+    });
+    await runner.reviewVmShutdown("file:///workspace");
+    expect(runner.engineShutdownStateFor("file:///workspace")).toBe(
+      "already-stopped",
+    );
+    expect(
+      mocks.confirm.mock.calls.some((call) =>
+        String(call[0]).includes("did not verify a previous VM process exit"),
+      ),
+    ).toBe(true);
+  });
+  it("blocks repeated requests and other terminal actions while its own apply is in flight", async () => {
+    const runner = prepare();
+    let finish!: (value: ReturnType<typeof lifecycleResult>) => void;
+    mocks.shutdown.mockImplementation(
+      (options: { onDispatched: () => void }) => {
+        options.onDispatched();
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    );
+    const pending = runner.reviewVmShutdown("file:///workspace");
+    await vi.waitFor(() => expect(mocks.shutdown).toHaveBeenCalledTimes(1));
+    expect(runner.engineShutdownStateFor("file:///workspace")).toBe("running");
+    await runner.reviewVmShutdown("file:///workspace");
+    await runner.runWorkspace("file:///workspace", "doctor");
+    expect(mocks.shutdown).toHaveBeenCalledTimes(1);
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    finish(lifecycleResult());
+    await pending;
+  });
+});
+
+it("does not borrow confirmed shutdown evidence from a different reviewed VM", async () => {
+  current = engineSnapshot();
+  mocks.binding.mockReset().mockResolvedValue("a".repeat(64));
+  mocks.read
+    .mockReset()
+    .mockImplementation(async (options: { expectedCommand: string }) => ({
+      result: {
+        schemaVersion: 1,
+        rehearsalVersion: current.version,
+        command: options.expectedCommand,
+        status: "success",
+        data:
+          options.expectedCommand === "activity"
+            ? { schemaVersion: 1, state: "idle", operation: null }
+            : lifecyclePreview(),
+      },
+      exitCode: 0,
+    }));
+  mocks.shutdown
+    .mockReset()
+    .mockImplementation(async (options: { onDispatched: () => void }) => {
+      options.onDispatched();
+      return {
+        ...lifecycleResult(),
+        engine: { ...lifecycleResult().engine, vmIdentity: "f".repeat(64) },
+      };
+    });
+  const runner = actions();
+  await runner.reviewVmShutdown("file:///workspace");
+  expect(runner.engineShutdownStateFor("file:///workspace")).toBe("uncertain");
+  expect(
+    mocks.confirm.mock.calls.some((call) =>
+      String(call[0]).includes("did not match the reviewed VM"),
+    ),
+  ).toBe(true);
+});
+
+it("refreshes independent VM facts when a review finds the profile already stopped and never applies", async () => {
+  current = engineSnapshot();
+  mocks.binding.mockReset().mockResolvedValue("a".repeat(64));
+  mocks.shutdown.mockReset();
+  mocks.read.mockReset().mockResolvedValue({
+    result: {
+      schemaVersion: 1,
+      rehearsalVersion: current.version,
+      command: "engine stop",
+      status: "success",
+      data: {
+        ...lifecyclePreview(),
+        state: "already-stopped",
+        reason: "profile-stopped",
+        consentDigest: null,
+        engine: null,
+        impact: null,
+      },
+    },
+    exitCode: 0,
+  });
+  const initial = current.engineLifecycle;
+  if (initial?.state !== "available")
+    throw Error("Expected fixture engine facts.");
+  mocks.refresh.mockImplementationOnce(async () => {
+    current = {
+      ...current,
+      engineLifecycle: {
+        state: "available",
+        report: {
+          ...initial.report,
+          colimaDefault: {
+            state: "stopped",
+            profile: "default",
+            shutdownSupported: false,
+            reason: "profile-stopped",
+          },
+        },
+      },
+    };
+  });
+  const runner = actions();
+  await runner.reviewVmShutdown("file:///workspace");
+  expect(mocks.shutdown).not.toHaveBeenCalled();
+  expect(mocks.review).not.toHaveBeenCalled();
+  expect(mocks.refresh).toHaveBeenCalledOnce();
+  expect(
+    current.engineLifecycle?.state === "available" &&
+      current.engineLifecycle.report.colimaDefault.state,
+  ).toBe("stopped");
+  expect(engineLifecyclePresentation(current).profile).toBe(
+    "Colima profile: stopped",
+  );
 });

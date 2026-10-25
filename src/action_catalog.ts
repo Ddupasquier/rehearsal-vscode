@@ -1,4 +1,5 @@
 import type { ProjectSnapshot } from "./project_snapshot.js";
+import { engineShutdownAvailable } from "./engine_lifecycle_view.js";
 import { isPublishedVersion } from "./update_advisory.js";
 import type { TerminalShellFamily } from "./platform_runtime.js";
 
@@ -16,6 +17,7 @@ export type WorkspaceActionId =
   | "verify"
   | "reset"
   | "stopRuntime"
+  | "shutdownVm"
   | "discardRuntime"
   | "cleanupPreview"
   | "identityConnect"
@@ -44,6 +46,7 @@ export const WORKSPACE_ACTION_IDS: readonly WorkspaceActionId[] = [
   "verify",
   "reset",
   "stopRuntime",
+  "shutdownVm",
   "discardRuntime",
   "cleanupPreview",
   "identityConnect",
@@ -68,7 +71,8 @@ export type WorkspaceActionKind =
   | "show_output"
   | "inspection_settings"
   | "cancel_owned_operation"
-  | "manage_trust";
+  | "manage_trust"
+  | "review_engine_shutdown";
 
 export interface WorkspaceActionPlan {
   readonly id: WorkspaceActionId;
@@ -192,6 +196,16 @@ export const workspaceActionPlan = (
   )
     return null;
   switch (id) {
+    case "shutdownVm":
+      return engineShutdownAvailable(snapshot)
+        ? {
+            id,
+            kind: "review_engine_shutdown",
+            label: "Shut down VM",
+            detail:
+              "Review the shared VM and all affected workloads before a graceful shutdown.",
+          }
+        : null;
     case "checkUpdates":
       return {
         id,
@@ -393,7 +407,7 @@ export const workspaceActionPlan = (
       return terminalPlan(
         snapshot,
         id,
-        "Stop runtime",
+        "Stop project services",
         "Stop only this project's local Rehearsal services while preserving their data.",
         ["stop"],
         {

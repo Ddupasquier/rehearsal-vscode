@@ -10,16 +10,24 @@ import {
   stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
 import { inspectProject } from "../src/project_snapshot.js";
+import { nativeStorageRoot } from "./native-development-storage.js";
 import {
   bootstrapProjectDiscovery,
   type WorkspaceEntryKind,
 } from "../src/bootstrap_discovery.js";
 
 const execFileAsync = promisify(execFile);
-const labRoot = resolve(__dirname, "../../rehearsal-test-lab");
+const labRoot = () => {
+  const root = process.env.REHEARSAL_TEST_LAB_ROOT;
+  if (!root || !isAbsolute(root))
+    throw new Error(
+      "Set REHEARSAL_TEST_LAB_ROOT to the independently owned Lab checkout through the development launcher.",
+    );
+  return root;
+};
 
 const makeTemporaryCopyWritable = async (path: string): Promise<void> => {
   const metadata = await lstat(path);
@@ -39,7 +47,7 @@ const copyProject = async (
   destinationRoot: string,
 ): Promise<string> => {
   const destination = resolve(destinationRoot, sourceName);
-  await cp(resolve(labRoot, "projects", sourceName), destination, {
+  await cp(resolve(labRoot(), "projects", sourceName), destination, {
     recursive: true,
     verbatimSymlinks: true,
     filter: (source) => basename(source) !== "node_modules",
@@ -98,6 +106,8 @@ const bootstrapProfile = async (workspaceRoot: string, workspaceName: string) =>
   });
 
 const main = async (): Promise<void> => {
+  labRoot();
+  await nativeStorageRoot();
   const artifactArgument = process.argv[2];
   if (!artifactArgument) {
     throw new Error(

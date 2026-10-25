@@ -21,7 +21,11 @@ import {
   ownedProcessState,
   retireOwnedProcessGroup,
   assertInspectionPlatform,
+  captureEnginePackageBinding,
+  runEngineShutdown,
+  engineLifecycleEnvironment,
 } from "../src/process_adapter.js";
+import { lifecycleResult } from "./engine_lifecycle_fixture.js";
 
 const roots: string[] = [];
 
@@ -706,3 +710,172 @@ const ready=setInterval(()=>{
     );
   }
 });
+
+describe.skipIf(process.platform === "win32")(
+  "approved VM JSON transport",
+  () => {
+    const script = (data: unknown, status: string, exitCode: number) =>
+      `import assert from 'node:assert/strict';assert.deepEqual(process.argv.slice(2),['engine','stop','--json','--confirm-engine-stop=${"b".repeat(64)}']);console.log(${JSON.stringify(JSON.stringify({ schemaVersion: 1, rehearsalVersion: "1.4.0-dev.1", command: "engine stop", status, data }))});process.exitCode=${exitCode};`;
+    it("parses the exact confirmed public result without a terminal", async () => {
+      const root = await workspace(
+        script(lifecycleResult(), "success", 0),
+        "1.4.0-dev.1",
+        { containerEngineLifecycle: 1 },
+      );
+      const packageBinding = await captureEnginePackageBinding(root),
+        dispatched = vi.fn();
+      const result = await runEngineShutdown({
+        workspaceRoot: root,
+        confirmationDigest: "b".repeat(64),
+        packageBinding,
+        onDispatched: dispatched,
+      });
+      expect(result.confirmed).toEqual({
+        profileStopped: true,
+        vmProcessAbsent: true,
+      });
+      expect(dispatched).toHaveBeenCalledOnce();
+    });
+    it.each([
+      {
+        data: {
+          ...lifecycleResult(),
+          status: "refused",
+          reason: "review-changed",
+          confirmed: { profileStopped: false, vmProcessAbsent: false },
+        },
+        status: "error",
+        exitCode: 1,
+      },
+      {
+        data: {
+          ...lifecycleResult(),
+          status: "cancelled",
+          reason: "cancelled-before-dispatch",
+          confirmed: { profileStopped: false, vmProcessAbsent: false },
+        },
+        status: "error",
+        exitCode: 130,
+      },
+      {
+        data: {
+          ...lifecycleResult(),
+          status: "already-stopped",
+          reason: "profile-stopped",
+          confirmed: { profileStopped: true, vmProcessAbsent: false },
+        },
+        status: "not_ready",
+        exitCode: 1,
+      },
+    ])(
+      "retains typed $status/$exitCode shutdown evidence",
+      async ({ data, status, exitCode }) => {
+        const root = await workspace(
+          script(data, status, exitCode),
+          "1.4.0-dev.1",
+          { containerEngineLifecycle: 1 },
+        );
+        const result = await runEngineShutdown({
+          workspaceRoot: root,
+          confirmationDigest: "b".repeat(64),
+          packageBinding: await captureEnginePackageBinding(root),
+        });
+        expect(result.status).toBe(data.status);
+        expect(result.confirmed).toEqual(data.confirmed);
+      },
+    );
+    it("rejects exit-zero without consistent positive proof", async () => {
+      const root = await workspace(
+        script(
+          {
+            ...lifecycleResult(),
+            status: "refused",
+            reason: "review-changed",
+            confirmed: { profileStopped: false, vmProcessAbsent: false },
+          },
+          "success",
+          0,
+        ),
+        "1.4.0-dev.1",
+        { containerEngineLifecycle: 1 },
+      );
+      await expect(
+        runEngineShutdown({
+          workspaceRoot: root,
+          confirmationDigest: "b".repeat(64),
+          packageBinding: await captureEnginePackageBinding(root),
+        }),
+      ).rejects.toThrow(/contradicts/u);
+    });
+    it("rejects changed executable identity and pre-cancellation before child dispatch", async () => {
+      const root = await workspace(
+          script(lifecycleResult(), "success", 0),
+          "1.4.0-dev.1",
+          { containerEngineLifecycle: 1 },
+        ),
+        packageBinding = await captureEnginePackageBinding(root),
+        dispatched = vi.fn();
+      await writeFile(
+        join(root, "node_modules/@rehearsal-db/core/cli.mjs"),
+        "throw Error('must not execute');",
+      );
+      await expect(
+        runEngineShutdown({
+          workspaceRoot: root,
+          confirmationDigest: "b".repeat(64),
+          packageBinding,
+          onDispatched: dispatched,
+        }),
+      ).rejects.toThrow(/changed/u);
+      expect(dispatched).not.toHaveBeenCalled();
+      const controller = new AbortController();
+      controller.abort();
+      await expect(
+        runEngineShutdown({
+          workspaceRoot: root,
+          confirmationDigest: "b".repeat(64),
+          packageBinding: await captureEnginePackageBinding(root),
+          signal: controller.signal,
+          onDispatched: dispatched,
+        }),
+      ).rejects.toThrow();
+      expect(dispatched).not.toHaveBeenCalled();
+    });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "engine JSON preserves refusal and shared-coordination selectors without forwarding credentials",
+  async () => {
+    const source = {
+      DOCKER_CONTEXT: "colima",
+      DOCKER_TLS_VERIFY: "1",
+      DOCKER_CERT_PATH: "/private-certificate-location",
+      COLIMA_PROFILE: "other-profile",
+      LIMA_HOME: "/external/custom-lima",
+      REHEARSAL_USER_STATE_DIRECTORY: "/external/shared-state",
+      DATABASE_PASSWORD: "SECRET",
+    };
+    const env = engineLifecycleEnvironment(source);
+    for (const [key, value] of Object.entries(source))
+      if (key !== "DATABASE_PASSWORD") expect(env[key]).toBe(value);
+    expect(env.DATABASE_PASSWORD).toBeUndefined();
+    const root = await workspace(
+      `console.log(JSON.stringify({schemaVersion:1,rehearsalVersion:'1.4.0-dev.1',command:'engine status',status:'success',startedAt:'2026-10-25T00:00:00Z',durationMs:1,warnings:[],data:{tls:process.env.DOCKER_TLS_VERIFY,profile:process.env.COLIMA_PROFILE,shared:process.env.REHEARSAL_USER_STATE_DIRECTORY,secretPresent:process.env.DATABASE_PASSWORD!==undefined}}));`,
+      "1.4.0-dev.1",
+      { containerEngineLifecycle: 1 },
+    );
+    const result = await runRehearsalJson({
+      workspaceRoot: root,
+      command: ["engine", "status"],
+      expectedCommand: "engine status",
+      environment: source,
+    });
+    expect(result.result.data).toEqual({
+      tls: "1",
+      profile: "other-profile",
+      shared: "/external/shared-state",
+      secretPresent: false,
+    });
+  },
+);

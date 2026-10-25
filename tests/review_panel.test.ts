@@ -40,7 +40,7 @@ const editor = vi.hoisted(() => {
   return {
     uri,
     panels,
-    createPanel: vi.fn(() => {
+    createPanel: vi.fn((..._args: unknown[]) => {
       const panel = create();
       panels.push(panel);
       return panel;
@@ -49,11 +49,24 @@ const editor = vi.hoisted(() => {
 });
 
 vi.mock("vscode", () => ({
+  EventEmitter: class {
+    listeners = new Set<(value: string) => void>();
+    event = (listener: (value: string) => void) => {
+      this.listeners.add(listener);
+      return { dispose: () => this.listeners.delete(listener) };
+    };
+    fire(value: string) {
+      for (const listener of this.listeners) listener(value);
+    }
+    dispose() {
+      this.listeners.clear();
+    }
+  },
   Uri: {
     joinPath: (root: ReturnType<typeof editor.uri>, ...parts: string[]) =>
       editor.uri([root.path, ...parts].join("/")),
   },
-  ViewColumn: { Active: 1 },
+  ViewColumn: { Active: 1, Beside: 2 },
   window: { createWebviewPanel: editor.createPanel },
 }));
 
@@ -112,6 +125,74 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+describe("review column ownership", () => {
+  it("keeps other reviews active by default and honors an explicit beside review", async () => {
+    const owner = createOwner();
+    const first = owner.review(options());
+    expect(editor.createPanel.mock.calls.at(-1)?.[2]).toBe(1);
+    send("cancelReview");
+    await first;
+    const second = owner.review({ ...options(), viewColumn: 2 });
+    expect(editor.createPanel.mock.calls.at(-1)?.[2]).toBe(2);
+    send("cancelReview");
+    await second;
+  });
+});
+
+describe("review return navigation", () => {
+  it.each(["ready", "cancelled", "failed", "success"])(
+    "returns exact workspace from %s while preserving specialized callbacks",
+    async (state) => {
+      const owner = createOwner(),
+        returned = vi.fn(),
+        applied = vi.fn(async () =>
+          state === "cancelled" ? false : undefined,
+        );
+      owner.onDidRequestReturn(returned);
+      const { onReturn: _onReturn, ...reviewOptions } = options();
+      if (state === "failed")
+        applied.mockImplementation(async () => {
+          throw Error("private");
+        });
+      const pending = owner.review({ ...reviewOptions, onApply: applied });
+      const observed = pending.catch(() => false);
+      if (state !== "ready") {
+        send("applyReview");
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      send("returnFromReview");
+      await observed;
+      expect(returned).toHaveBeenCalledWith(reviewOptions.workspaceKey);
+      expect(lastPanel().dispose).toHaveBeenCalledOnce();
+    },
+  );
+  it("does not navigate while applying and honors caller-owned return", async () => {
+    const owner = createOwner(),
+      returned = vi.fn(),
+      onReturn = vi.fn();
+    owner.onDidRequestReturn(returned);
+    let finish!: () => void;
+    const pending = owner.review({
+      ...options(),
+      onReturn,
+      onApply: () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    });
+    send("applyReview");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    send("returnFromReview");
+    expect(lastPanel().dispose).not.toHaveBeenCalled();
+    expect(onReturn).not.toHaveBeenCalled();
+    finish();
+    await pending;
+    send("returnFromReview");
+    expect(onReturn).toHaveBeenCalledOnce();
+    expect(returned).not.toHaveBeenCalled();
+  });
+});
+
 describe("non-modal review document", () => {
   it("exposes the same renderer through the VS Code-free view module", () => {
     expect(renderPureReviewDocument(content, assets)).toBe(
@@ -129,6 +210,8 @@ describe("non-modal review document", () => {
     expect(html).toContain('id="review-heading" tabindex="-1"');
     expect(html).toContain('id="review-status" role="status"');
     expect(html).toContain('id="review-return"');
+    expect(html).toContain(">Back to Rehearsal</button>");
+    expect(html).not.toMatch(/id="review-return"[^>]* hidden/u);
     expect(html).toContain("default-src 'none'");
     expect(html).toContain("connect-src 'none'");
     expect(html).not.toContain("contenteditable");
@@ -247,7 +330,7 @@ describe("non-modal review lifecycle", () => {
     expect(panel.dispose).toHaveBeenCalledOnce();
   });
 
-  it("ignores malformed messages, foreign tokens, early return and unknown actions", async () => {
+  it("ignores malformed messages, foreign tokens and unknown actions", async () => {
     const input = options();
     const pending = createOwner().review(input);
     for (const value of [null, [], "applyReview", { type: "applyReview" }])
@@ -256,7 +339,6 @@ describe("non-modal review lifecycle", () => {
     send("applyReview", lastPanel(), { unexpected: true });
     send("unknown", lastPanel(), { type: { toString: null } });
     send("unknown");
-    send("returnFromReview");
     expect(input.onApply).not.toHaveBeenCalled();
     expect(input.onReturn).not.toHaveBeenCalled();
     send("cancelReview");
@@ -623,6 +705,8 @@ describe("review keyboard/controller behavior", () => {
     });
     expect(nodes["#review-heading"]!.focus).toHaveBeenCalledOnce();
     nodes["#review-apply"]!.click();
+    expect(nodes["#review-return"]!.disabled).toBe(true);
+    nodes["#review-return"]!.click();
     expect(postMessage).toHaveBeenCalledWith({
       type: "applyReview",
       token: assets.scriptNonce,
@@ -643,6 +727,7 @@ describe("review keyboard/controller behavior", () => {
     expect(nodes["#review-status"]!.textContent).toBe("Saved.");
     expect(nodes["#review-apply"]!.hidden).toBe(true);
     expect(nodes["#review-return"]!.hidden).toBe(false);
+    expect(nodes["#review-return"]!.disabled).toBe(false);
     expect(nodes["#review-return"]!.focus).toHaveBeenCalledOnce();
     listeners.keydown!({ key: "Escape", preventDefault: vi.fn() } as never);
     expect(postMessage).toHaveBeenLastCalledWith({
