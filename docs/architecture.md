@@ -51,7 +51,7 @@ metadata-check consent therefore start in the new identity's own storage. Existi
 shared `rehearsal.*` user configuration remains unchanged, including automatic-update
 flags, so the migration guide asks users to review them. Project configuration, privacy
 keys, baselines and database/Storage state are outside this identity migration.
-The [README migration steps](../README.md#move-from-a-preview-through-0118) own the user flow.
+The [extension migration steps](extension-guide.md#move-from-a-preview-through-0118) own the user flow.
 
 ## Technical foundation
 
@@ -342,7 +342,7 @@ This inspection runtime is independent of an external `node` on `PATH` and of pr
 version-manager selectors. Foreground actions instead use the normal project terminal's
 selected Node and package manager. The extension does not discover or install a second
 Node runtime, source user shell initialization, alter version-manager aliases or override
-a project selector. The [Node setup guide](../README.md#node-setup-and-runtime-selection)
+a project selector. The [Node setup guide](extension-guide.md#node-setup-and-runtime-selection)
 owns that user-facing distinction and recovery.
 Manifest reads are bounded to 1 MiB through a regular-file handle. The executable's
 canonical path must remain inside the canonical package root; a symlink cannot redirect
