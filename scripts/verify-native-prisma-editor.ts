@@ -76,19 +76,35 @@ async function inventory(root: string, prefix = ""): Promise<string[]> {
   }
   return result.sort();
 }
+/** VS Code alone may add installer metadata; every product field remains exact. */
+export function assertInstalledPrismaEditorManifest(
+  expectedBytes: Uint8Array,
+  installedBytes: Uint8Array,
+): void {
+  const expected = JSON.parse(Buffer.from(expectedBytes).toString("utf8"));
+  const installed = JSON.parse(Buffer.from(installedBytes).toString("utf8"));
+  assert.ok(
+    installed && typeof installed === "object" && !Array.isArray(installed),
+  );
+  delete installed.__metadata;
+  assert.deepEqual(installed, expected);
+}
 async function sameFiles(
   expected: string,
   installed: string,
   exclude: string[] = [],
+  extensionPayload = false,
 ) {
   const a = await inventory(expected),
     b = (await inventory(installed)).filter((name) => !exclude.includes(name));
   assert.deepEqual(b, a);
-  for (const name of a)
-    assert.equal(
-      sha(await regular(join(expected, name))),
-      sha(await regular(join(installed, name))),
-    );
+  for (const name of a) {
+    const expectedBytes = await regular(join(expected, name));
+    const installedBytes = await regular(join(installed, name));
+    if (extensionPayload && name === "package.json")
+      assertInstalledPrismaEditorManifest(expectedBytes, installedBytes);
+    else assert.equal(sha(expectedBytes), sha(installedBytes));
+  }
   return a.length;
 }
 async function wait<T>(
@@ -590,6 +606,7 @@ async function main() {
       join(frozen, "extension"),
       installed,
       [".vsixmanifest"],
+      true,
     );
     for (const name of [
       "native-editor-driver.cjs",
@@ -683,7 +700,12 @@ async function main() {
       coreFiles,
     );
     assert.equal(
-      await sameFiles(join(frozen, "extension"), installed, [".vsixmanifest"]),
+      await sameFiles(
+        join(frozen, "extension"),
+        installed,
+        [".vsixmanifest"],
+        true,
+      ),
       extensionFiles,
     );
     assert.equal(sha(await regular(get("vsix"))), get("vsix-sha"));
