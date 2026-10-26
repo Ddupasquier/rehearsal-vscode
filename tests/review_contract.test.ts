@@ -470,3 +470,93 @@ describe("public authentication review", () => {
     ).toThrow(/duplicated/u);
   });
 });
+
+describe("baseline format compatibility", () => {
+  const baseline = {
+    generationId: "generation-3",
+    createdAt: null,
+    migrationCutoff: "20261001000000",
+    rowCount: 1,
+    tableCount: 1,
+    migrationCount: 1,
+    verification: "checksums_verified",
+  };
+  it.each([1, 2, 3])(
+    "accepts verified baseline format%s without reinterpreting prior formats",
+    (formatVersion) => {
+      expect(
+        parseBaselineInspectionData({
+          ...baseline,
+          formatVersion,
+          ...(formatVersion === 3
+            ? {
+                nativeMigrations: {
+                  schemaVersion: 1,
+                  kind: "prisma",
+                  version: "7.10.1",
+                  provider: "postgresql",
+                  lockSha256: "a".repeat(64),
+                  toolchainSha256: "b".repeat(64),
+                },
+              }
+            : {}),
+        }).formatVersion,
+      ).toBe(formatVersion);
+    },
+  );
+  it.each([0, 4, "3", null])(
+    "refuses unknown baseline format%j",
+    (formatVersion) => {
+      expect(() =>
+        parseBaselineInspectionData({ ...baseline, formatVersion }),
+      ).toThrow();
+    },
+  );
+});
+
+describe("native baseline provenance", () => {
+  const nativeMigrations = {
+    schemaVersion: 1,
+    kind: "prisma",
+    version: "7.10.1",
+    provider: "postgresql",
+    lockSha256: "a".repeat(64),
+    toolchainSha256: "b".repeat(64),
+  };
+  const baseline = {
+    generationId: "generation-3",
+    createdAt: null,
+    migrationCutoff: "20261001000000",
+    rowCount: 1,
+    tableCount: 1,
+    migrationCount: 1,
+    verification: "checksums_verified",
+    formatVersion: 3,
+    nativeMigrations,
+  };
+  it("retains producer metadata without claiming it is the current execution toolchain", () => {
+    expect(
+      parseBaselineInspectionData(baseline, "postgresql").nativeMigrations,
+    ).toEqual(nativeMigrations);
+  });
+  it("requires native metadata only for format3, including retained generations", () => {
+    for (const raw of [
+      { ...baseline, nativeMigrations: undefined },
+      { ...baseline, formatVersion: 2 },
+      { ...baseline, nativeMigrations: { ...nativeMigrations, extra: true } },
+      {
+        ...baseline,
+        generations: [
+          {
+            ...baseline,
+            active: true,
+            storageAssetCount: 0,
+            nativeMigrations: undefined,
+          },
+        ],
+      },
+    ])
+      expect(() => parseBaselineInspectionData(raw)).toThrow();
+    expect(() => parseBaselineInspectionData(baseline, "supabase")).toThrow();
+  });
+});

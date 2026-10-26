@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   assertMatchingMigrationCandidates,
   parseMigrationReviewPlan,
+  matchingNativeMigrationHistory,
 } from "../src/migration_review.js";
 const plan = () => ({
   schemaVersion: 1,
@@ -255,5 +256,98 @@ describe("migration review public contract", () => {
     controls[4]!.candidateSha256 = "not-a-digest";
     for (const value of controls)
       expect(() => parseMigrationReviewPlan(value)).toThrow();
+  });
+});
+
+describe("explicit native Prisma migration review", () => {
+  const native = () => ({
+    ...plan(),
+    targets: plan().targets.map((target) => ({
+      ...target,
+      migrationTool: {
+        schemaVersion: 1,
+        kind: "prisma",
+        version: "7.10.1",
+        provider: "postgresql",
+        lockSha256: "d".repeat(64),
+        toolchainSha256: "e".repeat(64),
+      },
+      entries: target.entries.map((entry) => ({
+        ...entry,
+        filename: `${entry.version}_${entry.name}/migration.sql`,
+      })),
+    })),
+  });
+  it("preserves exact native identities, order and dependencies only with explicit binding", () => {
+    const parsed = parseMigrationReviewPlan(native());
+    expect(parsed.targets[0]!.migrationTool?.version).toBe("7.10.1");
+    expect(parsed.targets[0]!.entries.map((entry) => entry.filename)).toEqual([
+      "20260101000000_change/migration.sql",
+      "20260101000001_change/migration.sql",
+    ]);
+    expect(parsed.targets[0]!.entries[1]!.dependsOn).toEqual([
+      "primary:20260101000000",
+    ]);
+    const missing = native();
+    delete (missing.targets[0] as { migrationTool?: unknown }).migrationTool;
+    expect(() => parseMigrationReviewPlan(missing)).toThrow();
+  });
+  it.each([
+    { version: "7.10.2" },
+    { provider: "supabase" },
+    { kind: "sql" },
+    { schemaVersion: 2 },
+    { lockSha256: "bad" },
+    { toolchainSha256: "f".repeat(63) },
+    { extra: true },
+  ])("refuses unknown or invalid binding %j", (patch) => {
+    const raw = native();
+    Object.assign(raw.targets[0]!.migrationTool, patch);
+    expect(() => parseMigrationReviewPlan(raw)).toThrow();
+  });
+  it("rejects provider, slug, version, nesting and SQL-layout contradictions", () => {
+    for (const filename of [
+      "20260101000000_other/migration.sql",
+      "20260101000001_change/migration.sql",
+      "20260101000000_change/extra/migration.sql",
+      "20260101000000_é/migration.sql",
+      "20260101000000_change.sql",
+      "../migration.sql",
+    ]) {
+      const raw = native();
+      raw.targets[0]!.entries[0]!.filename = filename;
+      expect(() => parseMigrationReviewPlan(raw)).toThrow();
+    }
+    const raw = native();
+    raw.targets[0]!.provider = "supabase";
+    expect(() => parseMigrationReviewPlan(raw)).toThrow();
+  });
+});
+
+describe("native history versus current execution toolchain", () => {
+  it("compares reviewed history while preserving independent producer bytes", () => {
+    const binding = {
+      schemaVersion: 1 as const,
+      kind: "prisma" as const,
+      version: "7.10.1" as const,
+      provider: "postgresql" as const,
+      lockSha256: "a".repeat(64),
+      toolchainSha256: "b".repeat(64),
+    };
+    expect(
+      matchingNativeMigrationHistory(binding, {
+        ...binding,
+        toolchainSha256: "c".repeat(64),
+      }),
+    ).toBe(true);
+    expect(
+      matchingNativeMigrationHistory(binding, {
+        ...binding,
+        lockSha256: "c".repeat(64),
+      }),
+    ).toBe(false);
+    expect(matchingNativeMigrationHistory(undefined, binding)).toBe(false);
+    expect(matchingNativeMigrationHistory(binding, undefined)).toBe(false);
+    expect(matchingNativeMigrationHistory(undefined, undefined)).toBe(true);
   });
 });

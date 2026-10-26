@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.26 — Native migration review candidate
+
+- Understand opt-in Core Prisma 7.10.1/PostgreSQL migration paths and format 3
+  baselines while preserving strict SQL history validation.
+- Keep source navigation bound to the full native path and exact reviewed bytes;
+  the extension continues to use Core for migration execution.
+- Independent installed-package and native editor acceptance is pending. Core 2.0.0
+  and earlier do not provide this native migration capability.
+
 ## 0.1.25 — VM shutdown and Back navigation
 
 - Target core 2.0.0 for the new engine controls. Review its changed default lifecycle

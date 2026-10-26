@@ -1,3 +1,4 @@
+import { parsePrismaMigrationToolBinding } from "./migration_review.js";
 import { ContractError } from "./contracts.js";
 import type { BaselineData, ExplainData } from "./contracts.js";
 
@@ -335,10 +336,19 @@ const cutoff = (value: unknown): string => {
     throw new ContractError("Baseline migration boundary is invalid.");
   return value;
 };
-const formatVersion = (value: unknown): 1 | 2 => {
-  if (value !== 1 && value !== 2)
+const formatVersion = (value: unknown): 1 | 2 | 3 => {
+  if (value !== 1 && value !== 2 && value !== 3)
     throw new ContractError("Baseline format is unsupported.");
   return value;
+};
+const baselineNativeMetadata = (input: ObjectValue) => {
+  if (input.formatVersion === 3)
+    return {
+      nativeMigrations: parsePrismaMigrationToolBinding(input.nativeMigrations),
+    };
+  if (input.nativeMigrations !== undefined)
+    throw new ContractError("Native metadata requires baseline format 3.");
+  return {};
 };
 export const parseBaselineInspectionData = (
   value: unknown,
@@ -350,6 +360,7 @@ export const parseBaselineInspectionData = (
       ? undefined
       : parseBaselineScopeReview(input.review);
   const result: BaselineData = {
+    ...baselineNativeMetadata(input),
     generationId: metadataText(input.generationId, "Baseline generation"),
     createdAt: createdAt(input.createdAt),
     migrationCutoff: cutoff(input.migrationCutoff),
@@ -409,6 +420,7 @@ export const parseBaselineInspectionData = (
               createdAt: createdAt(generation.createdAt),
               active: boolean(generation.active, "Active generation"),
               formatVersion: formatVersion(generation.formatVersion),
+              ...baselineNativeMetadata(generation),
               rowCount: count(generation.rowCount, "Retained rows"),
               tableCount: count(generation.tableCount, "Retained tables"),
               migrationCount: count(
@@ -425,6 +437,14 @@ export const parseBaselineInspectionData = (
         }
       : {}),
   };
+  if (
+    result.nativeMigrations &&
+    expectedProvider !== undefined &&
+    expectedProvider !== "postgresql"
+  )
+    throw new ContractError(
+      "Native baseline provider contradicts the reviewed target.",
+    );
   const ids = new Set(
     result.generations?.map((generation) => generation.generationId),
   );
@@ -440,7 +460,10 @@ export const parseBaselineInspectionData = (
       "Retained generation identities contradict the active baseline.",
     );
   if (review !== undefined) {
-    if (expectedProvider !== undefined && review.provider !== expectedProvider)
+    if (
+      (result.nativeMigrations && review.provider !== "postgresql") ||
+      (expectedProvider !== undefined && review.provider !== expectedProvider)
+    )
       throw new ContractError(
         "Baseline scope provider contradicts the reviewed target. Refresh the project.",
       );
@@ -515,6 +538,9 @@ export const parseReviewTargets = (data: ExplainData) => {
         ? {
             generationId: baseline.generationId,
             formatVersion: baseline.formatVersion ?? null,
+            ...(baseline.nativeMigrations
+              ? { nativeMigrations: baseline.nativeMigrations }
+              : {}),
             migrationCutoff: baseline.migrationCutoff,
             migrationHistorySha256: baseline.migrationHistorySha256 ?? null,
             sourceSchemaSha256: baseline.sourceSchemaSha256 ?? null,
