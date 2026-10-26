@@ -53,7 +53,13 @@ default; installation requires an explicit option and never starts a database.
    npm install --save-dev @rehearsal-db/core
    ```
 
-   This release targets core **1.2.0**; `0.1.0-rc.4` remains the minimum core contract.
+   The **0.1.25 release candidate** targets core **2.0.0**; `0.1.0-rc.4` remains
+   the minimum core contract. A source version is not proof of npm publication.
+   Before explicitly upgrading a 1.x project, review the core
+   [upgrade notes](https://github.com/Ddupasquier/rehearsal-db/blob/main/CHANGELOG.md):
+   omitted lifecycle settings now stop database targets after a run or application
+   exit, preserving data volumes and reconstruction receipts. Explicit
+   `keep-until-stop` remains available. Automatic CLI updates do not cross major versions.
    The new persistent migration diagnoses require core 1.0.2; an older compatible
    package cannot supply that evidence.
    Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
@@ -72,20 +78,22 @@ default; installation requires an explicit option and never starts a database.
 
 ### Direct GitHub installation
 
-The reviewed VSIX is an alternative to Marketplace. Open the
-[0.1.24 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.24)
-and download `rehearsal-db-0.1.24.vsix` and `SHA256SUMS`. If that version is absent,
-publication has not completed; a source version is not a downloadable release.
-Compare its SHA-256 with the checksum from that same release: use
-`shasum -a 256 /path/to/rehearsal-db-0.1.24.vsix` on macOS or
-`sha256sum /path/to/rehearsal-db-0.1.24.vsix` on Linux. Stop if they differ.
+The reviewed VSIX is an alternative to Marketplace. Source **0.1.25** is a release
+candidate until the official [0.1.25 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.25)
+provides `rehearsal-db-0.1.25.vsix` and `SHA256SUMS`. If those assets are absent,
+publication has not completed; do not substitute an engineering candidate's checksum.
+The [previous 0.1.24 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.24)
+retains its original assets and does not contain the new VM controls.
+For 0.1.25, compare the VSIX SHA-256 with the checksum from that same release: use
+`shasum -a 256 /path/to/rehearsal-db-0.1.25.vsix` on macOS or
+`sha256sum /path/to/rehearsal-db-0.1.25.vsix` on Linux. Stop if they differ.
 Open **Extensions → … → Install from VSIX…** and choose that verified file.
 Save your work and reload the extension host only if VS Code asks.
 
 If VS Code's `code` command is available, installation can instead use:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.24.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.25.vsix --force
 ```
 
 ### Node setup and runtime selection
@@ -385,13 +393,17 @@ it does not execute project code. Once core advertises the versioned Project Pro
 contract, the extension uses `rehearsal discover --json` and stops duplicating broader
 discovery rules.
 
-### VM shutdown — development candidate
+### VM shutdown — 0.1.25 release candidate
 
-The candidate adds an always-visible **Shut down VM…** control below the dashboard
+The 0.1.25 candidate adds an always-visible **Shut down VM…** control below the dashboard
 header, plus **Rehearsal: Shut Down VM** in the Command Palette and Projects title bar.
 **Stop project services** stops this project's services; shutting down the shared VM
 also interrupts other projects. Review the listed workloads and confirm before shutdown.
 Data volumes, baselines and recovery files are not selected for deletion.
+
+Shutdown initially requires macOS Apple Silicon, Colima **0.10.3**, its **VZ** backend
+and the **default** profile. Other local engine selections can still report status;
+this is not a claim that every platform or backend supports VM shutdown.
 
 The installed core must advertise `containerEngineLifecycle: 1`; older packages and
 unsupported backends show guidance instead of guessing a shutdown command. The selected
@@ -567,7 +579,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.24.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.25.vsix --force
 ```
 
 Read the bundled [license](LICENSE), [privacy statement](PRIVACY.md), and

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { assertArchiveContents } from "../scripts/verify-private-vsix.js";
+import {
+  assertArchiveContents,
+  resolveVerificationVsCodeCli,
+} from "../scripts/verify-private-vsix.js";
 
 const publicArchive = [
   "[Content_Types].xml",
@@ -69,5 +72,21 @@ describe("public VSIX archive boundary", () => {
     expect(() =>
       assertArchiveContents(publicArchive.filter((path) => path !== entry)),
     ).toThrow("Packaged extension is missing");
+  });
+});
+
+describe("private VSIX verifier CLI selection", () => {
+  it.each([undefined, "", "1"])(
+    "ignores inherited marker/default %s",
+    (value) => {
+      expect(resolveVerificationVsCodeCli(value)).toBe("code");
+    },
+  );
+  it.each([
+    "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code",
+    "/owned/code-wrapper",
+    "code-insiders",
+  ])("preserves explicit executable override %s", (value) => {
+    expect(resolveVerificationVsCodeCli(value)).toBe(value);
   });
 });

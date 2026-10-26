@@ -7,7 +7,11 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(__dirname, "..");
-const vscodeCli = process.env.VSCODE_CLI || "code";
+/** VS Code itself exports VSCODE_CLI=1 as a marker, not an executable path. */
+export const resolveVerificationVsCodeCli = (
+  override: string | undefined,
+): string => (override && override !== "1" ? override : "code");
+const vscodeCli = resolveVerificationVsCodeCli(process.env.VSCODE_CLI);
 const outputLimit = 4 * 1024 * 1024;
 
 type ExtensionManifest = {
