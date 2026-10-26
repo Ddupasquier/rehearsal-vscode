@@ -566,6 +566,7 @@ async function main() {
         "update.mode": "none",
         "extensions.autoUpdate": false,
         "extensions.autoCheckUpdates": false,
+        "telemetry.telemetryLevel": "off",
         "rehearsal.automaticUpdates": { extension: false, cli: false },
       }),
       { mode: 0o600 },
