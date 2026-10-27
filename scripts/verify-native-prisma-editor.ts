@@ -1,19 +1,29 @@
 /** Explicit opt-in Ubuntu hosted acceptance. Never installs/downloads Code or starts databases. */
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { Socket } from "node:net";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
   copyFile,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   readdir,
   realpath,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+} from "node:path";
 import { freemem } from "node:os";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -32,6 +42,7 @@ const { shouldRetainNativeEditor } =
   };
 const execute = promisify(execFile),
   sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const nativeObservationBudgetMs = 180000;
 async function regular(file: string, max = 64 * 1024 * 1024) {
   assert.ok(isAbsolute(file));
   assert.equal(await realpath(file), file);
@@ -119,7 +130,203 @@ async function wait<T>(
   }
   throw Error("Owned native observation incomplete.");
 }
-async function drive(profile: string, root: string, signal: AbortSignal) {
+export const nativeEditorFailureDiagnostic = (
+  error: unknown,
+): { category: string; exitCode: number | null } => {
+  const value =
+    error && typeof error === "object"
+      ? (error as { code?: unknown; name?: unknown; message?: unknown })
+      : {};
+  if (
+    typeof value.code === "number" &&
+    Number.isSafeInteger(value.code) &&
+    value.code >= 0 &&
+    value.code <= 255
+  )
+    return { category: "child-exit", exitCode: value.code };
+  if (value.code === "ERR_ASSERTION")
+    return { category: "assertion", exitCode: null };
+  if (value.code === "EINVAL")
+    return { category: "ipc-invalid-argument", exitCode: null };
+  if (value.code === "ENOENT")
+    return { category: "missing-input", exitCode: null };
+  if (value.code === "EACCES" || value.code === "EPERM")
+    return { category: "access-refused", exitCode: null };
+  if (value.code === "ETIMEDOUT")
+    return { category: "transport-timeout", exitCode: null };
+  if (value.name === "AbortError" || value.code === "ABORT_ERR")
+    return { category: "cancelled", exitCode: null };
+  if (value.message === "Owned Code exited before observation.")
+    return { category: "owned-code-exit", exitCode: null };
+  if (value.message === "Owned native observation incomplete.")
+    return { category: "observation-timeout", exitCode: null };
+  if (
+    [
+      "Owned CDP unavailable.",
+      "Owned CDP closed.",
+      "Owned CDP refused.",
+      "Owned CDP cancelled.",
+    ].includes(String(value.message))
+  )
+    return { category: "owned-cdp-unavailable", exitCode: null };
+  return { category: "unexpected", exitCode: null };
+};
+/** Release only observer event-loop references when the owned editor is intentionally retained. */
+export const unrefRetainedNativeEditorObserver = (
+  child: Pick<ChildProcess, "stderr" | "unref">,
+) => {
+  const stderrUnref =
+    child.stderr === null ? null : child.stderr instanceof Socket;
+  if (child.stderr instanceof Socket) child.stderr.unref();
+  child.unref();
+  return { childUnref: true as const, stderrUnref };
+};
+/** Pinned Code 1.143 IPC formulas; count UTF8 bytes, not only JavaScript characters. */
+export const nativeEditorIpcBudget = (
+  runtimeDirectory: string,
+  profile: string,
+  version: string,
+) => {
+  assert.ok(
+    posix.isAbsolute(runtimeDirectory) &&
+      posix.resolve(runtimeDirectory) === runtimeDirectory &&
+      posix.isAbsolute(profile) &&
+      /^\d+\.\d+\.\d+$/u.test(version),
+  );
+  const scope = createHash("sha256").update(profile).digest("hex").slice(0, 8);
+  const staticHandle = posix.join(
+    runtimeDirectory,
+    `vscode-${scope}-${version.slice(0, 4)}-shared.sock`,
+  );
+  const suffixLength = Math.min(
+    36,
+    Math.max(0, 106 - posix.join(runtimeDirectory, "vscode-ipc-.sock").length),
+  );
+  const randomHandle = posix.join(
+    runtimeDirectory,
+    `vscode-ipc-${"0".repeat(suffixLength)}.sock`,
+  );
+  const staticBytes = Buffer.byteLength(staticHandle),
+    randomBytes = Buffer.byteLength(randomHandle);
+  assert.ok(
+    staticBytes < 107 && randomBytes < 107 && suffixLength >= 16,
+    "Owned Code IPC namespace exceeds the pinned Linux budget.",
+  );
+  return {
+    staticWorstBytes: staticBytes,
+    randomBytes,
+    randomSuffixLength: suffixLength,
+    linuxBoundExclusive: 107,
+    inBounds: true as const,
+  };
+};
+export const createNativeEditorIpcNamespace = async (
+  approved: string,
+  profile: string,
+  version: string,
+) => {
+  assert.ok(isAbsolute(approved) && resolve(approved) === approved);
+  assert.equal(await realpath(approved), approved);
+  const directory = await mkdtemp(join(approved, "i-"));
+  assert.equal(dirname(directory), approved);
+  assert.equal(await realpath(directory), directory);
+  const metadata = await lstat(directory);
+  assert.ok(
+    metadata.isDirectory() &&
+      !metadata.isSymbolicLink() &&
+      (metadata.mode & 0o777) === 0o700 &&
+      metadata.uid === process.getuid?.(),
+  );
+  const budget = nativeEditorIpcBudget(directory, profile, version);
+  return {
+    directory,
+    receipt: {
+      schemaVersion: 1,
+      namespaceName: basename(directory),
+      directorySha256: sha(Buffer.from(directory)),
+      canonical: true,
+      ownedByCurrentUser: true,
+      ownerOnly: true,
+      ...budget,
+      retainedWithProfile: true,
+      callerTemporaryDirectoryChanged: false,
+    },
+  };
+};
+export const nativeEditorStartupDiagnostic = (
+  bytes: Uint8Array,
+  exitCode: unknown,
+  signal: unknown,
+) => {
+  const text = Buffer.from(bytes.subarray(0, 65536)).toString("utf8");
+  let category = "unclassified";
+  if (!text.length) category = "no-stderr";
+  else if (
+    /SUID sandbox helper binary was found, but is not configured correctly/iu.test(
+      text,
+    )
+  )
+    category = "sandbox-helper";
+  else if (/Running as root without --no-sandbox is not supported/iu.test(text))
+    category = "root-sandbox-refusal";
+  else if (/No usable sandbox/iu.test(text)) category = "sandbox-unavailable";
+  else if (
+    /Failed to move to new namespace|unprivileged_userns_clone|user namespace.*(?:denied|not permitted)/iu.test(
+      text,
+    )
+  )
+    category = "user-namespace";
+  else if (
+    /IPC handle.*(?:longer|too long)|shorter --user-data-dir|listen EINVAL|bind.*EINVAL|\bEINVAL\b.*(?:\.sock|IPC)/iu.test(
+      text,
+    )
+  )
+    category = "ipc-path";
+  else if (/error while loading shared libraries:/iu.test(text))
+    category = "shared-library";
+  else if (
+    /Missing X server or \$DISPLAY|cannot open display|Gtk-WARNING.*cannot open display/iu.test(
+      text,
+    )
+  )
+    category = "display";
+  else if (/GPU process isn't usable/iu.test(text))
+    category = "graphics-startup";
+  const signals = [
+    "SIGABRT",
+    "SIGSEGV",
+    "SIGTRAP",
+    "SIGTERM",
+    "SIGKILL",
+    "SIGINT",
+    "SIGHUP",
+    "SIGILL",
+    "SIGBUS",
+    "SIGFPE",
+    "SIGSYS",
+    "SIGPIPE",
+  ];
+  return {
+    category,
+    exitCode:
+      typeof exitCode === "number" &&
+      Number.isSafeInteger(exitCode) &&
+      exitCode >= 0 &&
+      exitCode <= 255
+        ? exitCode
+        : null,
+    signal:
+      typeof signal === "string" && signals.includes(signal) ? signal : null,
+    stderrBytesCaptured: Math.min(bytes.length, 65536),
+  };
+};
+async function drive(
+  profile: string,
+  root: string,
+  signal: AbortSignal,
+  observePhase: (value: string) => void = () => {},
+) {
+  observePhase("ui-devtools-port");
   const waitOwned = <T>(
     check: () => Promise<T | false | undefined | null>,
     ms = 30000,
@@ -138,12 +345,33 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
   assert.match(port!, /^\d{1,5}$/);
   assert.ok(Number(port) > 0 && Number(port) < 65536);
   assert.match(endpoint!, /^\/devtools\/browser\/[A-Za-z0-9-]+$/);
+  observePhase("ui-cdp-connect");
   const ws = new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
   await new Promise<void>((yes, no) => {
-    ws.addEventListener("open", () => yes(), { once: true });
-    ws.addEventListener("error", () => no(Error("Owned CDP unavailable.")), {
-      once: true,
-    });
+    const cancel = () => {
+      no(Error("Owned CDP cancelled."));
+      ws.close();
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    ws.addEventListener(
+      "open",
+      () => {
+        signal.removeEventListener("abort", cancel);
+        yes();
+      },
+      { once: true },
+    );
+    ws.addEventListener(
+      "error",
+      () => {
+        signal.removeEventListener("abort", cancel);
+        no(Error("Owned CDP unavailable."));
+      },
+      {
+        once: true,
+      },
+    );
+    if (signal.aborted) cancel();
   });
   let next = 0;
   const pending = new Map<
@@ -250,6 +478,22 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
   };
   const activate = async (selector: string) => {
     const context = await find(selector);
+    // Native disclosure content must be opened by the same keyboard action a user uses.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const closed = await evaluate(
+        context,
+        `(()=>{const node=document.querySelector(${JSON.stringify(selector)}),closed=[];for(let parent=node?.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS'&&!parent.open)closed.push(parent);if(!closed.length)return 0;const summary=closed.at(-1).querySelector(':scope > summary');if(!summary)return -1;summary.scrollIntoView({block:'center'});summary.focus();return document.activeElement===summary?closed.length:-1;})()`,
+      );
+      if (closed === 0) break;
+      assert.ok(Number.isInteger(closed) && closed > 0);
+      await key(context);
+      await waitOwned(() =>
+        evaluate(
+          context,
+          `(()=>{let count=0;for(let parent=document.querySelector(${JSON.stringify(selector)})?.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS'&&!parent.open)count++;return count<${closed};})()`,
+        ),
+      );
+    }
     await waitOwned(async () => {
       const remote = await send(
         "Runtime.evaluate",
@@ -284,7 +528,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
     assert.equal(
       await evaluate(
         context,
-        `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(node.disabled)return false;node.focus();return document.activeElement===node;})()`,
+        `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(node.disabled)return false;node.scrollIntoView({block:'center'});node.focus();return document.activeElement===node;})()`,
       ),
       true,
     );
@@ -312,7 +556,9 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
     await writeFile(join(root, `${name}.png`), bytes, { mode: 0o600 });
   };
   try {
+    observePhase("ui-update-consent");
     // First-use consent is a real isolated-user choice, never a fabricated Memento value.
+    // Startup includes the genuine initial project scan; share the existing outer budget.
     const consent = await waitOwned(async () => {
       await discover();
       for (const context of contexts.values())
@@ -324,7 +570,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
         )
           return context;
       return undefined;
-    });
+    }, nativeObservationBudgetMs);
     assert.equal(
       await evaluate(
         consent,
@@ -338,6 +584,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
       JSON.stringify({ optionalUpdateConsentDeclined: true, keyboard: true }),
       { mode: 0o600 },
     );
+    observePhase("ui-companion-ready");
     const phase = await waitOwned(async () => {
       try {
         const value = JSON.parse(
@@ -353,28 +600,50 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
         phase.workspaceName.length <= 300,
     );
     workspaceName = phase.workspaceName;
-    const selector = '[data-rehearsal-page="migrations"]';
-    const dashboard = await find("[data-engine-shutdown-control]");
-    if (
-      !(await evaluate(
-        dashboard,
-        `(()=>{const rect=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();return !!rect&&rect.width>0&&rect.height>0;})()`,
-      ))
-    ) {
-      const trigger = await find("#compact-navigation-trigger");
-      assert.equal(
-        await evaluate(
-          trigger,
-          "(()=>{const node=document.querySelector('#compact-navigation-trigger');node.focus();return document.activeElement===node;})()",
+    observePhase("ui-dashboard-navigation");
+    const navigate = async (page: string) => {
+      observePhase("ui-dashboard-navigation");
+      const selector = `[data-rehearsal-page="${page}"]`;
+      const dashboard = await find("[data-engine-shutdown-control]");
+      if (
+        !(await evaluate(
+          dashboard,
+          `(()=>{const rect=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();return !!rect&&rect.width>0&&rect.height>0;})()`,
+        ))
+      ) {
+        const trigger = await find("#compact-navigation-trigger");
+        assert.equal(
+          await evaluate(
+            trigger,
+            "(()=>{const node=document.querySelector('#compact-navigation-trigger');node.focus();return document.activeElement===node;})()",
+          ),
+          true,
+        );
+        await key(trigger);
+      }
+      const context = await activate(selector);
+      await waitOwned(() =>
+        evaluate(
+          context,
+          `!document.getElementById(${JSON.stringify(page)}).hidden`,
         ),
-        true,
       );
-      await key(trigger);
+    };
+    if (phase.consumerReview === true) {
+      for (const page of [
+        "overview",
+        "setup",
+        "migrations",
+        "runtime",
+        "data-auth",
+        "configuration",
+        "activity",
+      ]) {
+        await navigate(page);
+        await screenshot(`consumer-${page}`);
+      }
     }
-    const context = await activate(selector);
-    await waitOwned(() =>
-      evaluate(context, "!document.getElementById('migrations').hidden"),
-    );
+    await navigate("migrations");
     await screenshot("prisma-migrations");
     if (phase.sourceId !== undefined) {
       assert.match(phase.sourceId, /^[a-f0-9]{64}$/);
@@ -411,6 +680,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
       );
     }
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
+    observePhase("ui-source-control");
     await activate(`[data-open-migration-insight="${phase.findingId}"]`);
     await waitOwned(async () => {
       try {
@@ -422,12 +692,36 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
         return false;
       }
     });
+    observePhase("ui-source-screenshot");
     await screenshot("prisma-native-sql");
     await writeFile(
       join(root, "ui-done.json"),
       JSON.stringify({ complete: true }),
       { mode: 0o600 },
     );
+    if (phase.consumerReview === true) {
+      observePhase("ui-consumer-return");
+      await waitOwned(async () => {
+        try {
+          return (
+            JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
+              .state === "dashboard-returned"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const returned = await find("#migrations");
+      await waitOwned(() =>
+        evaluate(returned, "!document.getElementById('migrations').hidden"),
+      );
+      await screenshot("consumer-returned");
+      await writeFile(
+        join(root, "consumer-returned-done.json"),
+        JSON.stringify({ complete: true }),
+        { mode: 0o600 },
+      );
+    }
   } catch (error) {
     await screenshot("prisma-failure").catch(() => {});
     throw error;
@@ -444,7 +738,80 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
       request.reject(Error("Owned CDP closed."));
   }
 }
-async function main() {
+export const assertNativeEditorNamespace = (
+  approved: string,
+  workspace: string,
+  evidence: string,
+): void => {
+  const inside = (root: string, path: string) => {
+    const p = relative(root, path);
+    return !isAbsolute(p) && p !== ".." && !p.startsWith("../");
+  };
+  for (const path of [approved, workspace, evidence])
+    assert.ok(
+      isAbsolute(path) &&
+        resolve(path) === path &&
+        !path.split("/").includes("notes"),
+    );
+  assert.ok(
+    workspace !== approved &&
+      evidence !== approved &&
+      inside(approved, workspace) &&
+      inside(approved, evidence) &&
+      !inside(workspace, evidence) &&
+      !inside(evidence, workspace),
+  );
+};
+export type NativeEditorScenario = "prisma-review" | "real-consumer";
+export const parseNativeEditorAcceptanceArguments = (
+  values: readonly string[],
+  scenario: NativeEditorScenario = "prisma-review",
+): ReadonlyMap<string, string> => {
+  assert.ok(scenario === "prisma-review" || scenario === "real-consumer");
+  const names = [
+    "vsix",
+    "vsix-sha",
+    "core-tar",
+    "core-sha",
+    "workspace",
+    "code",
+    "electron",
+    "electron-sha",
+    "code-version",
+    "evidence",
+  ];
+  const args = new Map<string, string>();
+  for (const raw of values) {
+    const match = /^--([a-z-]+)=(.+)$/u.exec(raw);
+    assert.ok(
+      match &&
+        (names.includes(match[1]!) ||
+          (scenario === "prisma-review" && match[1] === "migration-kind")) &&
+        !args.has(match[1]!),
+    );
+    args.set(match[1]!, match[2]!);
+  }
+  assert.equal(args.size, names.length + (args.has("migration-kind") ? 1 : 0));
+  if (args.has("migration-kind"))
+    assert.ok(["prisma", "drizzle"].includes(args.get("migration-kind")!));
+  for (const name of ["vsix-sha", "core-sha", "electron-sha"])
+    assert.match(args.get(name)!, /^[a-f0-9]{64}$/u);
+  assert.match(args.get("code-version")!, /^\d+\.\d+\.\d+$/u);
+  for (const name of [
+    "vsix",
+    "core-tar",
+    "workspace",
+    "code",
+    "electron",
+    "evidence",
+  ])
+    assert.ok(isAbsolute(args.get(name)!));
+  return args;
+};
+export async function runNativeEditorAcceptance(
+  values: readonly string[] = process.argv.slice(2),
+  scenario: NativeEditorScenario = "prisma-review",
+) {
   assert.equal(process.platform, "linux");
   assert.equal(process.arch, "x64");
   assert.equal(process.env.GITHUB_ACTIONS, "true");
@@ -459,51 +826,14 @@ async function main() {
     freemem() >= 3 * 1024 ** 3,
     "Native editor requires3GiB available memory.",
   );
-  const names = [
-    "vsix",
-    "vsix-sha",
-    "core-tar",
-    "core-sha",
-    "workspace",
-    "code",
-    "electron",
-    "electron-sha",
-    "code-version",
-    "evidence",
-  ];
-  const args = new Map<string, string>();
-  for (const raw of process.argv.slice(2)) {
-    const match = /^--([a-z-]+)=(.+)$/u.exec(raw);
-    assert.ok(
-      match &&
-        [...names, "migration-kind"].includes(match[1]!) &&
-        !args.has(match[1]!),
-    );
-    args.set(match[1]!, match[2]!);
-  }
-  for (const name of names) assert.ok(args.has(name));
+  const args = parseNativeEditorAcceptanceArguments(values, scenario);
   const migrationKind = args.get("migration-kind") ?? "prisma";
-  assert.ok(migrationKind === "prisma" || migrationKind === "drizzle");
-  assert.equal(args.size, names.length + (args.has("migration-kind") ? 1 : 0));
   const get = (name: string) => args.get(name)!;
-  for (const name of ["vsix-sha", "core-sha", "electron-sha"])
-    assert.match(get(name), /^[a-f0-9]{64}$/u);
-  assert.match(get("code-version"), /^\d+\.\d+\.\d+$/u);
-  for (const name of [
-    "vsix",
-    "core-tar",
-    "workspace",
-    "code",
-    "electron",
-    "evidence",
-  ])
-    assert.ok(isAbsolute(get(name)));
   const approved = await realpath(process.env.REHEARSAL_DEVELOPMENT_ROOT!);
   await nativeStorageRoot();
   const workspace = await realpath(get("workspace"));
   assert.equal(workspace, get("workspace"));
-  within(approved, workspace);
-  within(approved, get("evidence"));
+  assertNativeEditorNamespace(approved, workspace, get("evidence"));
   assert.equal(await realpath(get("code")), get("code"));
   assert.equal(await realpath(get("electron")), get("electron"));
   assert.equal(get("code"), join(dirname(get("electron")), "bin/code"));
@@ -562,7 +892,24 @@ async function main() {
   let child: ReturnType<typeof spawn> | undefined,
     closed = false,
     recoveryRequired = true;
+  let consumerBefore:
+    | Awaited<
+        ReturnType<
+          (typeof import("./verify-native-real-consumer.js"))["captureRealConsumerFiles"]
+        >
+      >
+    | undefined;
+  let consumerAfter: typeof consumerBefore;
+  let consumerPreserved = scenario !== "real-consumer";
   const resultPath = join(evidence, "result.json");
+  const startupStderr = Buffer.alloc(65536);
+  let startupBytes = 0,
+    startupTruncated = false;
+  let retainedObserver:
+    ReturnType<typeof unrefRetainedNativeEditorObserver> | undefined;
+  let startupSpawnFailure:
+    ReturnType<typeof nativeEditorFailureDiagnostic> | undefined;
+  let phase = "artifact-inspection";
   try {
     const entries = (await run("unzip", ["-Z1", get("vsix")])).stdout
       .trim()
@@ -607,17 +954,27 @@ async function main() {
       join(workspace, "node_modules/@rehearsal-db/core"),
     );
     within(workspace, coreRoot);
+    phase = "core-package-comparison";
     const coreFiles = await sameFiles(join(coreFrozen, "package"), coreRoot);
     const coreManifest = JSON.parse(
       (await regular(join(coreRoot, "package.json"), 1024 * 1024)).toString(),
     );
     assert.equal(coreManifest.name, "@rehearsal-db/core");
-    assert.equal(
-      coreManifest.rehearsalContracts?.[
-        migrationKind === "drizzle" ? "drizzleMigrations" : "nativeMigrations"
-      ],
-      1,
-    );
+    if (scenario !== "real-consumer") {
+      assert.equal(
+        coreManifest.rehearsalContracts?.[
+          migrationKind === "drizzle" ? "drizzleMigrations" : "nativeMigrations"
+        ],
+        1,
+      );
+    }
+    if (scenario === "real-consumer") {
+      phase = "initial-consumer-preservation";
+      consumerBefore = await (
+        await import("./verify-native-real-consumer.js")
+      ).captureRealConsumerFiles(workspace, approved);
+    }
+    phase = "isolated-settings";
     await writeFile(
       join(profile, "User/settings.json"),
       JSON.stringify({
@@ -640,6 +997,23 @@ async function main() {
       "--extensions-dir",
       extensions,
     ];
+    phase = "owned-ipc-namespace";
+    assert.ok(
+      !environment.VSCODE_PORTABLE,
+      "Owned Code portable mode cannot bypass its IPC namespace.",
+    );
+    const ipc = await createNativeEditorIpcNamespace(
+      approved,
+      profile,
+      get("code-version"),
+    );
+    environment.XDG_RUNTIME_DIR = ipc.directory;
+    await writeFile(
+      join(evidence, "ipc-namespace.json"),
+      JSON.stringify(ipc.receipt),
+      { mode: 0o600 },
+    );
+    phase = "isolated-extension-install";
     await run(get("code"), [...isolated, "--install-extension", get("vsix")]);
     const installed = join(
       extensions,
@@ -649,23 +1023,30 @@ async function main() {
       sha(await regular(join(installed, ".vsixmanifest"))),
       sha(await regular(join(frozen, "extension.vsixmanifest"))),
     );
+    phase = "installed-extension-payload";
     const extensionFiles = await sameFiles(
       join(frozen, "extension"),
       installed,
       [".vsixmanifest"],
       true,
     );
+    phase = "companion-preparation";
     for (const name of [
       "native-editor-driver.cjs",
       "native-editor-recovery.cjs",
       "native-editor-reads.cjs",
-      "native-prisma-review-test.cjs",
+      scenario === "real-consumer"
+        ? "native-real-consumer-test.cjs"
+        : "native-prisma-review-test.cjs",
     ])
       await copyFile(resolve(__dirname, name), join(harness, name));
     await writeFile(
       join(harness, "package.json"),
       JSON.stringify({
-        name: "owned-native-prisma-review",
+        name:
+          scenario === "real-consumer"
+            ? "owned-native-real-consumer"
+            : "owned-native-prisma-review",
         publisher: "rehearsal-local-acceptance",
         version: "0.0.0",
         engines: { vscode: "^1.101.0" },
@@ -680,7 +1061,11 @@ async function main() {
       configPath,
       JSON.stringify({
         scenario:
-          migrationKind === "drizzle" ? "drizzle-review" : "prisma-review",
+          scenario === "real-consumer"
+            ? scenario
+            : migrationKind === "drizzle"
+              ? "drizzle-review"
+              : "prisma-review",
         migrationKind,
         root,
         evidence,
@@ -696,6 +1081,7 @@ async function main() {
       { mode: 0o600 },
     );
     environment.REHEARSAL_NATIVE_CANCELLATION_CONFIG = configPath;
+    phase = "owned-code-start";
     child = spawn(
       get("electron"),
       [
@@ -712,19 +1098,44 @@ async function main() {
       {
         env: environment,
         detached: true,
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "ignore", "pipe"],
       },
     );
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const length = Math.min(
+        chunk.length,
+        startupStderr.length - startupBytes,
+      );
+      if (length > 0) {
+        chunk.copy(startupStderr, startupBytes, 0, length);
+        startupBytes += length;
+      }
+      if (length < chunk.length) startupTruncated = true;
+    });
+    // Never print or persist raw Electron output; only the bounded fixed classifier is reported.
+    child.once("error", (error) => {
+      startupSpawnFailure = nativeEditorFailureDiagnostic(error);
+    });
     assert.ok(child.pid);
     // The maintained companion finalizes only after observing no dirty documents.
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 180000);
+    const onOwnedExit = () =>
+      controller.abort(Error("Owned Code exited before observation."));
+    child.once("exit", onOwnedExit);
+    const timer = setTimeout(
+      () => controller.abort(),
+      nativeObservationBudgetMs,
+    );
     try {
-      await drive(profile, root, controller.signal);
+      await drive(profile, root, controller.signal, (value) => {
+        phase = value;
+      });
     } finally {
+      child.removeListener("exit", onOwnedExit);
       clearTimeout(timer);
       controller.abort();
     }
+    phase = "companion-finalization";
     const result = await wait(async () => {
       try {
         const value = JSON.parse(
@@ -735,6 +1146,7 @@ async function main() {
         return false;
       }
     });
+    phase = "companion-result-validation";
     assert.equal(result.status, "passed");
     assert.equal(result.driverFinalized, true);
     assert.equal(result.recoveryRequired, false);
@@ -744,6 +1156,7 @@ async function main() {
       send: (signal) => process.kill(-child!.pid!, signal),
     });
     closed = true;
+    phase = "final-payload-comparison";
     assert.equal(
       await sameFiles(join(coreFrozen, "package"), coreRoot),
       coreFiles,
@@ -763,10 +1176,21 @@ async function main() {
       sha(await regular(get("electron"), 256 * 1024 * 1024)),
       get("electron-sha"),
     );
+    if (consumerBefore) {
+      phase = "final-consumer-preservation";
+      consumerAfter = await (
+        await import("./verify-native-real-consumer.js")
+      ).captureRealConsumerFiles(workspace, approved);
+      assert.deepEqual(consumerAfter, consumerBefore);
+      consumerPreserved = true;
+    }
     await writeFile(
       join(evidence, "verification.json"),
       JSON.stringify({
         status: "passed",
+        ...(scenario === "real-consumer"
+          ? { scenario, consumerPreserved }
+          : {}),
         candidateSha256: get("vsix-sha"),
         coreArtifactSha256: get("core-sha"),
         electronSha256: get("electron-sha"),
@@ -778,6 +1202,50 @@ async function main() {
       }),
       { mode: 0o600 },
     );
+  } catch (error) {
+    const sandbox = await lstat(
+      join(dirname(get("electron")), "chrome-sandbox"),
+    ).catch(() => null);
+    const startup = nativeEditorStartupDiagnostic(
+      startupStderr.subarray(0, startupBytes),
+      child?.exitCode,
+      child?.signalCode,
+    );
+    const failure = {
+      status: "failed",
+      startup: {
+        ...startup,
+        spawnFailure: startupSpawnFailure ?? null,
+        stderrTruncated: startupTruncated,
+        stderrComplete: child?.stderr?.readableEnded ?? false,
+        sandboxHelper: sandbox
+          ? {
+              regular: sandbox.isFile(),
+              rootOwned: sandbox.uid === 0,
+              setuid: Boolean(sandbox.mode & 0o4000),
+              executable: Boolean(sandbox.mode & 0o111),
+            }
+          : null,
+      },
+      phase,
+      ...nativeEditorFailureDiagnostic(error),
+      candidateSha256: get("vsix-sha"),
+      coreArtifactSha256: get("core-sha"),
+      ownedProcessStarted: Boolean(child?.pid),
+      ownedProcessExitObserved: child
+        ? child.exitCode !== null || child.signalCode !== null
+        : null,
+    };
+    await writeFile(join(evidence, "failure.json"), JSON.stringify(failure), {
+      mode: 0o600,
+    });
+    if (phase.startsWith("ui-"))
+      await writeFile(
+        join(evidence, "ui-failure.json"),
+        JSON.stringify(failure),
+        { mode: 0o600 },
+      );
+    throw error;
   } finally {
     // Reuse the maintained clean/dirty recovery decision, including clean failures.
     try {
@@ -801,7 +1269,40 @@ async function main() {
       });
       closed = true;
     }
+    if (child && recoveryRequired && !closed)
+      retainedObserver = unrefRetainedNativeEditorObserver(child);
+    if (consumerBefore && !consumerAfter) {
+      try {
+        consumerAfter = await (
+          await import("./verify-native-real-consumer.js")
+        ).captureRealConsumerFiles(workspace, approved);
+        consumerPreserved =
+          JSON.stringify(consumerBefore) === JSON.stringify(consumerAfter);
+      } catch {
+        consumerPreserved = false;
+      }
+    }
+    if (consumerBefore)
+      await writeFile(
+        join(evidence, "consumer-preservation.json"),
+        JSON.stringify({
+          before: consumerBefore,
+          after: consumerAfter ?? null,
+          preserved: consumerPreserved,
+          scope:
+            "Selected input files fully hashed; no plaintext, personal notes or physical volume-content proof.",
+        }),
+        { mode: 0o600 },
+      );
     for (const name of [
+      "consumer-overview.png",
+      "consumer-setup.png",
+      "consumer-migrations.png",
+      "consumer-runtime.png",
+      "consumer-data-auth.png",
+      "consumer-configuration.png",
+      "consumer-activity.png",
+      "consumer-returned.png",
       "prisma-migrations.png",
       "prisma-native-sql.png",
       "drizzle-reviewed-input.png",
@@ -814,8 +1315,10 @@ async function main() {
       join(evidence, "cleanup.json"),
       JSON.stringify({
         ownedProcessGroupClosed: closed,
+        ...(scenario === "real-consumer" ? { consumerPreserved } : {}),
         recoveryRequired,
         profileRetained: true,
+        ...(retainedObserver ? { retainedObserver } : {}),
         editorDatabaseMutationsRequested: 0,
       }),
       { mode: 0o600 },
@@ -823,7 +1326,7 @@ async function main() {
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename))
-  void main().catch(() => {
+  void runNativeEditorAcceptance().catch(() => {
     console.error(
       "Native Prisma editor acceptance failed; private output withheld. Inspect owned evidence and recovery state.",
     );
