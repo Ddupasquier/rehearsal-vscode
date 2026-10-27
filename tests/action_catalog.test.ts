@@ -224,3 +224,41 @@ describe("workspace action catalog", () => {
     ).not.toHaveProperty("arguments");
   });
 });
+
+it("offline review exposes its exact read-only plan and keeps runtime mutations unavailable", async () => {
+  const { parseCommandCapabilities } =
+    await import("../src/command_capabilities_contract.js");
+  const { commandCapabilitiesFixture } =
+    await import("./command_capabilities_fixture.js");
+  const reviewed = snapshot({
+    availability: "not_ready",
+    offlineInspection: { state: "available" },
+    commandCapabilities: {
+      state: "observed",
+      report: parseCommandCapabilities(commandCapabilitiesFixture()),
+    },
+  });
+  expect(workspaceActionPlan(reviewed, "reviewPlan")?.arguments).toContain(
+    "explain",
+  );
+  for (const action of [
+    "runRehearsal",
+    "migrate",
+    "openSandbox",
+    "startRuntime",
+    "reset",
+    "verify",
+    "stopRuntime",
+    "discardRuntime",
+    "identityConnect",
+  ] as const)
+    expect(workspaceActionPlan(reviewed, action)).toBeNull();
+  const { offlineInspection: _review, ...unreviewed } = reviewed;
+  expect(workspaceActionPlan(unreviewed, "reviewPlan")).toBeNull();
+  expect(
+    workspaceActionPlan(
+      { ...reviewed, commandCapabilities: { state: "unsupported" } },
+      "reviewPlan",
+    ),
+  ).toBeNull();
+});

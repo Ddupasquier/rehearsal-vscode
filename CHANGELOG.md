@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — 0.1.28 offline review candidate
+
+- Review validated baseline and migration metadata when runtime readiness is missing, only when Core explicitly advertises the compatible offline contract. Keep NOT READY visible and runtime actions unavailable.
+- Preserve existing source-navigation and native Windows safeguards. Older or unknown Core contracts retain their existing compatible inspection path.
+- Source and controller checks are not native rendering, accessibility or integrated release acceptance; exact installed-pair verification remains separate.
+
 ## Unreleased — 0.1.27 Drizzle review candidate
 
 - Review explicit PostgreSQL Drizzle Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1 journal identities and format 4 baselines through the public Core contract. Preserve journal order and exact SQL bytes without rewriting migrations.

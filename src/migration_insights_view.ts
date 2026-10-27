@@ -56,7 +56,7 @@ export const migrationInsightsMarkup = (
                 .slice(0, 10)
                 .map(
                   ({ id, finding }) =>
-                    `<li><strong>${finding.severity === "danger" ? "Destructive-operation warning" : "Data-compatibility warning"}: ${escape(finding.summary)}</strong><p>${escape(finding.suggestion)}</p><p>Line ${finding.line}, column ${finding.column} · ${entry.workspaceRelativePath ? `<button type="button" class="button button--secondary" data-open-migration-insight="${id}" aria-label="Open exact ${escape(target.name)} ${escape(entry.filename)} at line ${finding.line}, column ${finding.column}">Open exact migration at finding</button>` : "Project-local source navigation unavailable"}</p></li>`,
+                    `<li><strong>${finding.severity === "danger" ? "Destructive-operation warning" : "Data-compatibility warning"}: ${escape(finding.summary)}</strong><p>${escape(finding.suggestion)}</p><p>Line ${finding.line}, column ${finding.column} · ${entry.workspaceRelativePath && snapshot.availability === "ready" ? `<button type="button" class="button button--secondary" data-open-migration-insight="${id}" aria-label="Open exact ${escape(target.name)} ${escape(entry.filename)} at line ${finding.line}, column ${finding.column}">Open exact migration at finding</button>` : "Project-local source navigation unavailable"}</p></li>`,
                 )
                 .join("")}</ul>`
             : ""

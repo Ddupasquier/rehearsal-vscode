@@ -273,3 +273,20 @@ describe("optional exact static migration insights", () => {
     expect(markup).toContain("Every required candidate remains");
   });
 });
+
+it("offline static findings retain warnings and positions without dead source buttons", () => {
+  const plan = insightPlan();
+  const report = parseMigrationInsights(insightReport(), plan, "0.1.0-rc.4");
+  const view = migrationInsightsMarkup({
+    workspaceName: "offline",
+    workspaceRoot: "/workspace",
+    availability: "not_ready",
+    offlineInspection: { state: "available" },
+    migrationReview: plan,
+    migrationInsights: { state: "available", report },
+  });
+  const html = [...view.entries.values()].join("");
+  expect(html).toContain("Line 1, column 1");
+  expect(html).not.toContain("data-open-migration-insight=");
+  expect(html).toContain("Project-local source navigation unavailable");
+});

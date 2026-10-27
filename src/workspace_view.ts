@@ -196,6 +196,16 @@ export const sandboxSessionPresentation = (
 };
 
 const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
+  if (
+    snapshot.availability === "not_ready" &&
+    snapshot.offlineInspection?.state === "available"
+  )
+    return {
+      label: "Offline review available",
+      detail:
+        "Baseline and migration metadata were inspected. Runtime readiness is still not proven.",
+      tone: "warning",
+    };
   switch (snapshot.availability) {
     case "loading":
       return {
@@ -601,6 +611,8 @@ const nextStepMarkup = (
     const failed = snapshot.readiness?.checks.find(
       ({ status }) => status === "fail",
     );
+    if (snapshot.offlineInspection?.state === "available")
+      return `<p>Your baseline and migration metadata are available for read-only review. This is not a completed rehearsal or a running database.</p><p>${escapeHtml(failed?.remediation ?? failed?.detail ?? "Runtime readiness is still not proven.")}</p>${actionGroup(navigationButton("migrations", "Review migrations"), navigationButton("configuration", "Review configuration"), navigationButton("setup", "Review remaining setup"))}`;
     return `<p>${escapeHtml(failed?.remediation ?? failed?.detail ?? "Complete the remaining setup item.")}</p>${actionGroup(navigationButton("setup", "Review project setup"), availableActionButton(snapshot, assets, "guidedSetup", "Open guided setup", "primary"))}`;
   }
   if (
