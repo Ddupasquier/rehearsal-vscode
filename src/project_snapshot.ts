@@ -1,4 +1,8 @@
-import type { PrismaMigrationToolBinding } from "./migration_review.js";
+import type {
+  MigrationCutoff,
+  DrizzleMigrationIdentity,
+} from "./native_migration_contract.js";
+import type { NativeMigrationToolBinding } from "./migration_review.js";
 import { realpath } from "node:fs/promises";
 import {
   parseEngineLifecycleStatus,
@@ -49,6 +53,7 @@ import {
   assertMatchingMigrationCandidates,
   parseMigrationReviewPlan,
   matchingNativeMigrationHistory,
+  matchingDrizzleBaselineReview,
   type MigrationReviewPlan,
 } from "./migration_review.js";
 import {
@@ -104,9 +109,9 @@ export interface ProjectSnapshot {
     readonly rowCount: number;
     readonly migrationCount: number;
     readonly verification: string;
-    readonly formatVersion?: 1 | 2 | 3;
-    readonly nativeMigrations?: PrismaMigrationToolBinding;
-    readonly migrationCutoff?: string;
+    readonly formatVersion?: 1 | 2 | 3 | 4;
+    readonly nativeMigrations?: NativeMigrationToolBinding;
+    readonly migrationCutoff?: MigrationCutoff;
     readonly migrationHistorySha256?: string | null;
     readonly sourceSchemaSha256?: string | null;
     readonly sanitizationPolicySha256?: string;
@@ -117,12 +122,12 @@ export interface ProjectSnapshot {
       readonly generationId: string;
       readonly createdAt: string | null;
       readonly active: boolean;
-      readonly formatVersion: 1 | 2 | 3;
-      readonly nativeMigrations?: PrismaMigrationToolBinding;
+      readonly formatVersion: 1 | 2 | 3 | 4;
+      readonly nativeMigrations?: NativeMigrationToolBinding;
       readonly rowCount: number;
       readonly tableCount: number;
       readonly migrationCount: number;
-      readonly migrationCutoff: string;
+      readonly migrationCutoff: MigrationCutoff;
       readonly storageAssetCount?: number;
     }[];
   };
@@ -132,7 +137,8 @@ export interface ProjectSnapshot {
     readonly files: readonly (
       | string
       | {
-          readonly version: string;
+          readonly version?: string | undefined;
+          readonly nativeIdentity?: DrizzleMigrationIdentity;
           readonly name: string;
           readonly filename: string;
           readonly sha256: string;
@@ -184,9 +190,9 @@ export interface ProjectSnapshot {
     readonly configurationSha256: string | null;
     readonly baseline: {
       readonly generationId: string;
-      readonly formatVersion: 1 | 2 | 3 | null;
-      readonly nativeMigrations?: PrismaMigrationToolBinding;
-      readonly migrationCutoff: string;
+      readonly formatVersion: 1 | 2 | 3 | 4 | null;
+      readonly nativeMigrations?: NativeMigrationToolBinding;
+      readonly migrationCutoff: MigrationCutoff;
       readonly migrationHistorySha256: string | null;
       readonly sourceSchemaSha256?: string | null;
       readonly sanitizationPolicySha256: string | null;
@@ -243,6 +249,7 @@ export interface SnapshotClient {
       readonly resourceInventorySchema?: 1 | null;
       readonly resourceManagerSchema?: 1 | null;
       readonly migrationReviewSchema?: 1 | null;
+      readonly drizzleMigrationsSchema?: 1 | null;
       readonly migrationInsightsSchema?: 1 | null;
       readonly configurationReviewSchema?: 1 | null;
       readonly engineLifecycleSchema?: 1 | null;
@@ -282,6 +289,7 @@ export const processSnapshotClient: SnapshotClient = {
         resourceInventorySchema: resolved.resourceInventorySchema,
         resourceManagerSchema: resolved.resourceManagerSchema,
         migrationReviewSchema: resolved.migrationReviewSchema,
+        drizzleMigrationsSchema: resolved.drizzleMigrationsSchema ?? null,
         migrationInsightsSchema: resolved.migrationInsightsSchema,
         configurationReviewSchema: resolved.configurationReviewSchema,
         engineLifecycleSchema: resolved.engineLifecycleSchema,
@@ -298,6 +306,7 @@ export const processSnapshotClient: SnapshotClient = {
       resourceInventorySchema: resolved.resourceInventorySchema,
       resourceManagerSchema: resolved.resourceManagerSchema,
       migrationReviewSchema: resolved.migrationReviewSchema,
+      drizzleMigrationsSchema: resolved.drizzleMigrationsSchema ?? null,
       migrationInsightsSchema: resolved.migrationInsightsSchema,
       configurationReviewSchema: resolved.configurationReviewSchema,
       engineLifecycleSchema: resolved.engineLifecycleSchema,
@@ -917,6 +926,15 @@ export const inspectProject = async ({
       : undefined;
     if (parsedMigrationReview) {
       if (
+        parsedMigrationReview.targets.some(
+          (t) => t.migrationTool?.kind === "drizzle",
+        ) &&
+        version.drizzleMigrationsSchema !== 1
+      )
+        throw new ContractError(
+          "This Core package does not advertise the supported Drizzle migration contract. Update Core manually and refresh.",
+        );
+      if (
         migrationReview!.result.status !== "success" ||
         candidates.result.status !== "success"
       )
@@ -932,6 +950,7 @@ export const inspectProject = async ({
         reviewTargets.some((target, index) => {
           const migrationTarget = parsedMigrationReview.targets[index]!;
           return (
+            !matchingDrizzleBaselineReview(target.baseline, migrationTarget) ||
             target.name !== migrationTarget.name ||
             target.provider !== migrationTarget.provider ||
             !matchingNativeMigrationHistory(
@@ -967,6 +986,14 @@ export const inspectProject = async ({
         parsedMigrationInsights = { state: "unavailable" };
       }
     }
+    if (
+      baselineExecution.result.data.formatVersion === 4 &&
+      (version.drizzleMigrationsSchema !== 1 ||
+        parsedMigrationReview?.targets[0]?.migrationTool?.kind !== "drizzle")
+    )
+      throw new ContractError(
+        "Core does not advertise the supported Drizzle migration contract. Update Core manually and refresh.",
+      );
     const baseline = {
       ...baselineExecution,
       result: {
@@ -979,10 +1006,14 @@ export const inspectProject = async ({
     };
     if (
       parsedMigrationReview &&
-      !matchingNativeMigrationHistory(
-        baseline.result.data.nativeMigrations,
-        parsedMigrationReview.targets[0]!.migrationTool,
-      )
+      (!matchingDrizzleBaselineReview(
+        baseline.result.data,
+        parsedMigrationReview.targets[0]!,
+      ) ||
+        !matchingNativeMigrationHistory(
+          baseline.result.data.nativeMigrations,
+          parsedMigrationReview.targets[0]!.migrationTool,
+        ))
     )
       throw new ContractError(
         "Native baseline and current migration history identities disagree. Refresh the project.",
@@ -1092,7 +1123,9 @@ export const inspectProject = async ({
           typeof candidate === "string"
             ? candidate
             : {
-                version: candidate.version,
+                ...(candidate.nativeIdentity
+                  ? { nativeIdentity: candidate.nativeIdentity }
+                  : { version: candidate.version }),
                 name: candidate.name,
                 filename: candidate.filename,
                 sha256: candidate.sha256,

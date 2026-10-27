@@ -57,6 +57,11 @@ Silicon, Colima 0.10.3, VZ and the default profile** with a compatible core. It 
 the shared VM, including other projects' workloads, while preserving data volumes.
 Use **Stop project services** when you only want to stop this project's services.
 
+The separate **0.1.27 source candidate** adds explicit pinned PostgreSQL Drizzle
+journal review, native format 4 baselines and exact reviewed SQL navigation through
+a compatible Core contract. It is not a publication or real SDK/native acceptance
+claim; see the [contract scope](docs/cli-contract-report.md#0127--core-drizzle-contract-candidate).
+
 ## Free Starter, optional updates
 
 Starter's included features remain yours **indefinitely at no charge** for personal

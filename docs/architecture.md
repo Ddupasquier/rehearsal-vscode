@@ -765,3 +765,27 @@ technical distribution only. Future Pro terms, entitlement design, paid launch, 
 pricing and refunds need their own approval. Free Marketplace distribution still requires
 its reviewed artifact and verified listing; publisher creation alone is not publication. Those future paid
 decisions are not prerequisites for the approved Starter grant or free CLI use.
+
+### Drizzle journal review candidate
+
+The 0.1.27 candidate consumes only public Core `drizzleMigrations: 1` alongside
+existing SQL and Prisma contracts. `native_migration_contract.ts` owns the exact
+Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1/default-ledger binding and journal
+`{kind, idx, when, tag}` identities; journal milliseconds are never forged into
+14-digit filename versions. Format 4 requires this binding and an explicit native
+cutoff. Core proves the immutable semantic prefix; the editor independently binds
+its baseline history digest to the review target. Producer raw journal/toolchain
+bytes may differ after a valid append or across platforms; current candidate
+approval still binds the actual full journal and installed toolchain.
+
+`migration_source_review.ts` owns opaque current-review row IDs and the closed
+reviewed-source schema 2. The host selects source through `inspect source` using
+only target, native identity, raw SQL hash and complete review digest. It never
+passes a caller path. Current capability/version, trusted idle workspace/snapshot,
+confined no-symlink stable raw file, exact hash and clean native document checks
+precede navigation. File-top reviewed input is distinct from attempted SQL or
+failure attribution. Static Insights retains its lexical-only safety limitation
+and exact native identity correlation. No SDK/private Core imports, project
+execution, source regeneration or lifecycle ownership moves into the editor.
+SQL/Prisma formats 1/2/3 retain their existing validation. Exact packaged native
+Drizzle/SDK/Lab execution remains unverified until separately observed.

@@ -280,7 +280,10 @@ describe("explicit native Prisma migration review", () => {
   });
   it("preserves exact native identities, order and dependencies only with explicit binding", () => {
     const parsed = parseMigrationReviewPlan(native());
-    expect(parsed.targets[0]!.migrationTool?.version).toBe("7.10.1");
+    expect(
+      (parsed.targets[0]!.migrationTool as { version?: string } | undefined)
+        ?.version,
+    ).toBe("7.10.1");
     expect(parsed.targets[0]!.entries.map((entry) => entry.filename)).toEqual([
       "20260101000000_change/migration.sql",
       "20260101000001_change/migration.sql",

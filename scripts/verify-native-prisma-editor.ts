@@ -272,7 +272,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
           "Runtime.callFunctionOn",
           {
             objectId: listener.handler.objectId,
-            functionDeclaration: `function(){return Function.prototype.toString.call(this).includes(${JSON.stringify(selector.startsWith("[data-rehearsal-page") ? "data-rehearsal-page" : "data-open-migration-insight")});}`,
+            functionDeclaration: `function(){return Function.prototype.toString.call(this).includes(${JSON.stringify(selector.startsWith("[data-rehearsal-page") ? "data-rehearsal-page" : selector.startsWith("[data-open-reviewed-migration") ? "data-open-reviewed-migration" : "data-open-migration-insight")});}`,
             returnByValue: true,
           },
           context.session,
@@ -376,6 +376,40 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
       evaluate(context, "!document.getElementById('migrations').hidden"),
     );
     await screenshot("prisma-migrations");
+    if (phase.sourceId !== undefined) {
+      assert.match(phase.sourceId, /^[a-f0-9]{64}$/);
+      await activate(`[data-open-reviewed-migration="${phase.sourceId}"]`);
+      await waitOwned(async () => {
+        try {
+          return (
+            JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
+              .state === "reviewed-input-observed"
+          );
+        } catch {
+          return false;
+        }
+      });
+      await screenshot("drizzle-reviewed-input");
+      await writeFile(
+        join(root, "reviewed-ui-done.json"),
+        JSON.stringify({ complete: true }),
+        { mode: 0o600 },
+      );
+      await waitOwned(async () => {
+        try {
+          return (
+            JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
+              .state === "finding-ready"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const restored = await find("#migrations");
+      await waitOwned(() =>
+        evaluate(restored, "!document.getElementById('migrations').hidden"),
+      );
+    }
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
     await activate(`[data-open-migration-insight="${phase.findingId}"]`);
     await waitOwned(async () => {
@@ -440,10 +474,17 @@ async function main() {
   const args = new Map<string, string>();
   for (const raw of process.argv.slice(2)) {
     const match = /^--([a-z-]+)=(.+)$/u.exec(raw);
-    assert.ok(match && names.includes(match[1]!) && !args.has(match[1]!));
+    assert.ok(
+      match &&
+        [...names, "migration-kind"].includes(match[1]!) &&
+        !args.has(match[1]!),
+    );
     args.set(match[1]!, match[2]!);
   }
-  assert.equal(args.size, names.length);
+  for (const name of names) assert.ok(args.has(name));
+  const migrationKind = args.get("migration-kind") ?? "prisma";
+  assert.ok(migrationKind === "prisma" || migrationKind === "drizzle");
+  assert.equal(args.size, names.length + (args.has("migration-kind") ? 1 : 0));
   const get = (name: string) => args.get(name)!;
   for (const name of ["vsix-sha", "core-sha", "electron-sha"])
     assert.match(get(name), /^[a-f0-9]{64}$/u);
@@ -571,6 +612,12 @@ async function main() {
       (await regular(join(coreRoot, "package.json"), 1024 * 1024)).toString(),
     );
     assert.equal(coreManifest.name, "@rehearsal-db/core");
+    assert.equal(
+      coreManifest.rehearsalContracts?.[
+        migrationKind === "drizzle" ? "drizzleMigrations" : "nativeMigrations"
+      ],
+      1,
+    );
     await writeFile(
       join(profile, "User/settings.json"),
       JSON.stringify({
@@ -632,7 +679,9 @@ async function main() {
     await writeFile(
       configPath,
       JSON.stringify({
-        scenario: "prisma-review",
+        scenario:
+          migrationKind === "drizzle" ? "drizzle-review" : "prisma-review",
+        migrationKind,
         root,
         evidence,
         resultPath,
@@ -722,6 +771,7 @@ async function main() {
         coreArtifactSha256: get("core-sha"),
         electronSha256: get("electron-sha"),
         codeVersion: get("code-version"),
+        migrationKind,
         coreFiles,
         extensionFiles,
         ownedProcessGroupClosed: closed,
@@ -754,6 +804,7 @@ async function main() {
     for (const name of [
       "prisma-migrations.png",
       "prisma-native-sql.png",
+      "drizzle-reviewed-input.png",
       "prisma-failure.png",
       "phase.json",
       "ui-observations.json",

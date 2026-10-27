@@ -1,4 +1,8 @@
-import { parsePrismaMigrationToolBinding } from "./migration_review.js";
+import {
+  parseDrizzleMigrationIdentity,
+  type MigrationCutoff,
+} from "./native_migration_contract.js";
+import { parseNativeMigrationToolBinding } from "./migration_review.js";
 import { ContractError } from "./contracts.js";
 import type { BaselineData, ExplainData } from "./contracts.js";
 
@@ -331,23 +335,38 @@ const createdAt = (value: unknown): string | null => {
     throw new ContractError("Baseline creation time is invalid.");
   return value;
 };
-const cutoff = (value: unknown): string => {
+const cutoff = (value: unknown): MigrationCutoff => {
+  if (typeof value !== "string") return parseDrizzleMigrationIdentity(value);
   if (typeof value !== "string" || !/^\d{14}$/u.test(value))
     throw new ContractError("Baseline migration boundary is invalid.");
   return value;
 };
-const formatVersion = (value: unknown): 1 | 2 | 3 => {
-  if (value !== 1 && value !== 2 && value !== 3)
+const formatVersion = (value: unknown): 1 | 2 | 3 | 4 => {
+  if (value !== 1 && value !== 2 && value !== 3 && value !== 4)
     throw new ContractError("Baseline format is unsupported.");
   return value;
 };
 const baselineNativeMetadata = (input: ObjectValue) => {
-  if (input.formatVersion === 3)
-    return {
-      nativeMigrations: parsePrismaMigrationToolBinding(input.nativeMigrations),
-    };
+  if (input.formatVersion === 3 || input.formatVersion === 4) {
+    const nativeMigrations = parseNativeMigrationToolBinding(
+      input.nativeMigrations,
+    );
+    if (
+      (input.formatVersion === 4) !== (nativeMigrations.kind === "drizzle") ||
+      (input.formatVersion === 4) !==
+        (typeof input.migrationCutoff === "object")
+    )
+      throw new ContractError(
+        "Native baseline format or cutoff contradicts its tool.",
+      );
+    return { nativeMigrations };
+  }
+  if (typeof input.migrationCutoff !== "string")
+    throw new ContractError("SQL baseline requires its timestamp boundary.");
   if (input.nativeMigrations !== undefined)
-    throw new ContractError("Native metadata requires baseline format 3.");
+    throw new ContractError(
+      "Native metadata requires a supported native baseline format.",
+    );
   return {};
 };
 export const parseBaselineInspectionData = (

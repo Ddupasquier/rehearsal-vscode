@@ -15,6 +15,11 @@ const invalid = (): never => {
   );
 };
 /** Public inventory names may be uppercase/Unicode; they never supply a path. */
+export const isSafeDrizzleMigrationFilename = (
+  value: unknown,
+): value is string =>
+  typeof value === "string" &&
+  /^[A-Za-z0-9][A-Za-z0-9_-]{0,190}\.sql$/u.test(value);
 export const isSafeMigrationFilename = (value: unknown): value is string =>
   typeof value === "string" &&
   Buffer.byteLength(value) <= 255 &&
@@ -31,6 +36,7 @@ export const isSafeNativeMigrationFilename = (
   /^\d{14}_[A-Za-z0-9_-]+\/migration\.sql$/u.test(value);
 export const parseMigrationSourceInput = (
   value: unknown,
+  allowDrizzle = false,
 ): MigrationSourceInput => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return invalid();
@@ -39,6 +45,7 @@ export const parseMigrationSourceInput = (
     Object.keys(data).sort().join(",") !==
       "filename,sha256,workspaceRelativePath" ||
     (!isSafeMigrationFilename(data.filename) &&
+      !(allowDrizzle && isSafeDrizzleMigrationFilename(data.filename)) &&
       !isSafeNativeMigrationFilename(data.filename)) ||
     typeof data.sha256 !== "string" ||
     !/^[a-f0-9]{64}$/u.test(data.sha256)
@@ -85,12 +92,13 @@ export const migrationSourceDocumentMatches = (
 export const readExactMigrationInput = async (
   workspaceRoot: string,
   value: unknown,
+  allowDrizzle = false,
 ): Promise<{
   readonly path: string;
   readonly text: string;
   readonly identity: string;
 }> => {
-  const source = parseMigrationSourceInput(value);
+  const source = parseMigrationSourceInput(value, allowDrizzle);
   if (!source.workspaceRelativePath || !isAbsolute(workspaceRoot))
     return invalid();
   const root = await realpath(workspaceRoot);

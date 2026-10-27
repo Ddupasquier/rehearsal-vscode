@@ -804,7 +804,7 @@ const candidateMarkup = (
     <ul class="migration-list" id="migration-list">${migrations
       .map(
         (migration, index) =>
-          `<li data-migration-row data-name="${escapeHtml(migration.filename.toLowerCase())}" data-sort-name="${escapeHtml(migration.name.toLowerCase())}" data-target="${escapeHtml(migration.target)}" data-status="candidate" data-version="${escapeHtml(migration.version)}" data-order="${index}"><label class="migration-check"><input id="${migrationReviewCheckboxId(`${migration.target}:${migration.version || index}`)}" type="checkbox" data-migration-review="${escapeHtml(`${migration.target}:${migration.version || index}`)}" aria-label="Reviewed ${escapeHtml(migration.filename)}" /><span aria-hidden="true">↗</span><span><code>${escapeHtml(migration.filename)}</code><small>${escapeHtml(migration.target)} · ${escapeHtml(migration.version || "Version unavailable")} · ${escapeHtml(migration.sha256.slice(0, 12))}</small></span><strong class="field-state field-state--suggested">waiting</strong></label></li>`,
+          `<li data-migration-row data-name="${escapeHtml(migration.filename.toLowerCase())}" data-sort-name="${escapeHtml(migration.name.toLowerCase())}" data-target="${escapeHtml(migration.target)}" data-status="candidate" data-version="${escapeHtml(migration.version ?? "")}" data-order="${index}"><label class="migration-check"><input id="${migrationReviewCheckboxId(`${migration.target}:${migration.version || index}`)}" type="checkbox" data-migration-review="${escapeHtml(`${migration.target}:${migration.version || index}`)}" aria-label="Reviewed ${escapeHtml(migration.filename)}" /><span aria-hidden="true">↗</span><span><code>${escapeHtml(migration.filename)}</code><small>${escapeHtml(migration.target)} · ${escapeHtml(migration.version || "Version unavailable")} · ${escapeHtml(migration.sha256.slice(0, 12))}</small></span><strong class="field-state field-state--suggested">waiting</strong></label></li>`,
       )
       .join("")}</ul>
     <div id="migration-filter-empty" class="empty-state" hidden><strong>No migrations match these filters.</strong><button id="clear-migration-filters" type="button" class="button button--secondary">Clear migration filters</button></div>
@@ -1664,6 +1664,8 @@ export const renderWorkspaceDocument = (
         });
         document.addEventListener("click", (event) => {
           if (!(event.target instanceof Element)) return;
+          const reviewed = event.target.closest("[data-open-reviewed-migration]");
+          if(reviewed){ vscode?.postMessage({type:"openReviewedMigration",sourceId:reviewed.dataset.openReviewedMigration}); return; }
           const insight = event.target.closest("[data-open-migration-insight]");
           if (insight) {
             vscode?.postMessage({type:"openMigrationInsight",findingId:insight.dataset.openMigrationInsight});
@@ -1698,7 +1700,7 @@ export const renderWorkspaceDocument = (
           const scope = currentViewScope();
           const status = migrationStatus?.value ?? "all";
           const sort = migrationSort?.value ?? "order";
-          const selection=selectMigrationView(migrationRows.map(row=>({row,name:String(row.dataset.name),sortName:row.dataset.sortName,target:String(row.dataset.target),status:String(row.dataset.status),version:String(row.dataset.version),order:Number(row.dataset.order),hasWarning:row.dataset.warning==='warnings'})),{query:migrationSearch?.value??'',targets:scope.targets,status,sort,from:migrationFrom?.value??'',to:migrationTo?.value??'',warning:migrationWarning?.value??'all'});
+          const selection=selectMigrationView(migrationRows.map(row=>({row,name:String(row.dataset.name),sortName:row.dataset.sortName,target:String(row.dataset.target),status:String(row.dataset.status),version:String(row.dataset.version),...(row.dataset.nativeWhen?{nativeIdentity:{when:Number(row.dataset.nativeWhen),idx:Number(row.dataset.nativeIdx),tag:String(row.dataset.nativeTag)}}:{}),order:Number(row.dataset.order),hasWarning:row.dataset.warning==='warnings'})),{query:migrationSearch?.value??'',targets:scope.targets,status,sort,from:migrationFrom?.value??'',to:migrationTo?.value??'',warning:migrationWarning?.value??'all'});
           const visibleRows=new Set(selection.visible.map(entry=>entry.row));
           const list = document.querySelector("#migration-list");
           selection.ordered.forEach(({row}) => {

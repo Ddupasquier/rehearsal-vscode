@@ -60,6 +60,40 @@ open beside the dashboard to preserve even unbound drafts; Back returns to its o
 pane and stays disabled during apply. Native screenshots/keyboard checks and physical
 Core shutdown/data-preservation checks remain distinct evidence owners.
 
+## 0.1.27 / Core Drizzle contract candidate
+
+The unpublished 0.1.27 source candidate adds `drizzleMigrations: 1` consumption
+for explicit pinned PostgreSQL Drizzle configuration. Format 4 native cutoffs and
+review entries preserve journal idx/when/tag without legacy timestamp fields.
+Review targets provide `baselineHistorySha256` and
+`baselinePrefixVerification: exact-native-semantic-prefix`, independently bound
+to baseline inspection; current raw journal/toolchain digests stay candidate-bound.
+
+`inspect source --target=NAME --native-identity=JSON --source-sha256=SHA
+--candidate-sha256=ROOT_REVIEW_SHA --json` returns a closed schema-2
+`reviewed_source_input` reference. The editor supplies no path. The exact current
+identity, digest and raw bytes must match before opening the clean project-local
+SQL document at file top. Null line/column does not become failure attribution.
+Optional Insights keeps its existing flat source fields and findings positions,
+replacing the legacy version only with explicit nativeIdentity. Unsupported
+pins, capabilities, malformed identities or drifting evidence refuse review.
+This describes source contracts, not published availability or genuine native
+Drizzle SDK/database/rendered acceptance.
+
+The existing opt-in Linux native launcher can also select this fixture family by
+adding `--migration-kind=drizzle` to its exact VSIX/Core/Code/electron/workspace
+arguments. Default Prisma behavior and ownership, resource, clean-document,
+process-cleanup and evidence checks remain unchanged. Drizzle mode requires a
+genuinely READY format-4 workspace and a real native static finding, then exercises
+actual keyboard navigation through the reviewed-input button and its genuine
+public inspect-source response, then the static-finding link and exact UTF-16
+position. The first clean owned SQL preview closes before the second navigation;
+its file-top/current-root binding and raw bytes are verified separately. A
+forwarding-only observer records actual public results without replacing them. It does not generate
+fixtures, start an engine, mutate a database or establish native proof before run.
+The historical `prisma-*.png` artifact filenames remain launcher compatibility names;
+the closed result records the actual `drizzle-review` scenario and migration kind.
+
 ## Static Migration Insights contract
 
 Starter 0.1.24 adds optional `rehearsalContracts.migrationInsights: 1` consumption

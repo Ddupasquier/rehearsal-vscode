@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — 0.1.27 Drizzle review candidate
+
+- Review explicit PostgreSQL Drizzle Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1 journal identities and format 4 baselines through the public Core contract. Preserve journal order and exact SQL bytes without rewriting migrations.
+- Open exact reviewed SQL inputs and optional static findings with current candidate/identity/hash checks. Older or unsupported Core contracts refuse native review with update guidance.
+- Candidate source and focused checks do not establish real SDK, rendered editor or database acceptance; paired Lab and exact packaged native evidence remain separate.
+
 ## 0.1.26 — Native migration review candidate
 
 - Understand opt-in Core Prisma 7.10.1/PostgreSQL migration paths and format 3
