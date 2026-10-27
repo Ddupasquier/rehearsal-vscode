@@ -400,28 +400,49 @@ async function drive(
     );
     workspaceName = phase.workspaceName;
     observePhase("ui-dashboard-navigation");
-    const selector = '[data-rehearsal-page="migrations"]';
-    const dashboard = await find("[data-engine-shutdown-control]");
-    if (
-      !(await evaluate(
-        dashboard,
-        `(()=>{const rect=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();return !!rect&&rect.width>0&&rect.height>0;})()`,
-      ))
-    ) {
-      const trigger = await find("#compact-navigation-trigger");
-      assert.equal(
-        await evaluate(
-          trigger,
-          "(()=>{const node=document.querySelector('#compact-navigation-trigger');node.focus();return document.activeElement===node;})()",
+    const navigate = async (page: string) => {
+      observePhase("ui-dashboard-navigation");
+      const selector = `[data-rehearsal-page="${page}"]`;
+      const dashboard = await find("[data-engine-shutdown-control]");
+      if (
+        !(await evaluate(
+          dashboard,
+          `(()=>{const rect=document.querySelector(${JSON.stringify(selector)})?.getBoundingClientRect();return !!rect&&rect.width>0&&rect.height>0;})()`,
+        ))
+      ) {
+        const trigger = await find("#compact-navigation-trigger");
+        assert.equal(
+          await evaluate(
+            trigger,
+            "(()=>{const node=document.querySelector('#compact-navigation-trigger');node.focus();return document.activeElement===node;})()",
+          ),
+          true,
+        );
+        await key(trigger);
+      }
+      const context = await activate(selector);
+      await waitOwned(() =>
+        evaluate(
+          context,
+          `!document.getElementById(${JSON.stringify(page)}).hidden`,
         ),
-        true,
       );
-      await key(trigger);
+    };
+    if (phase.consumerReview === true) {
+      for (const page of [
+        "overview",
+        "setup",
+        "migrations",
+        "runtime",
+        "data-auth",
+        "configuration",
+        "activity",
+      ]) {
+        await navigate(page);
+        await screenshot(`consumer-${page}`);
+      }
     }
-    const context = await activate(selector);
-    await waitOwned(() =>
-      evaluate(context, "!document.getElementById('migrations').hidden"),
-    );
+    await navigate("migrations");
     await screenshot("prisma-migrations");
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
     observePhase("ui-source-control");
@@ -443,6 +464,29 @@ async function drive(
       JSON.stringify({ complete: true }),
       { mode: 0o600 },
     );
+    if (phase.consumerReview === true) {
+      observePhase("ui-consumer-return");
+      await waitOwned(async () => {
+        try {
+          return (
+            JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
+              .state === "dashboard-returned"
+          );
+        } catch {
+          return false;
+        }
+      });
+      const returned = await find("#migrations");
+      await waitOwned(() =>
+        evaluate(returned, "!document.getElementById('migrations').hidden"),
+      );
+      await screenshot("consumer-returned");
+      await writeFile(
+        join(root, "consumer-returned-done.json"),
+        JSON.stringify({ complete: true }),
+        { mode: 0o600 },
+      );
+    }
   } catch (error) {
     await screenshot("prisma-failure").catch(() => {});
     throw error;
@@ -459,7 +503,73 @@ async function drive(
       request.reject(Error("Owned CDP closed."));
   }
 }
-async function main() {
+export const assertNativeEditorNamespace = (
+  approved: string,
+  workspace: string,
+  evidence: string,
+): void => {
+  const inside = (root: string, path: string) => {
+    const p = relative(root, path);
+    return !isAbsolute(p) && p !== ".." && !p.startsWith("../");
+  };
+  for (const path of [approved, workspace, evidence])
+    assert.ok(
+      isAbsolute(path) &&
+        resolve(path) === path &&
+        !path.split("/").includes("notes"),
+    );
+  assert.ok(
+    workspace !== approved &&
+      evidence !== approved &&
+      inside(approved, workspace) &&
+      inside(approved, evidence) &&
+      !inside(workspace, evidence) &&
+      !inside(evidence, workspace),
+  );
+};
+export type NativeEditorScenario = "prisma-review" | "real-consumer";
+export const parseNativeEditorAcceptanceArguments = (
+  values: readonly string[],
+  scenario: NativeEditorScenario = "prisma-review",
+): ReadonlyMap<string, string> => {
+  assert.ok(scenario === "prisma-review" || scenario === "real-consumer");
+  const names = [
+    "vsix",
+    "vsix-sha",
+    "core-tar",
+    "core-sha",
+    "workspace",
+    "code",
+    "electron",
+    "electron-sha",
+    "code-version",
+    "evidence",
+  ];
+  const args = new Map<string, string>();
+  for (const raw of values) {
+    const match = /^--([a-z-]+)=(.+)$/u.exec(raw);
+    assert.ok(match && names.includes(match[1]!) && !args.has(match[1]!));
+    args.set(match[1]!, match[2]!);
+  }
+  assert.equal(args.size, names.length);
+  for (const name of ["vsix-sha", "core-sha", "electron-sha"])
+    assert.match(args.get(name)!, /^[a-f0-9]{64}$/u);
+  assert.match(args.get("code-version")!, /^\d+\.\d+\.\d+$/u);
+  for (const name of [
+    "vsix",
+    "core-tar",
+    "workspace",
+    "code",
+    "electron",
+    "evidence",
+  ])
+    assert.ok(isAbsolute(args.get(name)!));
+  return args;
+};
+export async function runNativeEditorAcceptance(
+  values: readonly string[] = process.argv.slice(2),
+  scenario: NativeEditorScenario = "prisma-review",
+) {
   assert.equal(process.platform, "linux");
   assert.equal(process.arch, "x64");
   assert.equal(process.env.GITHUB_ACTIONS, "true");
@@ -474,44 +584,13 @@ async function main() {
     freemem() >= 3 * 1024 ** 3,
     "Native editor requires3GiB available memory.",
   );
-  const names = [
-    "vsix",
-    "vsix-sha",
-    "core-tar",
-    "core-sha",
-    "workspace",
-    "code",
-    "electron",
-    "electron-sha",
-    "code-version",
-    "evidence",
-  ];
-  const args = new Map<string, string>();
-  for (const raw of process.argv.slice(2)) {
-    const match = /^--([a-z-]+)=(.+)$/u.exec(raw);
-    assert.ok(match && names.includes(match[1]!) && !args.has(match[1]!));
-    args.set(match[1]!, match[2]!);
-  }
-  assert.equal(args.size, names.length);
+  const args = parseNativeEditorAcceptanceArguments(values, scenario);
   const get = (name: string) => args.get(name)!;
-  for (const name of ["vsix-sha", "core-sha", "electron-sha"])
-    assert.match(get(name), /^[a-f0-9]{64}$/u);
-  assert.match(get("code-version"), /^\d+\.\d+\.\d+$/u);
-  for (const name of [
-    "vsix",
-    "core-tar",
-    "workspace",
-    "code",
-    "electron",
-    "evidence",
-  ])
-    assert.ok(isAbsolute(get(name)));
   const approved = await realpath(process.env.REHEARSAL_DEVELOPMENT_ROOT!);
   await nativeStorageRoot();
   const workspace = await realpath(get("workspace"));
   assert.equal(workspace, get("workspace"));
-  within(approved, workspace);
-  within(approved, get("evidence"));
+  assertNativeEditorNamespace(approved, workspace, get("evidence"));
   assert.equal(await realpath(get("code")), get("code"));
   assert.equal(await realpath(get("electron")), get("electron"));
   assert.equal(get("code"), join(dirname(get("electron")), "bin/code"));
@@ -570,6 +649,15 @@ async function main() {
   let child: ReturnType<typeof spawn> | undefined,
     closed = false,
     recoveryRequired = true;
+  let consumerBefore:
+    | Awaited<
+        ReturnType<
+          (typeof import("./verify-native-real-consumer.js"))["captureRealConsumerFiles"]
+        >
+      >
+    | undefined;
+  let consumerAfter: typeof consumerBefore;
+  let consumerPreserved = scenario !== "real-consumer";
   const resultPath = join(evidence, "result.json");
   let phase = "artifact-inspection";
   try {
@@ -622,6 +710,12 @@ async function main() {
       (await regular(join(coreRoot, "package.json"), 1024 * 1024)).toString(),
     );
     assert.equal(coreManifest.name, "@rehearsal-db/core");
+    if (scenario === "real-consumer") {
+      phase = "initial-consumer-preservation";
+      consumerBefore = await (
+        await import("./verify-native-real-consumer.js")
+      ).captureRealConsumerFiles(workspace, approved);
+    }
     phase = "isolated-settings";
     await writeFile(
       join(profile, "User/settings.json"),
@@ -667,13 +761,18 @@ async function main() {
       "native-editor-driver.cjs",
       "native-editor-recovery.cjs",
       "native-editor-reads.cjs",
-      "native-prisma-review-test.cjs",
+      scenario === "real-consumer"
+        ? "native-real-consumer-test.cjs"
+        : "native-prisma-review-test.cjs",
     ])
       await copyFile(resolve(__dirname, name), join(harness, name));
     await writeFile(
       join(harness, "package.json"),
       JSON.stringify({
-        name: "owned-native-prisma-review",
+        name:
+          scenario === "real-consumer"
+            ? "owned-native-real-consumer"
+            : "owned-native-prisma-review",
         publisher: "rehearsal-local-acceptance",
         version: "0.0.0",
         engines: { vscode: "^1.101.0" },
@@ -687,7 +786,7 @@ async function main() {
     await writeFile(
       configPath,
       JSON.stringify({
-        scenario: "prisma-review",
+        scenario,
         root,
         evidence,
         resultPath,
@@ -775,10 +874,21 @@ async function main() {
       sha(await regular(get("electron"), 256 * 1024 * 1024)),
       get("electron-sha"),
     );
+    if (consumerBefore) {
+      phase = "final-consumer-preservation";
+      consumerAfter = await (
+        await import("./verify-native-real-consumer.js")
+      ).captureRealConsumerFiles(workspace, approved);
+      assert.deepEqual(consumerAfter, consumerBefore);
+      consumerPreserved = true;
+    }
     await writeFile(
       join(evidence, "verification.json"),
       JSON.stringify({
         status: "passed",
+        ...(scenario === "real-consumer"
+          ? { scenario, consumerPreserved }
+          : {}),
         candidateSha256: get("vsix-sha"),
         coreArtifactSha256: get("core-sha"),
         electronSha256: get("electron-sha"),
@@ -834,7 +944,38 @@ async function main() {
       });
       closed = true;
     }
+    if (consumerBefore && !consumerAfter) {
+      try {
+        consumerAfter = await (
+          await import("./verify-native-real-consumer.js")
+        ).captureRealConsumerFiles(workspace, approved);
+        consumerPreserved =
+          JSON.stringify(consumerBefore) === JSON.stringify(consumerAfter);
+      } catch {
+        consumerPreserved = false;
+      }
+    }
+    if (consumerBefore)
+      await writeFile(
+        join(evidence, "consumer-preservation.json"),
+        JSON.stringify({
+          before: consumerBefore,
+          after: consumerAfter ?? null,
+          preserved: consumerPreserved,
+          scope:
+            "Selected input files fully hashed; no plaintext, personal notes or physical volume-content proof.",
+        }),
+        { mode: 0o600 },
+      );
     for (const name of [
+      "consumer-overview.png",
+      "consumer-setup.png",
+      "consumer-migrations.png",
+      "consumer-runtime.png",
+      "consumer-data-auth.png",
+      "consumer-configuration.png",
+      "consumer-activity.png",
+      "consumer-returned.png",
       "prisma-migrations.png",
       "prisma-native-sql.png",
       "prisma-failure.png",
@@ -846,6 +987,7 @@ async function main() {
       join(evidence, "cleanup.json"),
       JSON.stringify({
         ownedProcessGroupClosed: closed,
+        ...(scenario === "real-consumer" ? { consumerPreserved } : {}),
         recoveryRequired,
         profileRetained: true,
         editorDatabaseMutationsRequested: 0,
@@ -855,7 +997,7 @@ async function main() {
   }
 }
 if (process.argv[1] && resolve(process.argv[1]) === resolve(__filename))
-  void main().catch(() => {
+  void runNativeEditorAcceptance().catch(() => {
     console.error(
       "Native Prisma editor acceptance failed; private output withheld. Inspect owned evidence and recovery state.",
     );
