@@ -119,7 +119,50 @@ async function wait<T>(
   }
   throw Error("Owned native observation incomplete.");
 }
-async function drive(profile: string, root: string, signal: AbortSignal) {
+export const nativeEditorFailureDiagnostic = (
+  error: unknown,
+): { category: string; exitCode: number | null } => {
+  const value =
+    error && typeof error === "object"
+      ? (error as { code?: unknown; name?: unknown; message?: unknown })
+      : {};
+  if (
+    typeof value.code === "number" &&
+    Number.isSafeInteger(value.code) &&
+    value.code >= 0 &&
+    value.code <= 255
+  )
+    return { category: "child-exit", exitCode: value.code };
+  if (value.code === "ERR_ASSERTION")
+    return { category: "assertion", exitCode: null };
+  if (value.code === "ENOENT")
+    return { category: "missing-input", exitCode: null };
+  if (value.code === "EACCES" || value.code === "EPERM")
+    return { category: "access-refused", exitCode: null };
+  if (value.code === "ETIMEDOUT")
+    return { category: "transport-timeout", exitCode: null };
+  if (value.name === "AbortError" || value.code === "ABORT_ERR")
+    return { category: "cancelled", exitCode: null };
+  if (value.message === "Owned native observation incomplete.")
+    return { category: "observation-timeout", exitCode: null };
+  if (
+    [
+      "Owned CDP unavailable.",
+      "Owned CDP closed.",
+      "Owned CDP refused.",
+      "Owned CDP cancelled.",
+    ].includes(String(value.message))
+  )
+    return { category: "owned-cdp-unavailable", exitCode: null };
+  return { category: "unexpected", exitCode: null };
+};
+async function drive(
+  profile: string,
+  root: string,
+  signal: AbortSignal,
+  observePhase: (value: string) => void = () => {},
+) {
+  observePhase("ui-devtools-port");
   const waitOwned = <T>(
     check: () => Promise<T | false | undefined | null>,
     ms = 30000,
@@ -138,6 +181,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
   assert.match(port!, /^\d{1,5}$/);
   assert.ok(Number(port) > 0 && Number(port) < 65536);
   assert.match(endpoint!, /^\/devtools\/browser\/[A-Za-z0-9-]+$/);
+  observePhase("ui-cdp-connect");
   const ws = new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
   await new Promise<void>((yes, no) => {
     ws.addEventListener("open", () => yes(), { once: true });
@@ -312,6 +356,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
     await writeFile(join(root, `${name}.png`), bytes, { mode: 0o600 });
   };
   try {
+    observePhase("ui-update-consent");
     // First-use consent is a real isolated-user choice, never a fabricated Memento value.
     const consent = await waitOwned(async () => {
       await discover();
@@ -338,6 +383,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
       JSON.stringify({ optionalUpdateConsentDeclined: true, keyboard: true }),
       { mode: 0o600 },
     );
+    observePhase("ui-companion-ready");
     const phase = await waitOwned(async () => {
       try {
         const value = JSON.parse(
@@ -353,6 +399,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
         phase.workspaceName.length <= 300,
     );
     workspaceName = phase.workspaceName;
+    observePhase("ui-dashboard-navigation");
     const selector = '[data-rehearsal-page="migrations"]';
     const dashboard = await find("[data-engine-shutdown-control]");
     if (
@@ -377,6 +424,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
     );
     await screenshot("prisma-migrations");
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
+    observePhase("ui-source-control");
     await activate(`[data-open-migration-insight="${phase.findingId}"]`);
     await waitOwned(async () => {
       try {
@@ -388,6 +436,7 @@ async function drive(profile: string, root: string, signal: AbortSignal) {
         return false;
       }
     });
+    observePhase("ui-source-screenshot");
     await screenshot("prisma-native-sql");
     await writeFile(
       join(root, "ui-done.json"),
@@ -522,6 +571,7 @@ async function main() {
     closed = false,
     recoveryRequired = true;
   const resultPath = join(evidence, "result.json");
+  let phase = "artifact-inspection";
   try {
     const entries = (await run("unzip", ["-Z1", get("vsix")])).stdout
       .trim()
@@ -566,11 +616,13 @@ async function main() {
       join(workspace, "node_modules/@rehearsal-db/core"),
     );
     within(workspace, coreRoot);
+    phase = "core-package-comparison";
     const coreFiles = await sameFiles(join(coreFrozen, "package"), coreRoot);
     const coreManifest = JSON.parse(
       (await regular(join(coreRoot, "package.json"), 1024 * 1024)).toString(),
     );
     assert.equal(coreManifest.name, "@rehearsal-db/core");
+    phase = "isolated-settings";
     await writeFile(
       join(profile, "User/settings.json"),
       JSON.stringify({
@@ -593,6 +645,7 @@ async function main() {
       "--extensions-dir",
       extensions,
     ];
+    phase = "isolated-extension-install";
     await run(get("code"), [...isolated, "--install-extension", get("vsix")]);
     const installed = join(
       extensions,
@@ -602,12 +655,14 @@ async function main() {
       sha(await regular(join(installed, ".vsixmanifest"))),
       sha(await regular(join(frozen, "extension.vsixmanifest"))),
     );
+    phase = "installed-extension-payload";
     const extensionFiles = await sameFiles(
       join(frozen, "extension"),
       installed,
       [".vsixmanifest"],
       true,
     );
+    phase = "companion-preparation";
     for (const name of [
       "native-editor-driver.cjs",
       "native-editor-recovery.cjs",
@@ -647,6 +702,7 @@ async function main() {
       { mode: 0o600 },
     );
     environment.REHEARSAL_NATIVE_CANCELLATION_CONFIG = configPath;
+    phase = "owned-code-start";
     child = spawn(
       get("electron"),
       [
@@ -671,11 +727,14 @@ async function main() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 180000);
     try {
-      await drive(profile, root, controller.signal);
+      await drive(profile, root, controller.signal, (value) => {
+        phase = value;
+      });
     } finally {
       clearTimeout(timer);
       controller.abort();
     }
+    phase = "companion-finalization";
     const result = await wait(async () => {
       try {
         const value = JSON.parse(
@@ -686,6 +745,7 @@ async function main() {
         return false;
       }
     });
+    phase = "companion-result-validation";
     assert.equal(result.status, "passed");
     assert.equal(result.driverFinalized, true);
     assert.equal(result.recoveryRequired, false);
@@ -695,6 +755,7 @@ async function main() {
       send: (signal) => process.kill(-child!.pid!, signal),
     });
     closed = true;
+    phase = "final-payload-comparison";
     assert.equal(
       await sameFiles(join(coreFrozen, "package"), coreRoot),
       coreFiles,
@@ -728,6 +789,28 @@ async function main() {
       }),
       { mode: 0o600 },
     );
+  } catch (error) {
+    const failure = {
+      status: "failed",
+      phase,
+      ...nativeEditorFailureDiagnostic(error),
+      candidateSha256: get("vsix-sha"),
+      coreArtifactSha256: get("core-sha"),
+      ownedProcessStarted: Boolean(child?.pid),
+      ownedProcessExitObserved: child
+        ? child.exitCode !== null || child.signalCode !== null
+        : null,
+    };
+    await writeFile(join(evidence, "failure.json"), JSON.stringify(failure), {
+      mode: 0o600,
+    });
+    if (phase.startsWith("ui-"))
+      await writeFile(
+        join(evidence, "ui-failure.json"),
+        JSON.stringify(failure),
+        { mode: 0o600 },
+      );
+    throw error;
   } finally {
     // Reuse the maintained clean/dirty recovery decision, including clean failures.
     try {
