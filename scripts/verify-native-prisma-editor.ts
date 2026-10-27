@@ -143,6 +143,8 @@ export const nativeEditorFailureDiagnostic = (
     return { category: "transport-timeout", exitCode: null };
   if (value.name === "AbortError" || value.code === "ABORT_ERR")
     return { category: "cancelled", exitCode: null };
+  if (value.message === "Owned Code exited before observation.")
+    return { category: "owned-code-exit", exitCode: null };
   if (value.message === "Owned native observation incomplete.")
     return { category: "observation-timeout", exitCode: null };
   if (
@@ -155,6 +157,67 @@ export const nativeEditorFailureDiagnostic = (
   )
     return { category: "owned-cdp-unavailable", exitCode: null };
   return { category: "unexpected", exitCode: null };
+};
+export const nativeEditorStartupDiagnostic = (
+  bytes: Uint8Array,
+  exitCode: unknown,
+  signal: unknown,
+) => {
+  const text = Buffer.from(bytes.subarray(0, 65536)).toString("utf8");
+  let category = "unclassified";
+  if (!text.length) category = "no-stderr";
+  else if (
+    /SUID sandbox helper binary was found, but is not configured correctly/iu.test(
+      text,
+    )
+  )
+    category = "sandbox-helper";
+  else if (/Running as root without --no-sandbox is not supported/iu.test(text))
+    category = "root-sandbox-refusal";
+  else if (/No usable sandbox/iu.test(text)) category = "sandbox-unavailable";
+  else if (
+    /Failed to move to new namespace|unprivileged_userns_clone|user namespace.*(?:denied|not permitted)/iu.test(
+      text,
+    )
+  )
+    category = "user-namespace";
+  else if (/error while loading shared libraries:/iu.test(text))
+    category = "shared-library";
+  else if (
+    /Missing X server or \$DISPLAY|cannot open display|Gtk-WARNING.*cannot open display/iu.test(
+      text,
+    )
+  )
+    category = "display";
+  else if (/GPU process isn't usable/iu.test(text))
+    category = "graphics-startup";
+  const signals = [
+    "SIGABRT",
+    "SIGSEGV",
+    "SIGTRAP",
+    "SIGTERM",
+    "SIGKILL",
+    "SIGINT",
+    "SIGHUP",
+    "SIGILL",
+    "SIGBUS",
+    "SIGFPE",
+    "SIGSYS",
+    "SIGPIPE",
+  ];
+  return {
+    category,
+    exitCode:
+      typeof exitCode === "number" &&
+      Number.isSafeInteger(exitCode) &&
+      exitCode >= 0 &&
+      exitCode <= 255
+        ? exitCode
+        : null,
+    signal:
+      typeof signal === "string" && signals.includes(signal) ? signal : null,
+    stderrBytesCaptured: Math.min(bytes.length, 65536),
+  };
 };
 async function drive(
   profile: string,
@@ -184,10 +247,30 @@ async function drive(
   observePhase("ui-cdp-connect");
   const ws = new WebSocket(`ws://127.0.0.1:${port}${endpoint}`);
   await new Promise<void>((yes, no) => {
-    ws.addEventListener("open", () => yes(), { once: true });
-    ws.addEventListener("error", () => no(Error("Owned CDP unavailable.")), {
-      once: true,
-    });
+    const cancel = () => {
+      no(Error("Owned CDP cancelled."));
+      ws.close();
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    ws.addEventListener(
+      "open",
+      () => {
+        signal.removeEventListener("abort", cancel);
+        yes();
+      },
+      { once: true },
+    );
+    ws.addEventListener(
+      "error",
+      () => {
+        signal.removeEventListener("abort", cancel);
+        no(Error("Owned CDP unavailable."));
+      },
+      {
+        once: true,
+      },
+    );
+    if (signal.aborted) cancel();
   });
   let next = 0;
   const pending = new Map<
@@ -659,6 +742,11 @@ export async function runNativeEditorAcceptance(
   let consumerAfter: typeof consumerBefore;
   let consumerPreserved = scenario !== "real-consumer";
   const resultPath = join(evidence, "result.json");
+  const startupStderr = Buffer.alloc(65536);
+  let startupBytes = 0,
+    startupTruncated = false;
+  let startupSpawnFailure:
+    ReturnType<typeof nativeEditorFailureDiagnostic> | undefined;
   let phase = "artifact-inspection";
   try {
     const entries = (await run("unzip", ["-Z1", get("vsix")])).stdout
@@ -818,18 +906,37 @@ export async function runNativeEditorAcceptance(
       {
         env: environment,
         detached: true,
-        stdio: ["ignore", "ignore", "ignore"],
+        stdio: ["ignore", "ignore", "pipe"],
       },
     );
+    child.stderr?.on("data", (chunk: Buffer) => {
+      const length = Math.min(
+        chunk.length,
+        startupStderr.length - startupBytes,
+      );
+      if (length > 0) {
+        chunk.copy(startupStderr, startupBytes, 0, length);
+        startupBytes += length;
+      }
+      if (length < chunk.length) startupTruncated = true;
+    });
+    // Never print or persist raw Electron output; only the bounded fixed classifier is reported.
+    child.once("error", (error) => {
+      startupSpawnFailure = nativeEditorFailureDiagnostic(error);
+    });
     assert.ok(child.pid);
     // The maintained companion finalizes only after observing no dirty documents.
     const controller = new AbortController();
+    const onOwnedExit = () =>
+      controller.abort(Error("Owned Code exited before observation."));
+    child.once("exit", onOwnedExit);
     const timer = setTimeout(() => controller.abort(), 180000);
     try {
       await drive(profile, root, controller.signal, (value) => {
         phase = value;
       });
     } finally {
+      child.removeListener("exit", onOwnedExit);
       clearTimeout(timer);
       controller.abort();
     }
@@ -900,8 +1007,30 @@ export async function runNativeEditorAcceptance(
       { mode: 0o600 },
     );
   } catch (error) {
+    const sandbox = await lstat(
+      join(dirname(get("electron")), "chrome-sandbox"),
+    ).catch(() => null);
+    const startup = nativeEditorStartupDiagnostic(
+      startupStderr.subarray(0, startupBytes),
+      child?.exitCode,
+      child?.signalCode,
+    );
     const failure = {
       status: "failed",
+      startup: {
+        ...startup,
+        spawnFailure: startupSpawnFailure ?? null,
+        stderrTruncated: startupTruncated,
+        stderrComplete: child?.stderr?.readableEnded ?? false,
+        sandboxHelper: sandbox
+          ? {
+              regular: sandbox.isFile(),
+              rootOwned: sandbox.uid === 0,
+              setuid: Boolean(sandbox.mode & 0o4000),
+              executable: Boolean(sandbox.mode & 0o111),
+            }
+          : null,
+      },
       phase,
       ...nativeEditorFailureDiagnostic(error),
       candidateSha256: get("vsix-sha"),

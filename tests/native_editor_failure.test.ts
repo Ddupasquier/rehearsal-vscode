@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { nativeEditorFailureDiagnostic } from "../scripts/verify-native-prisma-editor.js";
+import {
+  nativeEditorFailureDiagnostic,
+  nativeEditorStartupDiagnostic,
+} from "../scripts/verify-native-prisma-editor.js";
 
 describe("native editor failure-only diagnostics", () => {
   it.each([
@@ -19,6 +22,10 @@ describe("native editor failure-only diagnostics", () => {
     [{ code: "ETIMEDOUT" }, { category: "transport-timeout", exitCode: null }],
     [{ code: "ABORT_ERR" }, { category: "cancelled", exitCode: null }],
     [{ name: "AbortError" }, { category: "cancelled", exitCode: null }],
+    [
+      { message: "Owned Code exited before observation." },
+      { category: "owned-code-exit", exitCode: null },
+    ],
     [
       { message: "Owned native observation incomplete." },
       { category: "observation-timeout", exitCode: null },
@@ -59,4 +66,60 @@ describe("native editor failure-only diagnostics", () => {
     expect(actual).toEqual({ category: "unexpected", exitCode: null });
     expect(JSON.stringify(actual)).not.toContain("PRIVATE");
   });
+});
+
+describe("bounded Electron startup failure classification", () => {
+  it.each([
+    [
+      "The SUID sandbox helper binary was found, but is not configured correctly. PRIVATE_PATH",
+      "sandbox-helper",
+    ],
+    [
+      "Running as root without --no-sandbox is not supported. PRIVATE_PATH",
+      "root-sandbox-refusal",
+    ],
+    [
+      "Failed to move to new namespace: Operation not permitted PRIVATE_PATH",
+      "user-namespace",
+    ],
+    ["No usable sandbox! PRIVATE_PATH", "sandbox-unavailable"],
+    ["error while loading shared libraries: PRIVATE_LIBRARY", "shared-library"],
+    ["Missing X server or $DISPLAY PRIVATE_DISPLAY", "display"],
+    ["GPU process isn't usable. PRIVATE_PATH", "graphics-startup"],
+    ["PRIVATE_UNKNOWN_PROVIDER_MESSAGE", "unclassified"],
+    ["", "no-stderr"],
+  ])("projects only fixed startup category %#", (text, category) => {
+    const result = nativeEditorStartupDiagnostic(
+      Buffer.from(text),
+      1,
+      "SIGABRT",
+    );
+    expect(result).toEqual({
+      category,
+      exitCode: 1,
+      signal: "SIGABRT",
+      stderrBytesCaptured: Buffer.byteLength(text),
+    });
+    expect(JSON.stringify(result)).not.toContain("PRIVATE");
+  });
+  it("bounds captured bytes and refuses unknown exit/signal values", () => {
+    const result = nativeEditorStartupDiagnostic(
+      Buffer.alloc(70000, 65),
+      -1,
+      "PRIVATE_SIGNAL",
+    );
+    expect(result).toEqual({
+      category: "unclassified",
+      exitCode: null,
+      signal: null,
+      stderrBytesCaptured: 65536,
+    });
+  });
+  it("keeps an observed clean process exit separate from missing stderr", () =>
+    expect(nativeEditorStartupDiagnostic(Buffer.alloc(0), 0, null)).toEqual({
+      category: "no-stderr",
+      exitCode: 0,
+      signal: null,
+      stderrBytesCaptured: 0,
+    }));
 });
