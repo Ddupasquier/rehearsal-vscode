@@ -1,6 +1,7 @@
 /** Explicit opt-in Ubuntu hosted acceptance. Never installs/downloads Code or starts databases. */
 import assert from "node:assert/strict";
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { Socket } from "node:net";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import {
@@ -157,6 +158,16 @@ export const nativeEditorFailureDiagnostic = (
   )
     return { category: "owned-cdp-unavailable", exitCode: null };
   return { category: "unexpected", exitCode: null };
+};
+/** Release only observer event-loop references when the owned editor is intentionally retained. */
+export const unrefRetainedNativeEditorObserver = (
+  child: Pick<ChildProcess, "stderr" | "unref">,
+) => {
+  const stderrUnref =
+    child.stderr === null ? null : child.stderr instanceof Socket;
+  if (child.stderr instanceof Socket) child.stderr.unref();
+  child.unref();
+  return { childUnref: true as const, stderrUnref };
 };
 export const nativeEditorStartupDiagnostic = (
   bytes: Uint8Array,
@@ -745,6 +756,8 @@ export async function runNativeEditorAcceptance(
   const startupStderr = Buffer.alloc(65536);
   let startupBytes = 0,
     startupTruncated = false;
+  let retainedObserver:
+    ReturnType<typeof unrefRetainedNativeEditorObserver> | undefined;
   let startupSpawnFailure:
     ReturnType<typeof nativeEditorFailureDiagnostic> | undefined;
   let phase = "artifact-inspection";
@@ -1073,6 +1086,8 @@ export async function runNativeEditorAcceptance(
       });
       closed = true;
     }
+    if (child && recoveryRequired && !closed)
+      retainedObserver = unrefRetainedNativeEditorObserver(child);
     if (consumerBefore && !consumerAfter) {
       try {
         consumerAfter = await (
@@ -1119,6 +1134,7 @@ export async function runNativeEditorAcceptance(
         ...(scenario === "real-consumer" ? { consumerPreserved } : {}),
         recoveryRequired,
         profileRetained: true,
+        ...(retainedObserver ? { retainedObserver } : {}),
         editorDatabaseMutationsRequested: 0,
       }),
       { mode: 0o600 },

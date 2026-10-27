@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { Socket } from "node:net";
+import { PassThrough } from "node:stream";
 import {
   nativeEditorFailureDiagnostic,
   nativeEditorStartupDiagnostic,
+  unrefRetainedNativeEditorObserver,
 } from "../scripts/verify-native-prisma-editor.js";
 
 describe("native editor failure-only diagnostics", () => {
@@ -122,4 +125,42 @@ describe("bounded Electron startup failure classification", () => {
       signal: null,
       stderrBytesCaptured: 0,
     }));
+});
+
+describe("intentional retained editor observer ownership", () => {
+  it("unrefs the actual public socket and child without destroying streams or signalling", () => {
+    const socket = new Socket(),
+      unref = vi.spyOn(socket, "unref"),
+      destroy = vi.spyOn(socket, "destroy"),
+      child = { stderr: socket, unref: vi.fn(), kill: vi.fn() };
+    expect(unrefRetainedNativeEditorObserver(child)).toEqual({
+      childUnref: true,
+      stderrUnref: true,
+    });
+    expect(unref).toHaveBeenCalledOnce();
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(socket.destroyed).toBe(false);
+  });
+  it("records unsupported readable observation rather than inventing socket detachment", () => {
+    const stream = new PassThrough(),
+      destroy = vi.spyOn(stream, "destroy"),
+      child = { stderr: stream, unref: vi.fn(), kill: vi.fn() };
+    expect(unrefRetainedNativeEditorObserver(child)).toEqual({
+      childUnref: true,
+      stderrUnref: false,
+    });
+    expect(child.unref).toHaveBeenCalledOnce();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+  it("releases child observation when there is no stderr stream", () => {
+    const child = { stderr: null, unref: vi.fn() };
+    expect(unrefRetainedNativeEditorObserver(child)).toEqual({
+      childUnref: true,
+      stderrUnref: null,
+    });
+    expect(child.unref).toHaveBeenCalledOnce();
+  });
 });
