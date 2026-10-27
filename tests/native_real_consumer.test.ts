@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { runInNewContext } from "node:vm";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +8,7 @@ import {
   parseRealConsumerAcceptanceArguments,
 } from "../scripts/verify-native-real-consumer.js";
 import {
+  nativeControlProbe,
   assertNativeEditorNamespace,
   parseNativeEditorAcceptanceArguments,
   assertInstalledPrismaEditorManifest,
@@ -208,4 +210,64 @@ describe("real-consumer selected-input preservation", () => {
       await symlink(external, join(workspace, ".env.rehearsal-auth.local"));
       await expect(captureRealConsumerFiles(workspace, root)).rejects.toThrow();
     }));
+});
+
+describe("native disclosure control discovery", () => {
+  it("discovers a collapsed DETAILS finding before keyboard opening while preserving the default visible-only probe", () => {
+    const node = {
+      parentElement: { tagName: "DETAILS", open: false, parentElement: null },
+      getBoundingClientRect: () => ({ width: 0, height: 0 }),
+      closest: () => null,
+    };
+    const document = {
+      title: "Example · Rehearsal",
+      readyState: "complete",
+      querySelector: () => node,
+    };
+    expect(
+      runInNewContext(nativeControlProbe("button", "Example"), { document }),
+    ).toBe(false);
+    expect(
+      runInNewContext(nativeControlProbe("button", "Example", true), {
+        document,
+      }),
+    ).toBe(true);
+    node.parentElement.open = true;
+    expect(
+      runInNewContext(nativeControlProbe("button", "Example", true), {
+        document,
+      }),
+    ).toBe(false);
+    node.getBoundingClientRect = () => ({ width: 80, height: 24 });
+    expect(
+      runInNewContext(nativeControlProbe("button", "Example"), { document }),
+    ).toBe(true);
+  });
+  it("refuses hidden pages, missing controls, wrong workspaces and incomplete documents", () => {
+    const node = {
+      parentElement: { tagName: "DETAILS", open: false, parentElement: null },
+      getBoundingClientRect: () => ({ width: 0, height: 0 }),
+      closest: (): unknown => ({ hidden: true }),
+    };
+    const document = {
+      title: "Example · Rehearsal",
+      readyState: "complete",
+      querySelector: (): unknown => node,
+    };
+    const check = () =>
+      runInNewContext(nativeControlProbe("button", "Example", true), {
+        document,
+      });
+    expect(check()).toBe(false);
+    node.closest = () => null;
+    expect(check()).toBe(true);
+    document.querySelector = () => null;
+    expect(check()).toBe(false);
+    document.querySelector = () => node;
+    document.title = "Other · Rehearsal";
+    expect(check()).toBe(false);
+    document.title = "Example · Rehearsal";
+    document.readyState = "loading";
+    expect(check()).toBe(false);
+  });
 });
