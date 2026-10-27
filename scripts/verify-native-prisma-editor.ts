@@ -42,6 +42,7 @@ const { shouldRetainNativeEditor } =
   };
 const execute = promisify(execFile),
   sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+const nativeObservationBudgetMs = 180000;
 async function regular(file: string, max = 64 * 1024 * 1024) {
   assert.ok(isAbsolute(file));
   assert.equal(await realpath(file), file);
@@ -557,6 +558,7 @@ async function drive(
   try {
     observePhase("ui-update-consent");
     // First-use consent is a real isolated-user choice, never a fabricated Memento value.
+    // Startup includes the genuine initial project scan; share the existing outer budget.
     const consent = await waitOwned(async () => {
       await discover();
       for (const context of contexts.values())
@@ -568,7 +570,7 @@ async function drive(
         )
           return context;
       return undefined;
-    });
+    }, nativeObservationBudgetMs);
     assert.equal(
       await evaluate(
         consent,
@@ -1064,7 +1066,10 @@ export async function runNativeEditorAcceptance(
     const onOwnedExit = () =>
       controller.abort(Error("Owned Code exited before observation."));
     child.once("exit", onOwnedExit);
-    const timer = setTimeout(() => controller.abort(), 180000);
+    const timer = setTimeout(
+      () => controller.abort(),
+      nativeObservationBudgetMs,
+    );
     try {
       await drive(profile, root, controller.signal, (value) => {
         phase = value;
