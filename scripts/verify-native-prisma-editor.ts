@@ -8,13 +8,22 @@ import {
   copyFile,
   lstat,
   mkdir,
+  mkdtemp,
   open,
   readFile,
   readdir,
   realpath,
   writeFile,
 } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  posix,
+  relative,
+  resolve,
+} from "node:path";
 import { freemem } from "node:os";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
@@ -136,6 +145,8 @@ export const nativeEditorFailureDiagnostic = (
     return { category: "child-exit", exitCode: value.code };
   if (value.code === "ERR_ASSERTION")
     return { category: "assertion", exitCode: null };
+  if (value.code === "EINVAL")
+    return { category: "ipc-invalid-argument", exitCode: null };
   if (value.code === "ENOENT")
     return { category: "missing-input", exitCode: null };
   if (value.code === "EACCES" || value.code === "EPERM")
@@ -169,6 +180,78 @@ export const unrefRetainedNativeEditorObserver = (
   child.unref();
   return { childUnref: true as const, stderrUnref };
 };
+/** Pinned Code 1.143 IPC formulas; count UTF8 bytes, not only JavaScript characters. */
+export const nativeEditorIpcBudget = (
+  runtimeDirectory: string,
+  profile: string,
+  version: string,
+) => {
+  assert.ok(
+    posix.isAbsolute(runtimeDirectory) &&
+      posix.resolve(runtimeDirectory) === runtimeDirectory &&
+      posix.isAbsolute(profile) &&
+      /^\d+\.\d+\.\d+$/u.test(version),
+  );
+  const scope = createHash("sha256").update(profile).digest("hex").slice(0, 8);
+  const staticHandle = posix.join(
+    runtimeDirectory,
+    `vscode-${scope}-${version.slice(0, 4)}-shared.sock`,
+  );
+  const suffixLength = Math.min(
+    36,
+    Math.max(0, 106 - posix.join(runtimeDirectory, "vscode-ipc-.sock").length),
+  );
+  const randomHandle = posix.join(
+    runtimeDirectory,
+    `vscode-ipc-${"0".repeat(suffixLength)}.sock`,
+  );
+  const staticBytes = Buffer.byteLength(staticHandle),
+    randomBytes = Buffer.byteLength(randomHandle);
+  assert.ok(
+    staticBytes < 107 && randomBytes < 107 && suffixLength >= 16,
+    "Owned Code IPC namespace exceeds the pinned Linux budget.",
+  );
+  return {
+    staticWorstBytes: staticBytes,
+    randomBytes,
+    randomSuffixLength: suffixLength,
+    linuxBoundExclusive: 107,
+    inBounds: true as const,
+  };
+};
+export const createNativeEditorIpcNamespace = async (
+  approved: string,
+  profile: string,
+  version: string,
+) => {
+  assert.ok(isAbsolute(approved) && resolve(approved) === approved);
+  assert.equal(await realpath(approved), approved);
+  const directory = await mkdtemp(join(approved, "i-"));
+  assert.equal(dirname(directory), approved);
+  assert.equal(await realpath(directory), directory);
+  const metadata = await lstat(directory);
+  assert.ok(
+    metadata.isDirectory() &&
+      !metadata.isSymbolicLink() &&
+      (metadata.mode & 0o777) === 0o700 &&
+      metadata.uid === process.getuid?.(),
+  );
+  const budget = nativeEditorIpcBudget(directory, profile, version);
+  return {
+    directory,
+    receipt: {
+      schemaVersion: 1,
+      namespaceName: basename(directory),
+      directorySha256: sha(Buffer.from(directory)),
+      canonical: true,
+      ownedByCurrentUser: true,
+      ownerOnly: true,
+      ...budget,
+      retainedWithProfile: true,
+      callerTemporaryDirectoryChanged: false,
+    },
+  };
+};
 export const nativeEditorStartupDiagnostic = (
   bytes: Uint8Array,
   exitCode: unknown,
@@ -192,6 +275,12 @@ export const nativeEditorStartupDiagnostic = (
     )
   )
     category = "user-namespace";
+  else if (
+    /IPC handle.*(?:longer|too long)|shorter --user-data-dir|listen EINVAL|bind.*EINVAL|\bEINVAL\b.*(?:\.sock|IPC)/iu.test(
+      text,
+    )
+  )
+    category = "ipc-path";
   else if (/error while loading shared libraries:/iu.test(text))
     category = "shared-library";
   else if (
@@ -840,6 +929,22 @@ export async function runNativeEditorAcceptance(
       "--extensions-dir",
       extensions,
     ];
+    phase = "owned-ipc-namespace";
+    assert.ok(
+      !environment.VSCODE_PORTABLE,
+      "Owned Code portable mode cannot bypass its IPC namespace.",
+    );
+    const ipc = await createNativeEditorIpcNamespace(
+      approved,
+      profile,
+      get("code-version"),
+    );
+    environment.XDG_RUNTIME_DIR = ipc.directory;
+    await writeFile(
+      join(evidence, "ipc-namespace.json"),
+      JSON.stringify(ipc.receipt),
+      { mode: 0o600 },
+    );
     phase = "isolated-extension-install";
     await run(get("code"), [...isolated, "--install-extension", get("vsix")]);
     const installed = join(

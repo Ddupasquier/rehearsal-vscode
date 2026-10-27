@@ -1,3 +1,5 @@
+import { mkdtemp, rm, lstat } from "node:fs/promises";
+import { join, dirname } from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import { Socket } from "node:net";
 import { PassThrough } from "node:stream";
@@ -5,6 +7,8 @@ import {
   nativeEditorFailureDiagnostic,
   nativeEditorStartupDiagnostic,
   unrefRetainedNativeEditorObserver,
+  nativeEditorIpcBudget,
+  createNativeEditorIpcNamespace,
 } from "../scripts/verify-native-prisma-editor.js";
 
 describe("native editor failure-only diagnostics", () => {
@@ -162,5 +166,79 @@ describe("intentional retained editor observer ownership", () => {
       stderrUnref: null,
     });
     expect(child.unref).toHaveBeenCalledOnce();
+  });
+});
+
+describe("owned short Linux Code IPC namespace", () => {
+  it("fits static and actual trimmed-random names independently of long user profile", () => {
+    const receipt = nativeEditorIpcBudget(
+      "/home/runner/work/rehearsal-test-lab/rehearsal-test-lab/i-Ab1234",
+      "/home/runner/work/" + "long-profile/".repeat(16),
+      "1.143.0",
+    );
+    expect(receipt.staticWorstBytes).toBeLessThan(107);
+    expect(receipt.randomBytes).toBeLessThan(107);
+    expect(receipt.randomSuffixLength).toBeGreaterThanOrEqual(16);
+    expect(receipt.inBounds).toBe(true);
+  });
+  it("fails closed for oversized or multibyte roots even if character length looks small", () => {
+    expect(() =>
+      nativeEditorIpcBudget(
+        "/" + "a".repeat(95),
+        "/approved/profile",
+        "1.143.0",
+      ),
+    ).toThrow();
+    expect(() =>
+      nativeEditorIpcBudget(
+        "/" + "界".repeat(25),
+        "/approved/profile",
+        "1.143.0",
+      ),
+    ).toThrow();
+  });
+  it.skipIf(process.platform === "win32")(
+    "creates only an owner700 nonce child of an existing canonical approved directory",
+    async () => {
+      const base =
+        process.env.REHEARSAL_DEVELOPMENT_ROOT ??
+        (process.env.GITHUB_ACTIONS === "true"
+          ? process.env.GITHUB_WORKSPACE!
+          : "/Volumes/Hobby2TB/Development");
+      const approved = await mkdtemp(join(base, "t-"));
+      try {
+        const result = await createNativeEditorIpcNamespace(
+          approved,
+          "/approved/" + "profile/".repeat(20),
+          "1.143.0",
+        );
+        expect(dirname(result.directory)).toBe(approved);
+        const metadata = await lstat(result.directory);
+        expect(metadata.mode & 0o777).toBe(0o700);
+        expect(result.receipt).toMatchObject({
+          ownedByCurrentUser: true,
+          ownerOnly: true,
+          inBounds: true,
+          retainedWithProfile: true,
+          callerTemporaryDirectoryChanged: false,
+        });
+        expect(JSON.stringify(result.receipt)).not.toContain(approved);
+        expect(result.receipt.directorySha256).toMatch(/^[a-f0-9]{64}$/u);
+      } finally {
+        await rm(approved, { recursive: true, force: true });
+      }
+    },
+  );
+  it("classifies IPC errors without retaining raw socket paths", () => {
+    expect(
+      nativeEditorFailureDiagnostic({ code: "EINVAL", path: "PRIVATE_SOCKET" }),
+    ).toEqual({ category: "ipc-invalid-argument", exitCode: null });
+    expect(
+      nativeEditorStartupDiagnostic(
+        Buffer.from("listen EINVAL: invalid argument PRIVATE_SOCKET.sock"),
+        1,
+        null,
+      ).category,
+    ).toBe("ipc-path");
   });
 });
