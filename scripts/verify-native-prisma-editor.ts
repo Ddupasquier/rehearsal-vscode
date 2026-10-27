@@ -43,6 +43,14 @@ const { shouldRetainNativeEditor } =
 const execute = promisify(execFile),
   sha = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const nativeObservationBudgetMs = 180000;
+/** Locate a control behind native DETAILS only; inactive hidden pages stay excluded. */
+export const nativeControlProbe = (
+  selector: string,
+  workspaceName: string,
+  allowClosedDetails = false,
+) =>
+  `(()=>{if(document.title!==${JSON.stringify(workspaceName + " · Rehearsal")}||document.readyState!=='complete')return false;const node=document.querySelector(${JSON.stringify(selector)}),rect=node?.getBoundingClientRect();if(!node)return false;if(rect&&rect.width>0&&rect.height>0)return true;if(!${allowClosedDetails}||node.closest('[hidden]'))return false;for(let parent=node.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS'&&!parent.open)return true;return false;})()`;
+
 async function regular(file: string, max = 64 * 1024 * 1024) {
   assert.ok(isAbsolute(file));
   assert.equal(await realpath(file), file);
@@ -449,14 +457,14 @@ async function drive(
       await send("Runtime.enable", {}, sessionId);
     }
   };
-  const find = async (selector: string) =>
+  const find = async (selector: string, allowClosedDetails = false) =>
     waitOwned(async () => {
       await discover();
       for (const context of contexts.values())
         if (
           await evaluate(
             context,
-            `(()=>{if(document.title!==${JSON.stringify(workspaceName + " · Rehearsal")}||document.readyState!=='complete')return false;const node=document.querySelector(${JSON.stringify(selector)}),rect=node?.getBoundingClientRect();return !!rect&&rect.width>0&&rect.height>0;})()`,
+            nativeControlProbe(selector, workspaceName, allowClosedDetails),
           ).catch(() => false)
         )
           return context;
@@ -477,7 +485,7 @@ async function drive(
       );
   };
   const activate = async (selector: string) => {
-    const context = await find(selector);
+    const context = await find(selector, true);
     // Native disclosure content must be opened by the same keyboard action a user uses.
     for (let attempt = 0; attempt < 8; attempt++) {
       const closed = await evaluate(
