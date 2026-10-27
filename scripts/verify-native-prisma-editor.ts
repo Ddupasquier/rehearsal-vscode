@@ -477,6 +477,22 @@ async function drive(
   };
   const activate = async (selector: string) => {
     const context = await find(selector);
+    // Native disclosure content must be opened by the same keyboard action a user uses.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const closed = await evaluate(
+        context,
+        `(()=>{const node=document.querySelector(${JSON.stringify(selector)}),closed=[];for(let parent=node?.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS'&&!parent.open)closed.push(parent);if(!closed.length)return 0;const summary=closed.at(-1).querySelector(':scope > summary');if(!summary)return -1;summary.scrollIntoView({block:'center'});summary.focus();return document.activeElement===summary?closed.length:-1;})()`,
+      );
+      if (closed === 0) break;
+      assert.ok(Number.isInteger(closed) && closed > 0);
+      await key(context);
+      await waitOwned(() =>
+        evaluate(
+          context,
+          `(()=>{let count=0;for(let parent=document.querySelector(${JSON.stringify(selector)})?.parentElement;parent;parent=parent.parentElement)if(parent.tagName==='DETAILS'&&!parent.open)count++;return count<${closed};})()`,
+        ),
+      );
+    }
     await waitOwned(async () => {
       const remote = await send(
         "Runtime.evaluate",
@@ -511,7 +527,7 @@ async function drive(
     assert.equal(
       await evaluate(
         context,
-        `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(node.disabled)return false;node.focus();return document.activeElement===node;})()`,
+        `(()=>{const node=document.querySelector(${JSON.stringify(selector)});if(node.disabled)return false;node.scrollIntoView({block:'center'});node.focus();return document.activeElement===node;})()`,
       ),
       true,
     );
