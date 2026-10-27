@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 import { runInNewContext } from "node:vm";
-const require = createRequire(import.meta.url);
+const nativeRequire = createRequire(__filename);
 const source = readFileSync(
-  new URL("../scripts/native-prisma-review-test.cjs", import.meta.url),
+  resolve(__dirname, "../scripts/native-prisma-review-test.cjs"),
   "utf8",
 );
 const api: { snapshotObservation: (value: unknown) => unknown } = {
@@ -13,7 +14,7 @@ const api: { snapshotObservation: (value: unknown) => unknown } = {
 runInNewContext(source, {
   exports: api,
   require: (name: string) =>
-    name === "vscode" || name.startsWith("./") ? {} : require(name),
+    name === "vscode" || name.startsWith("./") ? {} : nativeRequire(name),
 });
 describe("failure-only native Prisma snapshot projection", () => {
   it("retains known actionable states without private payloads", () => {
