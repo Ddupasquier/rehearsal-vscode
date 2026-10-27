@@ -1847,10 +1847,14 @@ describe("configuration-independent engine lifecycle inspection", () => {
 });
 
 describe("Drizzle snapshot public cross-view binding", () => {
-  const inspectDrizzle = async (change = "valid") => {
+  const inspectDrizzle = async (
+    change = "valid",
+    offline = false,
+    calls: string[] = [],
+  ) => {
     const { rawPlan, baseline: rawBaseline } =
         await import("./drizzle_fixture.js"),
-      base = client(),
+      base = client(offline ? "NOT READY" : "READY"),
       plan = rawPlan(),
       baseline = rawBaseline(),
       candidate = plan.targets[0]!.entries[1]!;
@@ -1872,6 +1876,13 @@ describe("Drizzle snapshot public cross-view binding", () => {
         ...base,
         version: async (...args) => ({
           ...(await base.version(...args)),
+          ...(offline
+            ? {
+                projectDiscoverySchema: 1 as const,
+                configurationReviewSchema: 1 as const,
+                commandCapabilitiesSchema: 1 as const,
+              }
+            : {}),
           ...(change === "missing-plan"
             ? {}
             : {
@@ -1883,6 +1894,24 @@ describe("Drizzle snapshot public cross-view binding", () => {
         command: async <Data>(
           options: Parameters<SnapshotClient["command"]>[0],
         ) => {
+          calls.push(options.expectedCommand);
+          if (offline && options.expectedCommand === "inspect capabilities")
+            return envelope(
+              "inspect capabilities",
+              (
+                await import("./command_capabilities_fixture.js")
+              ).commandCapabilitiesFixture(),
+            ) as { result: ResultEnvelope<Data>; exitCode: number };
+          if (offline && options.expectedCommand === "discover")
+            return envelope("discover", partialDiscovery) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (offline && options.expectedCommand === "configuration")
+            return envelope("configuration", partialConfiguration) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
           if (options.expectedCommand === "inspect plan")
             return envelope("inspect plan", plan) as {
               result: ResultEnvelope<Data>;
@@ -1962,5 +1991,280 @@ describe("Drizzle snapshot public cross-view binding", () => {
     const result = await inspectDrizzle(change);
     expect(result.availability).toBe("error");
     expect(result.migrationReview).toBeUndefined();
+  });
+  it("retains the exact Drizzle semantic-prefix/candidate guards during offline review", async () => {
+    const calls: string[] = [];
+    const result = await inspectDrizzle("valid", true, calls);
+    expect(result.availability).toBe("not_ready");
+    expect(result.offlineInspection).toEqual({ state: "available" });
+    expect(result.baseline?.formatVersion).toBe(4);
+    expect(result.migrationReview?.targets[0]?.migrationTool?.kind).toBe(
+      "drizzle",
+    );
+    expect(result.runtime).toBeUndefined();
+    expect(calls).not.toContain("status");
+    for (const change of [
+      "old-core",
+      "prefix-drift",
+      "cutoff-drift",
+      "unknown-plan-schema",
+    ]) {
+      const refused = await inspectDrizzle(change, true);
+      expect(refused.offlineInspection).toBeUndefined();
+      expect(refused.migrationReview).toBeUndefined();
+    }
+  });
+});
+
+describe("capability-negotiated offline review", () => {
+  const inspectOffline = async (
+    change = "valid",
+    variant: "sql" | "prisma" = "sql",
+  ) => {
+    const { commandCapabilitiesFixture } =
+      await import("./command_capabilities_fixture.js");
+    const base = client("NOT READY"),
+      capabilities = commandCapabilitiesFixture(),
+      plan = migrationPlan();
+    const calls: Parameters<SnapshotClient["command"]>[0][] = [];
+    const native = {
+      schemaVersion: 1,
+      kind: "prisma",
+      version: "7.10.1",
+      provider: "postgresql",
+      lockSha256: "b".repeat(64),
+      toolchainSha256: "c".repeat(64),
+    };
+    if (variant === "prisma")
+      for (const entry of plan.targets[0]!.entries)
+        entry.filename = `${entry.version}_${entry.name}/migration.sql`;
+    if (change === "unsupported-operation")
+      capabilities.operations[0]!.supportState = "unsupported";
+    if (change === "container-operation")
+      capabilities.operations[0]!.backend = "container";
+    if (change === "unsafe-capabilities")
+      capabilities.safety.enginesProbed = true;
+    if (change === "candidate-drift") plan.candidateSha256 = "f".repeat(64);
+    let activityReads = 0;
+    const snapshot = await inspectProject({
+      workspaceName: "offline",
+      workspaceRoot: "/workspace",
+      trusted: change !== "untrusted",
+      client: {
+        ...base,
+        version: async (...args) => ({
+          ...(await base.version(...args)),
+          projectDiscoverySchema: 1,
+          configurationReviewSchema: 1,
+          migrationReviewSchema: 1,
+          ...(change === "missing-capability"
+            ? {}
+            : {
+                commandCapabilitiesSchema:
+                  change === "unknown-capability" ? null : (1 as const),
+                commandCapabilitiesAdvertised: true,
+              }),
+        }),
+        command: async <Data>(
+          request: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          calls.push(request);
+          let result;
+          if (request.expectedCommand === "inspect capabilities") {
+            result = envelope("inspect capabilities", capabilities);
+            if (change === "capability-version-drift")
+              result = {
+                ...result,
+                result: { ...result.result, rehearsalVersion: "9.9.9" },
+              };
+          } else if (request.expectedCommand === "discover")
+            result = envelope("discover", partialDiscovery);
+          else if (request.expectedCommand === "doctor")
+            result = envelope(
+              "doctor",
+              {
+                state: "NOT READY",
+                checks: [
+                  {
+                    id: "docker",
+                    label: "Docker",
+                    status: "fail",
+                    detail: "No selected engine",
+                    remediation: "Configure a local engine for runtime work.",
+                  },
+                ],
+              },
+              "not_ready",
+            );
+          else if (request.expectedCommand === "configuration")
+            result = envelope(
+              "configuration",
+              change === "bad-config"
+                ? { ...partialConfiguration, path: "other.config.mjs" }
+                : partialConfiguration,
+            );
+          else if (request.expectedCommand === "inspect plan")
+            result = envelope("inspect plan", {
+              ...plan,
+              targets: plan.targets.map((target) => ({
+                ...target,
+                ...(variant === "prisma" ? { migrationTool: native } : {}),
+              })),
+            });
+          else if (
+            request.expectedCommand === "activity" &&
+            ++activityReads > 1 &&
+            change === "busy-final"
+          )
+            result = envelope("activity", {
+              schemaVersion: 1,
+              state: "busy",
+              operation: {
+                kind: "run",
+                startedAt: "2026-10-27T00:00:00Z",
+                rehearsalVersion: "0.1.0-rc.4",
+              },
+            });
+          else {
+            result = await base.command<Data>(request);
+            if (
+              variant === "prisma" &&
+              request.expectedCommand === "inspect baseline"
+            )
+              result = envelope("inspect baseline", {
+                ...(result.result.data as object),
+                formatVersion: 3,
+                nativeMigrations: native,
+              });
+            if (variant === "prisma" && request.expectedCommand === "explain") {
+              const baseline = (
+                await base.command<BaselineData>({
+                  ...request,
+                  expectedCommand: "inspect baseline",
+                })
+              ).result.data;
+              const explained = result.result.data as ExplainData;
+              result = envelope("explain", {
+                ...explained,
+                targets: [
+                  {
+                    name: "primary",
+                    plan: {
+                      ...explained,
+                      baseline: {
+                        ...baseline,
+                        formatVersion: 3,
+                        nativeMigrations: native,
+                      },
+                    },
+                  },
+                ],
+              });
+            }
+            if (
+              variant === "prisma" &&
+              request.expectedCommand === "candidates"
+            ) {
+              const data = result.result.data as CandidatesData;
+              const candidate = plan.targets[0]!.entries[2]!;
+              const rows = [
+                {
+                  version: candidate.version,
+                  name: candidate.name,
+                  filename: candidate.filename,
+                  sha256: candidate.sha256,
+                  status: "candidate",
+                },
+              ];
+              result = envelope("candidates", {
+                ...data,
+                candidates: rows,
+                targets: data.targets.map((target) => ({
+                  ...target,
+                  candidates: rows,
+                })),
+              });
+            }
+            if (
+              change === "unsuccessful-baseline" &&
+              request.expectedCommand === "inspect baseline"
+            )
+              result = envelope(
+                "inspect baseline",
+                result.result.data,
+                "not_ready",
+              );
+          }
+          return result as { result: ResultEnvelope<Data>; exitCode: number };
+        },
+      },
+    });
+    return { snapshot, calls };
+  };
+  it.each(["sql", "prisma"] as const)(
+    "keeps verified %s review without claiming runtime readiness or dispatching runtime queries",
+    async (variant) => {
+      const { snapshot, calls } = await inspectOffline("valid", variant);
+      expect(snapshot.availability).toBe("not_ready");
+      expect(snapshot.offlineInspection).toEqual({ state: "available" });
+      expect(snapshot.baseline?.generationId).toBe("baseline-1");
+      expect(snapshot.candidates?.count).toBe(1);
+      expect(snapshot.migrationReview).toBeDefined();
+      expect(snapshot.runtime).toBeUndefined();
+      expect(snapshot.resources).toBeUndefined();
+      expect(snapshot.applicationUrl).toBeUndefined();
+      expect(
+        calls.some((call) =>
+          ["status", "resources", "environments", "run", "start"].includes(
+            call.expectedCommand,
+          ),
+        ),
+      ).toBe(false);
+      expect(
+        calls.find((call) => call.expectedCommand === "inspect capabilities")
+          ?.configPath,
+      ).toBeUndefined();
+      expect(
+        calls.find((call) => call.expectedCommand === "inspect plan")
+          ?.configPath,
+      ).toBe("rehearsal.config.mjs");
+    },
+  );
+  it.each([
+    "missing-capability",
+    "unknown-capability",
+    "unsafe-capabilities",
+    "unsupported-operation",
+    "container-operation",
+    "bad-config",
+  ])("retains prior Doctor fallback for %s", async (change) => {
+    const { snapshot, calls } = await inspectOffline(change);
+    expect(snapshot.availability).toBe("not_ready");
+    expect(snapshot.offlineInspection).toBeUndefined();
+    expect(snapshot.baseline).toBeUndefined();
+    expect(calls.some((call) => call.expectedCommand === "inspect plan")).toBe(
+      false,
+    );
+  });
+  it.each([
+    "candidate-drift",
+    "unsuccessful-baseline",
+    "capability-version-drift",
+  ])("refuses %s without promoting retained evidence", async (change) => {
+    const { snapshot } = await inspectOffline(change);
+    expect(snapshot.availability).toBe("error");
+    expect(snapshot.offlineInspection).toBeUndefined();
+    expect(snapshot.baseline).toBeUndefined();
+  });
+  it("final activity drift discards all offline project evidence", async () => {
+    const { snapshot } = await inspectOffline("busy-final");
+    expect(snapshot.availability).toBe("operation_active");
+    expect(snapshot.offlineInspection).toBeUndefined();
+    expect(snapshot.baseline).toBeUndefined();
+  });
+  it("untrusted workspaces never invoke capability or project code", async () => {
+    const { calls, snapshot } = await inspectOffline("untrusted");
+    expect(snapshot.availability).toBe("untrusted");
+    expect(calls).toEqual([]);
   });
 });

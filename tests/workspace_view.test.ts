@@ -2430,3 +2430,51 @@ describe("Rehearsal workspace document", () => {
     expect(html).toContain("Run Doctor");
   });
 });
+
+it("offers validated offline review without a static capability card or runtime readiness claim", async () => {
+  const { parseCommandCapabilities } =
+    await import("../src/command_capabilities_contract.js");
+  const { commandCapabilitiesFixture } =
+    await import("./command_capabilities_fixture.js");
+  const {
+    runtime: _runtime,
+    resources: _resources,
+    applicationUrl: _url,
+    ...base
+  } = readySnapshot();
+  const snapshot: ProjectSnapshot = {
+    ...base,
+    availability: "not_ready",
+    offlineInspection: { state: "available" },
+    commandCapabilities: {
+      state: "observed",
+      report: parseCommandCapabilities(commandCapabilitiesFixture()),
+    },
+    readiness: {
+      state: "NOT READY",
+      passed: 1,
+      failed: 1,
+      checks: [
+        {
+          id: "docker",
+          label: "Docker",
+          status: "fail",
+          detail: "No selected engine",
+          remediation: "Configure an engine for runtime work.",
+        },
+      ],
+    },
+  };
+  const html = renderWorkspaceDocument(
+    snapshot,
+    assets,
+    "overview",
+    DEFAULT_WORKSPACE_PREFERENCES,
+  );
+  expect(html).toContain("Offline review available");
+  expect(html).toContain("Review migrations");
+  expect(html).toContain("Review configuration");
+  expect(html).toContain("not a completed rehearsal");
+  expect(html).not.toContain('data-action="runRehearsal"');
+  expect(html).not.toContain('data-action="migrate"');
+});

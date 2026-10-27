@@ -372,6 +372,32 @@ open workbench current when Rehearsal is updated in another terminal, without po
 running package-manager code, watching unrelated dependencies, or requiring a window
 reload. Removing a workspace disposes its watchers and pending refresh.
 
+### Capability-negotiated offline review
+
+Builds advertising exactly `commandCapabilities: 1` can supply the bounded public
+`inspect capabilities --json` contract. This query omits configuration and receipt
+arguments. Unknown/older/malformed contracts retain existing Doctor fallback; the
+feature does not raise the minimum Core version or require a prerelease update.
+
+On the already-qualified POSIX adapter only, NOT READY can continue successful
+configuration, baseline, candidate and exact-plan inspection when Core explicitly
+classifies those exact operations as supported/offline. General requirements permit
+an attempted read, not a readiness result. Existing SQL/Prisma/Drizzle cross-view,
+provider, history, digest, activity and version checks still decide whether metadata
+can be displayed. Project status/resources/runtime queries are omitted on this branch;
+configuration-independent engine status retains its separate existing control owner.
+
+The snapshot stays NOT READY, with an independent offline-review marker only after
+all required results validate. It exposes read-only plan/configuration review without
+runtime/mutation or source-navigation controls; the existing ready-project source
+controller and exact byte bindings are unchanged. Runtime state and application URL
+remain absent, and historical receipts cannot become a completed proof. Database-only
+configuration remains governed by its existing application model, not generic capability
+requirements. Native Windows transport guards remain unchanged.
+
+This source slice is not rendered/native/assistive-technology or installed-pair proof.
+Core capability publication and the existing Core2.1/2.2 delivery order remain separate.
+
 The first view invokes only these public commands:
 
 - `--version --json`

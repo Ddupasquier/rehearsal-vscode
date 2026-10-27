@@ -97,6 +97,21 @@ afterEach(async () => {
 });
 
 describe("workspace process adapter", () => {
+  it.each([undefined, 1, 2])(
+    "negotiates only exact commandCapabilities1 and preserves unknown advertisement %s",
+    async (schema) => {
+      const root = await workspace(
+        "",
+        "9.9.9",
+        schema === undefined ? undefined : { commandCapabilities: schema },
+      );
+      await expect(resolveWorkspaceRehearsal(root)).resolves.toMatchObject({
+        commandCapabilitiesSchema: schema === 1 ? 1 : null,
+        commandCapabilitiesAdvertised: schema !== undefined,
+      });
+    },
+  );
+
   it("refuses native Windows inspection before any package or process can be used", () => {
     expect(() => assertInspectionPlatform("win32")).toThrowError(
       expect.objectContaining({

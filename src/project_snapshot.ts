@@ -1,3 +1,8 @@
+import {
+  parseCommandCapabilities,
+  supportsOfflineInspection,
+  type CommandCapabilitiesObservation,
+} from "./command_capabilities_contract.js";
 import type {
   MigrationCutoff,
   DrizzleMigrationIdentity,
@@ -8,7 +13,7 @@ import {
   parseEngineLifecycleStatus,
   type EngineLifecycleObservation,
 } from "./engine_lifecycle_contract.js";
-import { basename, relative, sep } from "node:path";
+import { basename, relative, resolve, sep } from "node:path";
 import type {
   ActivityData,
   BaselineData,
@@ -86,6 +91,8 @@ export interface ProjectSnapshot {
   readonly workspaceRoot: string;
   readonly inspectedAt?: string;
   readonly availability: ProjectAvailability;
+  readonly commandCapabilities?: CommandCapabilitiesObservation;
+  readonly offlineInspection?: { readonly state: "available" };
   readonly version?: string;
   readonly compatibility?: CoreCompatibility;
   readonly packageLocation?: string;
@@ -250,6 +257,8 @@ export interface SnapshotClient {
       readonly resourceManagerSchema?: 1 | null;
       readonly migrationReviewSchema?: 1 | null;
       readonly drizzleMigrationsSchema?: 1 | null;
+      readonly commandCapabilitiesSchema?: 1 | null;
+      readonly commandCapabilitiesAdvertised?: boolean;
       readonly migrationInsightsSchema?: 1 | null;
       readonly configurationReviewSchema?: 1 | null;
       readonly engineLifecycleSchema?: 1 | null;
@@ -290,6 +299,9 @@ export const processSnapshotClient: SnapshotClient = {
         resourceManagerSchema: resolved.resourceManagerSchema,
         migrationReviewSchema: resolved.migrationReviewSchema,
         drizzleMigrationsSchema: resolved.drizzleMigrationsSchema ?? null,
+        commandCapabilitiesSchema: resolved.commandCapabilitiesSchema ?? null,
+        commandCapabilitiesAdvertised:
+          resolved.commandCapabilitiesAdvertised ?? false,
         migrationInsightsSchema: resolved.migrationInsightsSchema,
         configurationReviewSchema: resolved.configurationReviewSchema,
         engineLifecycleSchema: resolved.engineLifecycleSchema,
@@ -307,6 +319,9 @@ export const processSnapshotClient: SnapshotClient = {
       resourceManagerSchema: resolved.resourceManagerSchema,
       migrationReviewSchema: resolved.migrationReviewSchema,
       drizzleMigrationsSchema: resolved.drizzleMigrationsSchema ?? null,
+      commandCapabilitiesSchema: resolved.commandCapabilitiesSchema ?? null,
+      commandCapabilitiesAdvertised:
+        resolved.commandCapabilitiesAdvertised ?? false,
       migrationInsightsSchema: resolved.migrationInsightsSchema,
       configurationReviewSchema: resolved.configurationReviewSchema,
       engineLifecycleSchema: resolved.engineLifecycleSchema,
@@ -409,6 +424,7 @@ const failureSnapshot = (
   partial: Pick<ProjectSnapshot, "activity" | "readiness"> & {
     readonly discovery?: ProjectSnapshot["discovery"];
     readonly engineLifecycle?: EngineLifecycleObservation;
+    readonly commandCapabilities?: CommandCapabilitiesObservation;
   } = {},
 ): ProjectSnapshot => {
   const observed = observedVersion
@@ -430,6 +446,9 @@ const failureSnapshot = (
       }
     : {};
   const partialEvidence = {
+    ...(partial.commandCapabilities
+      ? { commandCapabilities: partial.commandCapabilities }
+      : {}),
     ...(partial.engineLifecycle
       ? { engineLifecycle: partial.engineLifecycle }
       : {}),
@@ -528,6 +547,7 @@ const activityOnlySnapshot = ({
   packageLocation,
   activity,
   engineLifecycle,
+  commandCapabilities,
 }: {
   workspaceName: string;
   workspaceRoot: string;
@@ -535,6 +555,7 @@ const activityOnlySnapshot = ({
   packageLocation?: string;
   activity: ActivityData;
   engineLifecycle?: EngineLifecycleObservation;
+  commandCapabilities?: CommandCapabilitiesObservation;
 }): ProjectSnapshot => ({
   workspaceName,
   workspaceRoot,
@@ -545,6 +566,7 @@ const activityOnlySnapshot = ({
   compatibility: coreCompatibilityFor(version),
   activity,
   ...(engineLifecycle ? { engineLifecycle } : {}),
+  ...(commandCapabilities ? { commandCapabilities } : {}),
 });
 
 export const inspectProject = async ({
@@ -577,6 +599,7 @@ export const inspectProject = async ({
       : undefined;
   let observedReadiness: ProjectSnapshot["readiness"] | undefined;
   let observedEngine: EngineLifecycleObservation | undefined;
+  let observedCapabilities: CommandCapabilitiesObservation | undefined;
   try {
     const version = await client.version(workspaceRoot, signal, timeoutMs);
     observedVersion = version;
@@ -616,6 +639,41 @@ export const inspectProject = async ({
           ],
         },
       };
+    }
+    observedCapabilities = {
+      state: version.commandCapabilitiesAdvertised
+        ? "unsupported"
+        : "not-advertised",
+    };
+    if (version.commandCapabilitiesSchema === 1) {
+      let capabilitiesVersion: string | undefined;
+      try {
+        const execution = await client.command<unknown>({
+          workspaceRoot,
+          command: ["inspect", "capabilities"],
+          expectedCommand: "inspect capabilities",
+          ...(signal ? { signal } : {}),
+          ...(timeoutMs ? { timeoutMs } : {}),
+        });
+        capabilitiesVersion = execution.result.rehearsalVersion;
+        requireRehearsalVersion(version.version, [execution.result]);
+        if (execution.result.status !== "success" || execution.exitCode !== 0)
+          throw new ContractError("Capability inspection was not successful.");
+        observedCapabilities = {
+          state: "observed",
+          report: parseCommandCapabilities(execution.result.data),
+        };
+      } catch (error) {
+        if (error instanceof RehearsalCliError)
+          requireRehearsalVersion(version.version, [error.result]);
+        if (
+          signal?.aborted ||
+          (capabilitiesVersion !== undefined &&
+            capabilitiesVersion !== version.version)
+        )
+          throw error;
+        observedCapabilities = { state: "unavailable" };
+      }
     }
     const activityOptions = {
       workspaceRoot,
@@ -675,6 +733,7 @@ export const inspectProject = async ({
           : {}),
         activity,
         engineLifecycle: observedEngine,
+        commandCapabilities: observedCapabilities,
       });
     }
     const discovery =
@@ -723,6 +782,9 @@ export const inspectProject = async ({
       checks: doctor.result.data.checks,
     };
     observedReadiness = readiness;
+    let offlineOnly = false;
+    let checkedConfiguration:
+      { result: ResultEnvelope<unknown>; exitCode: number } | undefined;
     if (doctor.result.status === "not_ready") {
       let configurationMetadata: ConfigurationMetadata | undefined;
       let resources: ResourceInventoryData | undefined;
@@ -744,6 +806,7 @@ export const inspectProject = async ({
           configurationMetadata = parseConfigurationMetadata(
             metadata.result.data,
           );
+          checkedConfiguration = metadata;
           if (
             configurationMetadata.path.replaceAll("\\", "/") !==
             discovery.configuration.activePath.replaceAll("\\", "/")
@@ -753,68 +816,95 @@ export const inspectProject = async ({
           // An unavailable configuration review must not hide the actionable Doctor result.
         }
       }
-      if (configurationMetadata && version.resourceInventorySchema === 1) {
-        try {
-          // Inventory needs validated configuration, not a baseline or running engine.
-          // A detailed endpoint refusal is not authority to bypass its local-engine guard.
-          const command =
-            version.resourceManagerSchema === 1 ? "resources" : "environments";
-          const inventory = await client.command<unknown>({
-            ...common,
-            configPath: configurationMetadata.path,
-            command: [command],
-            expectedCommand: command,
-          });
-          requireRehearsalVersion(version.version, [inventory.result]);
-          if (inventory.result.status !== "success")
-            throw new ContractError(
-              "Resource inventory did not complete successfully.",
-            );
-          resources = parseResourceInventoryData(inventory.result.data);
-        } catch {
-          // Keep the original actionable Doctor checks; unavailable/unsafe optional evidence stays absent.
+      offlineOnly =
+        configurationMetadata !== undefined &&
+        version.migrationReviewSchema === 1 &&
+        supportsOfflineInspection(observedCapabilities, [
+          "configuration",
+          "explain",
+          "inspect baseline",
+          "candidates",
+          "inspect plan",
+        ]);
+      if (!offlineOnly) {
+        if (configurationMetadata && version.resourceInventorySchema === 1) {
+          try {
+            // Inventory needs validated configuration, not a baseline or running engine.
+            // A detailed endpoint refusal is not authority to bypass its local-engine guard.
+            const command =
+              version.resourceManagerSchema === 1
+                ? "resources"
+                : "environments";
+            const inventory = await client.command<unknown>({
+              ...common,
+              configPath: configurationMetadata.path,
+              command: [command],
+              expectedCommand: command,
+            });
+            requireRehearsalVersion(version.version, [inventory.result]);
+            if (inventory.result.status !== "success")
+              throw new ContractError(
+                "Resource inventory did not complete successfully.",
+              );
+            resources = parseResourceInventoryData(inventory.result.data);
+          } catch {
+            // Keep the original actionable Doctor checks; unavailable/unsafe optional evidence stays absent.
+          }
         }
-      }
-      const finalActivityExecution = await client.command<ActivityData>({
-        ...activityOptions,
-        command: ["activity"],
-        expectedCommand: "activity",
-      });
-      requireRehearsalVersion(version.version, [finalActivityExecution.result]);
-      const finalActivity = parseActivityData(
-        finalActivityExecution.result.data,
-      );
-      if (finalActivity.state !== "idle")
-        return activityOnlySnapshot({
+        const finalActivityExecution = await client.command<ActivityData>({
+          ...activityOptions,
+          command: ["activity"],
+          expectedCommand: "activity",
+        });
+        requireRehearsalVersion(version.version, [
+          finalActivityExecution.result,
+        ]);
+        const finalActivity = parseActivityData(
+          finalActivityExecution.result.data,
+        );
+        if (finalActivity.state !== "idle")
+          return activityOnlySnapshot({
+            workspaceName,
+            workspaceRoot,
+            version: version.version,
+            ...(version.packageLocation
+              ? { packageLocation: version.packageLocation }
+              : {}),
+            activity: finalActivity,
+            engineLifecycle: observedEngine,
+            commandCapabilities: observedCapabilities,
+          });
+        return {
           workspaceName,
           workspaceRoot,
+          availability: "not_ready",
+          inspectedAt: new Date().toISOString(),
           version: version.version,
+          compatibility,
           ...(version.packageLocation
             ? { packageLocation: version.packageLocation }
             : {}),
           activity: finalActivity,
           engineLifecycle: observedEngine,
-        });
-      return {
-        workspaceName,
-        workspaceRoot,
-        availability: "not_ready",
-        inspectedAt: new Date().toISOString(),
-        version: version.version,
-        compatibility,
-        ...(version.packageLocation
-          ? { packageLocation: version.packageLocation }
-          : {}),
-        activity: finalActivity,
-        engineLifecycle: observedEngine,
-        ...discoverySnapshot,
-        readiness,
-        ...(configurationMetadata
-          ? { configurationMetadata, configPath: configurationMetadata.path }
-          : {}),
-        ...(resources ? { resources } : {}),
-      };
+          commandCapabilities: observedCapabilities,
+          ...discoverySnapshot,
+          readiness,
+          ...(configurationMetadata
+            ? { configurationMetadata, configPath: configurationMetadata.path }
+            : {}),
+          ...(resources ? { resources } : {}),
+        };
+      }
     }
+    const inspectionOptions =
+      offlineOnly && checkedConfiguration
+        ? {
+            ...common,
+            configPath: parseConfigurationMetadata(
+              checkedConfiguration.result.data,
+            ).path,
+          }
+        : common;
     const [
       explain,
       baselineExecution,
@@ -826,28 +916,30 @@ export const inspectProject = async ({
       migrationInsights,
     ] = await Promise.all([
       client.command<ExplainData>({
-        ...common,
+        ...inspectionOptions,
         command: ["explain"],
         expectedCommand: "explain",
       }),
       client.command<BaselineData>({
-        ...common,
+        ...inspectionOptions,
         command: ["inspect", "baseline"],
         expectedCommand: "inspect baseline",
       }),
       client.command<CandidatesData>({
-        ...common,
+        ...inspectionOptions,
         command: ["candidates"],
         expectedCommand: "candidates",
       }),
-      client.command<StatusData>({
-        ...common,
-        command: ["status"],
-        expectedCommand: "status",
-      }),
-      version.resourceInventorySchema === 1
+      offlineOnly
+        ? Promise.resolve(null)
+        : client.command<StatusData>({
+            ...inspectionOptions,
+            command: ["status"],
+            expectedCommand: "status",
+          }),
+      !offlineOnly && version.resourceInventorySchema === 1
         ? client.command<ResourceInventoryData>({
-            ...common,
+            ...inspectionOptions,
             command: [
               version.resourceManagerSchema === 1
                 ? "resources"
@@ -861,23 +953,27 @@ export const inspectProject = async ({
         : Promise.resolve(null),
       version.migrationReviewSchema === 1
         ? client.command<unknown>({
-            ...common,
+            ...inspectionOptions,
             command: ["inspect", "plan"],
             expectedCommand: "inspect plan",
           })
         : Promise.resolve(null),
-      version.configurationReviewSchema === 1
-        ? client.command<unknown>({
-            ...common,
-            command: ["configuration"],
-            expectedCommand: "configuration",
-          })
-        : Promise.resolve(null),
+      checkedConfiguration
+        ? Promise.resolve(checkedConfiguration)
+        : version.configurationReviewSchema === 1
+          ? client.command<unknown>({
+              ...inspectionOptions,
+              command: ["configuration"],
+              expectedCommand: "configuration",
+            })
+          : Promise.resolve(null),
       version.migrationReviewSchema === 1 &&
-      version.migrationInsightsSchema === 1
+      version.migrationInsightsSchema === 1 &&
+      (!offlineOnly ||
+        supportsOfflineInspection(observedCapabilities, ["inspect insights"]))
         ? client
             .command<unknown>({
-              ...common,
+              ...inspectionOptions,
               command: ["inspect", "insights"],
               expectedCommand: "inspect insights",
               outputLimitBytes: MIGRATION_INSIGHTS_OUTPUT_BYTES,
@@ -894,12 +990,42 @@ export const inspectProject = async ({
       command: ["activity"],
       expectedCommand: "activity",
     });
+    if (offlineOnly) {
+      const required = [
+        explain,
+        baselineExecution,
+        candidates,
+        migrationReview,
+        configurationMetadata,
+      ];
+      if (
+        required.some(
+          (execution) =>
+            !execution ||
+            execution.result.status !== "success" ||
+            execution.exitCode !== 0,
+        )
+      )
+        throw new ContractError(
+          "Offline review did not complete successfully. Runtime readiness remains unproven.",
+        );
+      const configuration = parseConfigurationMetadata(
+        configurationMetadata!.result.data,
+      );
+      if (
+        resolve(workspaceRoot, configuration.path) !==
+        explain.result.data.config.path
+      )
+        throw new ContractError(
+          "Offline configuration and project plan identities disagree. Refresh the project.",
+        );
+    }
     const applicationUrl = explain.result.data.environment.applicationUrl;
     requireRehearsalVersion(version.version, [
       explain.result,
       baselineExecution.result,
       candidates.result,
-      status.result,
+      ...(status ? [status.result] : []),
       ...(resources ? [resources.result] : []),
       finalActivityExecution.result,
       ...(migrationReview ? [migrationReview.result] : []),
@@ -917,9 +1043,10 @@ export const inspectProject = async ({
           : {}),
         activity: finalActivity,
         engineLifecycle: observedEngine,
+        commandCapabilities: observedCapabilities,
       });
     }
-    const statusData = parseStatusData(status.result.data);
+    const statusData = status ? parseStatusData(status.result.data) : null;
     const reviewTargets = parseReviewTargets(explain.result.data);
     const parsedMigrationReview = migrationReview
       ? parseMigrationReviewPlan(migrationReview.result.data)
@@ -1033,8 +1160,11 @@ export const inspectProject = async ({
       throw new ContractError(
         "Shape evidence does not belong to the active baseline and privacy policy.",
       );
-    const statusTargets =
-      "targets" in statusData ? statusData.targets : [statusData];
+    const statusTargets = statusData
+      ? "targets" in statusData
+        ? statusData.targets
+        : [statusData]
+      : [];
     const states = new Set(
       statusTargets.map(({ runtimeStatus }) => runtimeStatus.state),
     );
@@ -1042,7 +1172,11 @@ export const inspectProject = async ({
     return {
       workspaceName,
       workspaceRoot,
-      availability: "ready",
+      availability: offlineOnly ? "not_ready" : "ready",
+      ...(offlineOnly
+        ? { offlineInspection: { state: "available" as const } }
+        : {}),
+      commandCapabilities: observedCapabilities,
       inspectedAt: new Date().toISOString(),
       version: version.version,
       compatibility,
@@ -1142,24 +1276,33 @@ export const inspectProject = async ({
           digest: target.candidateSha256,
         })),
       },
-      runtime: {
-        state:
-          states.size === 1 ? statusTargets[0]!.runtimeStatus.state : "mixed",
-        targets: statusTargets.map(({ target, runtimeStatus }) => ({
-          name: target,
-          state: runtimeStatus.state,
-          reason: runtimeStatus.reason,
-          runtimeTarget: runtimeStatus.runtimeTarget,
-          baselineGenerationId: runtimeStatus.baselineGenerationId,
-          candidateSha256: runtimeStatus.candidateSha256,
-          verifiedRuntimeAvailable: runtimeStatus.verifiedRuntimeAvailable,
-          endpoint: runtimeStatus.endpoint,
-        })),
-      },
+      ...(status
+        ? {
+            runtime: {
+              state:
+                states.size === 1
+                  ? statusTargets[0]!.runtimeStatus.state
+                  : "mixed",
+              targets: statusTargets.map(({ target, runtimeStatus }) => ({
+                name: target,
+                state: runtimeStatus.state,
+                reason: runtimeStatus.reason,
+                runtimeTarget: runtimeStatus.runtimeTarget,
+                baselineGenerationId: runtimeStatus.baselineGenerationId,
+                candidateSha256: runtimeStatus.candidateSha256,
+                verifiedRuntimeAvailable:
+                  runtimeStatus.verifiedRuntimeAvailable,
+                endpoint: runtimeStatus.endpoint,
+              })),
+            },
+          }
+        : {}),
       ...(resources
         ? { resources: parseResourceInventoryData(resources.result.data) }
         : {}),
-      ...(isLocalEndpoint(applicationUrl) ? { applicationUrl } : {}),
+      ...(!offlineOnly && isLocalEndpoint(applicationUrl)
+        ? { applicationUrl }
+        : {}),
       ...(parsedMigrationReview
         ? { migrationReview: parsedMigrationReview }
         : {}),
@@ -1224,6 +1367,9 @@ export const inspectProject = async ({
         ...(observedDiscovery ? { discovery: observedDiscovery } : {}),
         ...(observedReadiness ? { readiness: observedReadiness } : {}),
         ...(observedEngine ? { engineLifecycle: observedEngine } : {}),
+        ...(observedCapabilities
+          ? { commandCapabilities: observedCapabilities }
+          : {}),
       },
     );
   }

@@ -1,3 +1,4 @@
+import { supportsOfflineInspection } from "./command_capabilities_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import { engineShutdownAvailable } from "./engine_lifecycle_view.js";
 import { isPublishedVersion } from "./update_advisory.js";
@@ -279,7 +280,16 @@ export const workspaceActionPlan = (
         ["doctor"],
       );
     case "reviewPlan":
-      if (!snapshot.candidates) return null;
+      if (
+        !snapshot.candidates ||
+        (snapshot.availability !== "ready" &&
+          !(
+            snapshot.availability === "not_ready" &&
+            snapshot.offlineInspection?.state === "available" &&
+            supportsOfflineInspection(snapshot.commandCapabilities, ["explain"])
+          ))
+      )
+        return null;
       return terminalPlan(
         snapshot,
         id,
@@ -320,6 +330,7 @@ export const workspaceActionPlan = (
       );
     case "migrate":
       if (
+        snapshot.availability !== "ready" ||
         !snapshot.candidates ||
         snapshot.candidates.count === 0 ||
         !hasVerifiedRuntime(snapshot)

@@ -340,3 +340,19 @@ it("renders journal order and exact-source controls and exports a safe native bo
     "Drizzle #0 (1700000000000, 0000_change)",
   );
 });
+
+it("offline Drizzle rows preserve identity but do not expose source controls requiring a ready project", () => {
+  const html = migrationReviewMarkup(
+    {
+      workspaceName: "offline",
+      workspaceRoot: "/workspace",
+      availability: "not_ready",
+      offlineInspection: { state: "available" },
+      migrationReview: parseMigrationReviewPlan(rawPlan()),
+    },
+    DEFAULT_WORKSPACE_PREFERENCES,
+  )!;
+  expect(html).toContain('data-native-idx="1"');
+  expect(html).not.toContain("data-open-reviewed-migration=");
+  expect(html).toContain("exact source controls require a fully ready project");
+});
