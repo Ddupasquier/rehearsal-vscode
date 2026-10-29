@@ -257,10 +257,12 @@ exports.run = async () => {
       at: Date.now(),
     });
     await wait(() => snapshotReads > priorReads);
+    phase = "fresh-snapshot-identity";
     assert.deepEqual(snapshotIdentity(latest), before);
+    phase = "required-read-commands";
     for (const required of [
       "engine status",
-      "inspect configuration",
+      "configuration",
       "activity",
       "doctor",
       "explain",
