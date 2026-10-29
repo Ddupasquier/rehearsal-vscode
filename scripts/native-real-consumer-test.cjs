@@ -247,7 +247,15 @@ exports.run = async () => {
     });
     const priorReads = snapshotReads;
     phase = "fresh-read-only-reconciliation";
+    await writeJson(config.phasePath, {
+      state: "refresh-requested",
+      at: Date.now(),
+    });
     await vscode.commands.executeCommand("rehearsal.refresh");
+    await writeJson(config.phasePath, {
+      state: "refresh-completed",
+      at: Date.now(),
+    });
     await wait(() => snapshotReads > priorReads);
     assert.deepEqual(snapshotIdentity(latest), before);
     for (const required of [

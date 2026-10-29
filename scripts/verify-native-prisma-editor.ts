@@ -1099,16 +1099,19 @@ export async function runNativeEditorAcceptance(
       controller.abort();
     }
     phase = "companion-finalization";
-    const result = await wait(async () => {
-      try {
-        const value = JSON.parse(
-          (await regular(resultPath, 256 * 1024)).toString(),
-        );
-        return value.driverFinalized ? value : false;
-      } catch {
-        return false;
-      }
-    });
+    const result = await wait(
+      async () => {
+        try {
+          const value = JSON.parse(
+            (await regular(resultPath, 256 * 1024)).toString(),
+          );
+          return value.driverFinalized ? value : false;
+        } catch {
+          return false;
+        }
+      },
+      scenario === "real-consumer" ? nativeObservationBudgetMs : 30000,
+    );
     phase = "companion-result-validation";
     assert.equal(result.status, "passed");
     assert.equal(result.driverFinalized, true);
