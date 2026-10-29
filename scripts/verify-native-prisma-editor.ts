@@ -655,7 +655,18 @@ async function drive(
     await screenshot("prisma-migrations");
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
     observePhase("ui-source-control");
-    await activate(`[data-open-migration-insight="${phase.findingId}"]`);
+    const sourceSelector = `[data-open-migration-insight="${phase.findingId}"]`;
+    await find(sourceSelector, true);
+    if (phase.consumerReview === true)
+      await writeFile(
+        join(root, "ui-source-ready.json"),
+        JSON.stringify({
+          state: "source-control-ready",
+          findingId: phase.findingId,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
+    await activate(sourceSelector);
     await waitOwned(async () => {
       try {
         return (
