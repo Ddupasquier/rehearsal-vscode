@@ -16,6 +16,46 @@ async function wait(check) {
   }
   throw Error("Native migration observation incomplete.");
 }
+const diagnosticCodes = new Set([
+  "platform_unsupported",
+  "package_missing",
+  "package_link_external",
+  "package_invalid",
+  "config_outside_workspace",
+  "process_failed",
+  "output_limit",
+  "timeout",
+  "cancelled",
+  "invalid_cli_contract",
+  "unexpected_extension_failure",
+]);
+const diagnosticCode = (value) =>
+  diagnosticCodes.has(value) ? value : value == null ? null : "unclassified";
+const enumValue = (value, allowed) => (allowed.includes(value) ? value : null);
+exports.snapshotObservation = (latest) => ({
+  availability: enumValue(latest?.availability, [
+    "ready",
+    "error",
+    "not_ready",
+    "package_missing",
+    "untrusted",
+    "unsupported",
+  ]),
+  version:
+    typeof latest?.version === "string" &&
+    latest.version.length <= 80 &&
+    /^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/u.test(latest.version)
+      ? latest.version
+      : null,
+  errorCode: diagnosticCode(latest?.error?.code),
+  activity: enumValue(latest?.activity?.state, ["idle", "busy", "unknown"]),
+  readiness: enumValue(latest?.readiness?.state, ["READY", "NOT READY"]),
+  baselineFormat: [1, 2, 3, 4].includes(latest?.baseline?.formatVersion)
+    ? latest.baseline.formatVersion
+    : null,
+  hasNativeBinding: Boolean(latest?.baseline?.nativeMigrations),
+  insightsAvailable: latest?.migrationInsights?.state === "available",
+});
 exports.run = async () => {
   const config = await readConfiguration();
   const migrationKind = config.migrationKind ?? "prisma";
@@ -59,6 +99,117 @@ exports.run = async () => {
     phase = "activation",
     terminalCount = 0;
   const listener = vscode.window.onDidOpenTerminal(() => terminalCount++);
+  const commands = [],
+    parserFailures = [],
+    restore = [];
+  const adapter = runtime("process_adapter.js"),
+    publicRead = adapter.runRehearsalJson;
+  const commandNames = [
+    "activity",
+    "discover",
+    "doctor",
+    "status",
+    "explain",
+    "candidates",
+    "inspect baseline",
+    "inspect plan",
+    "inspect insights",
+    "inspect source",
+    "inspect config",
+    "inspect configuration",
+    "configuration",
+    "resources",
+    "environments",
+    "engine status",
+  ];
+  adapter.runRehearsalJson = async (...args) => {
+    const command = commandNames.includes(args[0]?.expectedCommand)
+      ? args[0].expectedCommand
+      : "other";
+    try {
+      const result = await publicRead(...args);
+      if (commands.length < 64)
+        commands.push({
+          command,
+          status: enumValue(result?.result?.status, [
+            "success",
+            "not_ready",
+            "error",
+          ]),
+          errorCode: diagnosticCode(result?.result?.error?.code),
+          exitCode: Number.isInteger(result?.exitCode) ? result.exitCode : null,
+        });
+      return result;
+    } catch (error) {
+      if (commands.length < 64)
+        commands.push({
+          command,
+          status: "threw",
+          errorCode: diagnosticCode(error?.code ?? error?.result?.error?.code),
+          exitCode: Number.isInteger(error?.exitCode) ? error.exitCode : null,
+        });
+      throw error;
+    }
+  };
+  restore.push(() => {
+    adapter.runRehearsalJson = publicRead;
+  });
+  const parsers = {
+    "contracts.js": [
+      "parseEnvelope",
+      "parseVersionResult",
+      "parseActivityData",
+      "parseProjectDiscoveryData",
+      "parseStatusData",
+      "parseResourceInventoryData",
+    ],
+    "review_contract.js": [
+      "parseReviewTargets",
+      "parseBaselineInspectionData",
+      "parseBaselineScopeReview",
+      "parseAuthenticationReview",
+    ],
+    "migration_review.js": [
+      "parseMigrationReviewPlan",
+      "parsePrismaMigrationToolBinding",
+      "assertMatchingMigrationCandidates",
+    ],
+    "shape_contract.js": ["parseBaselineShapeData"],
+    "configuration_contract.js": ["parseConfigurationMetadata"],
+    "migration_insights.js": ["parseMigrationInsights"],
+  };
+  for (const [moduleName, names] of Object.entries(parsers)) {
+    const module = runtime(moduleName);
+    for (const name of names) {
+      const originalParser = module[name];
+      if (typeof originalParser !== "function") continue;
+      module[name] = (...args) => {
+        try {
+          return originalParser(...args);
+        } catch (error) {
+          if (parserFailures.length < 16) {
+            const frame =
+              typeof error?.stack === "string"
+                ? error.stack.match(
+                    /(?:\/|\\)(contracts|review_contract|migration_review|shape_contract|configuration_contract|migration_insights|project_snapshot|process_adapter)\.js:(\d{1,7}):(\d{1,6})/u,
+                  )
+                : null;
+            parserFailures.push({
+              module: moduleName,
+              parser: name,
+              errorCode: diagnosticCode(error?.code),
+              location: frame ? `${frame[1]}.js:${frame[2]}:${frame[3]}` : null,
+            });
+          }
+          throw error;
+        }
+      };
+      restore.push(() => {
+        module[name] = originalParser;
+      });
+    }
+  }
+
   snapshotRuntime.inspectProject = async (...args) => {
     const result = await original(...args);
     if (args[0].workspaceRoot === config.workspace) latest = result;
@@ -331,18 +482,15 @@ exports.run = async () => {
       phase,
       candidateSha256: config.candidateSha256,
       coreArtifactSha256: config.coreArtifactSha256,
-      observed: {
-        availability: latest?.availability ?? null,
-        baselineFormat: latest?.baseline?.formatVersion ?? null,
-        hasNativeBinding: Boolean(latest?.baseline?.nativeMigrations),
-        insightsAvailable: latest?.migrationInsights?.state === "available",
-        sourceDispatches,
-      },
+      observed: { ...exports.snapshotObservation(latest), sourceDispatches },
+      commands,
+      parserFailures,
       terminalCount,
     });
     throw Error("Native migration review failed; private output withheld.");
   } finally {
     snapshotRuntime.inspectProject = original;
+    for (const revert of restore.reverse()) revert();
     if (migrationKind === "drizzle")
       processRuntime.runRehearsalJson = originalJson;
     listener.dispose();

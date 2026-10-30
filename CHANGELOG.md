@@ -5,19 +5,20 @@
 - Review explicit Knex 3.3.0 / pg 8.23.1 PostgreSQL code identities and format 5 baselines, preserving filename order and the historical-checksum-unavailable notice.
 - Open exact reviewed `.cjs` inputs as text through public Core selection; show isolated execution requirements without host execution or SQL Insights claims. Real SDK, worker and native acceptance remain separate.
 
-## Unreleased — 0.1.27 Drizzle review candidate
+## 0.1.27 — Drizzle journal review
 
 - Review explicit PostgreSQL Drizzle Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1 journal identities and format 4 baselines through the public Core contract. Preserve journal order and exact SQL bytes without rewriting migrations.
 - Open exact reviewed SQL inputs and optional static findings with current candidate/identity/hash checks. Older or unsupported Core contracts refuse native review with update guidance.
-- Candidate source and focused checks do not establish real SDK, rendered editor or database acceptance; paired Lab and exact packaged native evidence remain separate.
+- Keep native migration execution in Core. The reviewed native editor scope is PostgreSQL 17 on Ubuntu 24.04 x64 with Node 24 and VS Code 1.143.0; other SDK/host combinations remain unqualified.
 
-## 0.1.26 — Native migration review candidate
+## 0.1.26 — Native migration review
 
 - Understand opt-in Core Prisma 7.10.1/PostgreSQL migration paths and format 3
   baselines while preserving strict SQL history validation.
 - Keep source navigation bound to the full native path and exact reviewed bytes;
   the extension continues to use Core for migration execution.
-- Independent installed-package and native editor acceptance is pending. Core 2.0.0
+- Qualify native Prisma review for PostgreSQL 17 on Ubuntu 24.04 x64 with Node 24
+  and VS Code 1.143.0; other SDK/host combinations remain unqualified. Core 2.0.x
   and earlier do not provide this native migration capability.
 
 ## 0.1.25 — VM shutdown and Back navigation
