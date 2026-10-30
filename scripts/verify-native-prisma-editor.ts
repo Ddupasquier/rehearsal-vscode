@@ -701,6 +701,15 @@ async function drive(
         { mode: 0o600, flag: "wx" },
       );
     await activate(sourceSelector);
+    if (phase.consumerReview === true)
+      await writeFile(
+        join(root, "ui-source-dispatched.json"),
+        JSON.stringify({
+          state: "source-activation-dispatched",
+          findingId: phase.findingId,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
     await waitOwned(async () => {
       try {
         return (
@@ -1330,6 +1339,8 @@ export async function runNativeEditorAcceptance(
       "drizzle-reviewed-input.png",
       "prisma-failure.png",
       "phase.json",
+      "ui-source-ready.json",
+      "ui-source-dispatched.json",
       "ui-observations.json",
     ])
       await copyFile(join(root, name), join(evidence, name)).catch(() => {});
