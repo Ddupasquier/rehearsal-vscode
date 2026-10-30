@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — Knex review candidate
+## 0.1.28 — Knex reviewed code
 
 - Review explicit Knex 3.3.0 / pg 8.23.1 PostgreSQL code identities and format 5 baselines, preserving filename order and the historical-checksum-unavailable notice.
 - Open exact reviewed `.cjs` inputs as text through public Core selection; show isolated execution requirements without host execution or SQL Insights claims. Real SDK, worker and native acceptance remain separate.

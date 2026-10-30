@@ -637,6 +637,31 @@ async function drive(
         ),
       );
     };
+    const settleKnexView = async (page: string) => {
+      const context = await find("#" + page);
+      const visible = `(()=>{const node=document.getElementById(${JSON.stringify(page)}),rect=node?.getBoundingClientRect();return !!node&&!node.hidden&&rect.width>0&&rect.height>0;})()`;
+      await waitOwned(() =>
+        evaluate(
+          context,
+          `(()=>{if(!${visible})return false;return !document.getElementById(${JSON.stringify(page)}).getAnimations({subtree:true}).some(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getComputedTiming().endTime));})()`,
+        ),
+      );
+      const rendered = await send(
+        "Runtime.evaluate",
+        {
+          contextId: context.id,
+          returnByValue: true,
+          awaitPromise: true,
+          expression: `Promise.race([new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(${visible})))),new Promise(resolve=>setTimeout(()=>resolve(false),1000))])`,
+        },
+        context.session,
+      );
+      assert.equal(
+        rendered.result?.value,
+        true,
+        "Knex view capture did not settle within its bounded rendering checkpoint.",
+      );
+    };
     if (phase.consumerReview === true) {
       for (const page of [
         "overview",
@@ -652,6 +677,7 @@ async function drive(
       }
     }
     await navigate("migrations");
+    if (phase.reviewedCodeOnly === true) await settleKnexView("migrations");
     await screenshot("prisma-migrations");
     if (phase.sourceId !== undefined) {
       assert.match(phase.sourceId, /^[a-f0-9]{64}$/);
@@ -666,7 +692,11 @@ async function drive(
           return false;
         }
       });
-      await screenshot("drizzle-reviewed-input");
+      await screenshot(
+        phase.reviewedCodeOnly === true
+          ? "knex-reviewed-code"
+          : "drizzle-reviewed-input",
+      );
       await writeFile(
         join(root, "reviewed-ui-done.json"),
         JSON.stringify({ complete: true }),
@@ -676,7 +706,10 @@ async function drive(
         try {
           return (
             JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
-              .state === "finding-ready"
+              .state ===
+            (phase.reviewedCodeOnly === true
+              ? "reviewed-code-returned"
+              : "finding-ready")
           );
         } catch {
           return false;
@@ -686,6 +719,18 @@ async function drive(
       await waitOwned(() =>
         evaluate(restored, "!document.getElementById('migrations').hidden"),
       );
+    }
+    if (phase.reviewedCodeOnly === true) {
+      assert.equal(phase.findingId, undefined);
+      await navigate("overview");
+      await settleKnexView("overview");
+      await screenshot("knex-returned-overview");
+      await writeFile(
+        join(root, "ui-done.json"),
+        JSON.stringify({ complete: true, overview: true }),
+        { mode: 0o600 },
+      );
+      return;
     }
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
     observePhase("ui-source-control");
@@ -812,7 +857,9 @@ export const parseNativeEditorAcceptanceArguments = (
   }
   assert.equal(args.size, names.length + (args.has("migration-kind") ? 1 : 0));
   if (args.has("migration-kind"))
-    assert.ok(["prisma", "drizzle"].includes(args.get("migration-kind")!));
+    assert.ok(
+      ["prisma", "drizzle", "knex"].includes(args.get("migration-kind")!),
+    );
   for (const name of ["vsix-sha", "core-sha", "electron-sha"])
     assert.match(args.get(name)!, /^[a-f0-9]{64}$/u);
   assert.match(args.get("code-version")!, /^\d+\.\d+\.\d+$/u);
@@ -982,7 +1029,11 @@ export async function runNativeEditorAcceptance(
     if (scenario !== "real-consumer") {
       assert.equal(
         coreManifest.rehearsalContracts?.[
-          migrationKind === "drizzle" ? "drizzleMigrations" : "nativeMigrations"
+          migrationKind === "knex"
+            ? "knexMigrations"
+            : migrationKind === "drizzle"
+              ? "drizzleMigrations"
+              : "nativeMigrations"
         ],
         1,
       );
@@ -1080,11 +1131,7 @@ export async function runNativeEditorAcceptance(
       configPath,
       JSON.stringify({
         scenario:
-          scenario === "real-consumer"
-            ? scenario
-            : migrationKind === "drizzle"
-              ? "drizzle-review"
-              : "prisma-review",
+          scenario === "real-consumer" ? scenario : migrationKind + "-review",
         migrationKind,
         root,
         evidence,
@@ -1170,6 +1217,18 @@ export async function runNativeEditorAcceptance(
     );
     phase = "companion-result-validation";
     assert.equal(result.status, "passed");
+    if (migrationKind === "knex" && scenario !== "real-consumer") {
+      assert.equal(result.migrationKind, "knex");
+      assert.equal(result.baselineFormat, 5);
+      assert.equal(result.insightsAvailable, false);
+      assert.equal(result.overviewReturned, true);
+      assert.equal(result.dirtyDocuments, 0);
+      assert.equal(result.terminalCount, 0);
+      assert.equal(result.sourceDispatches, 1);
+      assert.equal(result.reviewedInput?.clean, true);
+      assert.equal(result.reviewedInput?.line, 0);
+      assert.equal(result.reviewedInput?.column, 0);
+    }
     assert.equal(result.driverFinalized, true);
     assert.equal(result.recoveryRequired, false);
     recoveryRequired = false;
@@ -1328,6 +1387,8 @@ export async function runNativeEditorAcceptance(
       "prisma-migrations.png",
       "prisma-native-sql.png",
       "drizzle-reviewed-input.png",
+      "knex-reviewed-code.png",
+      "knex-returned-overview.png",
       "prisma-failure.png",
       "phase.json",
       "ui-observations.json",

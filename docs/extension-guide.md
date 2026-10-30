@@ -247,6 +247,19 @@ rewrites or retries the migration automatically. Follow the main
 [failure-and-fix tutorial](https://ddupasquier.github.io/rehearsal-db/tutorial/) to review
 a fresh candidate, observe a safe failure, correct it and verify the result.
 
+### Knex reviewed-code candidate
+
+The Starter 0.1.28 candidate can review Core's explicit Knex configuration and
+format 5 baseline. **Open exact migration input** opens the exact unchanged `.cjs` file as
+text; the editor does not load its SDK or execute JavaScript.
+
+Knex does not record historical file checksums. The editor verifies today's reviewed
+files; it cannot prove which bytes were applied previously. SQL Insights and impact
+analysis do not analyze JavaScript. Core owns execution, isolation and recovery; use
+its [configuration guide](https://github.com/Ddupasquier/rehearsal-db/blob/main/docs/configuration.md)
+for supported versions and limits. Exact packaged/native qualification is still
+pending for this candidate.
+
 ### Static Migration Insights
 
 Extension 0.1.24 with core 1.2.0 adds optional **Static Migration Insights** inside each

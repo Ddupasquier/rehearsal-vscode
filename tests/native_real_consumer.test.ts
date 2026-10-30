@@ -26,27 +26,29 @@ const args = () => [
   "--evidence=/approved/evidence",
 ];
 describe("closed real-consumer native protocol", () => {
-  it("retains the explicit Drizzle selector only in the existing migration-review scenario", () => {
-    expect(
-      parseNativeEditorAcceptanceArguments([
-        ...args(),
-        "--migration-kind=drizzle",
-      ]).get("migration-kind"),
-    ).toBe("drizzle");
+  it("keeps native tool selectors limited to migration review", () => {
+    for (const kind of ["drizzle", "knex"]) {
+      expect(
+        parseNativeEditorAcceptanceArguments([
+          ...args(),
+          `--migration-kind=${kind}`,
+        ]).get("migration-kind"),
+      ).toBe(kind);
+      expect(() =>
+        parseRealConsumerAcceptanceArguments([
+          ...args(),
+          `--migration-kind=${kind}`,
+        ]),
+      ).toThrow();
+    }
     expect(
       parseNativeEditorAcceptanceArguments(args()).has("migration-kind"),
     ).toBe(false);
     for (const values of [
-      [...args(), "--migration-kind=knex"],
+      [...args(), "--migration-kind=alembic"],
       [...args(), "--migration-kind=drizzle", "--migration-kind=prisma"],
     ])
       expect(() => parseNativeEditorAcceptanceArguments(values)).toThrow();
-    expect(() =>
-      parseRealConsumerAcceptanceArguments([
-        ...args(),
-        "--migration-kind=drizzle",
-      ]),
-    ).toThrow();
   });
 
   it("reuses the exact default Prisma argument protocol without arbitrary scenario/script inputs", () => {

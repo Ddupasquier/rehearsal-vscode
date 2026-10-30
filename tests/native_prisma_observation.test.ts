@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { knexPlan } from "./knex_fixture.js";
+import { parseNativeEditorAcceptanceArguments } from "../scripts/verify-native-prisma-editor.js";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
@@ -8,8 +10,12 @@ const source = readFileSync(
   resolve(__dirname, "../scripts/native-prisma-review-test.cjs"),
   "utf8",
 );
-const api: { snapshotObservation: (value: unknown) => unknown } = {
+const api: {
+  snapshotObservation: (value: unknown) => unknown;
+  knexReviewedCandidate: (value: unknown) => Record<string, unknown>;
+} = {
   snapshotObservation: () => undefined,
+  knexReviewedCandidate: () => ({}),
 };
 runInNewContext(source, {
   exports: api,
@@ -76,4 +82,71 @@ describe("failure-only native Prisma snapshot projection", () => {
       insightsAvailable: false,
     });
   });
+});
+
+it("retains Knex format5 without inventing SQL Insights", () => {
+  expect(
+    api.snapshotObservation({
+      baseline: { formatVersion: 5, nativeMigrations: { kind: "knex" } },
+      migrationInsights: { state: "unavailable" },
+    }),
+  ).toMatchObject({
+    baselineFormat: 5,
+    hasNativeBinding: true,
+    insightsAvailable: false,
+  });
+});
+
+it("native Knex source selection uses only an actual pending reviewed.cjs identity", () => {
+  const plan = knexPlan();
+  expect(plan.targets[0]!.entries[1]).not.toHaveProperty(
+    "workspaceRelativePath",
+  );
+  expect(api.knexReviewedCandidate(plan)).toBe(plan.targets[0]!.entries[1]);
+  for (const update of [
+    { status: "represented_by_baseline" },
+    { nativeIdentity: { kind: "drizzle", name: "200_change.cjs" } },
+    { nativeIdentity: { kind: "knex", name: "other.cjs" } },
+    { filename: "migration.sql" },
+  ]) {
+    const changed = structuredClone(plan);
+    Object.assign(changed.targets[0]!.entries[1]!, update);
+    expect(() => api.knexReviewedCandidate(changed)).toThrow();
+  }
+});
+
+it("native launcher admits only explicit Knex review mode and preserves real-consumer argument isolation", () => {
+  const values = [
+    "vsix",
+    "core-tar",
+    "workspace",
+    "code",
+    "electron",
+    "evidence",
+  ]
+    .map((key) => "--" + key + "=/Volumes/owned/" + key)
+    .concat(
+      ["vsix-sha", "core-sha", "electron-sha"].map(
+        (key) => "--" + key + "=" + "a".repeat(64),
+      ),
+      ["--code-version=1.143.0"],
+    );
+  expect(
+    parseNativeEditorAcceptanceArguments([
+      ...values,
+      "--migration-kind=knex",
+    ]).get("migration-kind"),
+  ).toBe("knex");
+  expect(() =>
+    parseNativeEditorAcceptanceArguments([
+      ...values,
+      "--migration-kind=unknown",
+    ]),
+  ).toThrow();
+  expect(() =>
+    parseNativeEditorAcceptanceArguments(
+      [...values, "--migration-kind=knex"],
+      "real-consumer",
+    ),
+  ).toThrow();
 });

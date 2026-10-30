@@ -405,3 +405,50 @@ describe("read-only exact Knex source navigation", () => {
     }
   });
 });
+
+it("allows only Knex reviewed source paths through the Core 3072-byte boundary", () => {
+  const filename = "200_change.cjs";
+  const sized = (size: number) =>
+    "a/".repeat(Math.floor((size - filename.length - 2) / 2)) +
+    "x".repeat((size - filename.length - 2) % 2) +
+    "a/" +
+    filename;
+  for (const size of [1024, 1025, 3072]) {
+    const value = {
+      filename,
+      sha256: knexSha,
+      workspaceRelativePath: sized(size),
+    };
+    expect(Buffer.byteLength(value.workspaceRelativePath)).toBe(size);
+    expect(parseMigrationSourceInput(value, "knex").workspaceRelativePath).toBe(
+      value.workspaceRelativePath,
+    );
+  }
+  expect(() =>
+    parseMigrationSourceInput(
+      { filename, sha256: knexSha, workspaceRelativePath: sized(3073) },
+      "knex",
+    ),
+  ).toThrow();
+  const sql = "20261027000000_change.sql";
+  for (const size of [1024, 1025]) {
+    const input = {
+      filename: sql,
+      sha256: knexSha,
+      workspaceRelativePath:
+        "a/".repeat(Math.floor((size - sql.length - 2) / 2)) +
+        "x".repeat((size - sql.length - 2) % 2) +
+        "a/" +
+        sql,
+    };
+    expect(Buffer.byteLength(input.workspaceRelativePath)).toBe(size);
+    if (size === 1024)
+      expect(parseMigrationSourceInput(input).workspaceRelativePath).toBe(
+        input.workspaceRelativePath,
+      );
+    else {
+      expect(() => parseMigrationSourceInput(input)).toThrow();
+      expect(() => parseMigrationSourceInput(input, "knex")).toThrow();
+    }
+  }
+});

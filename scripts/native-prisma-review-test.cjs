@@ -50,20 +50,33 @@ exports.snapshotObservation = (latest) => ({
   errorCode: diagnosticCode(latest?.error?.code),
   activity: enumValue(latest?.activity?.state, ["idle", "busy", "unknown"]),
   readiness: enumValue(latest?.readiness?.state, ["READY", "NOT READY"]),
-  baselineFormat: [1, 2, 3, 4].includes(latest?.baseline?.formatVersion)
+  baselineFormat: [1, 2, 3, 4, 5].includes(latest?.baseline?.formatVersion)
     ? latest.baseline.formatVersion
     : null,
   hasNativeBinding: Boolean(latest?.baseline?.nativeMigrations),
   insightsAvailable: latest?.migrationInsights?.state === "available",
 });
+exports.knexReviewedCandidate = (plan) => {
+  const entries = plan.targets
+    .flatMap((target) => target.entries)
+    .filter(
+      (entry) =>
+        entry.status === "candidate" &&
+        entry.nativeIdentity?.kind === "knex" &&
+        entry.nativeIdentity.name === entry.filename &&
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,185}\.cjs$/u.test(entry.filename),
+    );
+  assert.ok(
+    entries.length > 0,
+    "Require a genuine reviewed Knex candidate source.",
+  );
+  return entries[0];
+};
 exports.run = async () => {
   const config = await readConfiguration();
   const migrationKind = config.migrationKind ?? "prisma";
-  assert.ok(migrationKind === "prisma" || migrationKind === "drizzle");
-  assert.equal(
-    config.scenario,
-    migrationKind === "drizzle" ? "drizzle-review" : "prisma-review",
-  );
+  assert.ok(["prisma", "drizzle", "knex"].includes(migrationKind));
+  assert.equal(config.scenario, migrationKind + "-review");
   assert.equal(process.platform, "linux");
   assert.equal(process.arch, "x64");
   assert.equal(vscode.workspace.isTrusted, true);
@@ -85,7 +98,7 @@ exports.run = async () => {
     originalJson = processRuntime.runRehearsalJson;
   let sourceDispatches = 0,
     sourceObservation;
-  if (migrationKind === "drizzle")
+  if (migrationKind !== "prisma")
     processRuntime.runRehearsalJson = async (...args) => {
       const selected =
         args[0].workspaceRoot === config.workspace &&
@@ -224,7 +237,7 @@ exports.run = async () => {
     assert.equal(latest.version, config.coreVersion);
     assert.equal(
       latest.baseline.formatVersion,
-      migrationKind === "drizzle" ? 4 : 3,
+      migrationKind === "knex" ? 5 : migrationKind === "drizzle" ? 4 : 3,
     );
     assert.ok(latest.baseline.nativeMigrations);
     const plan = latest.migrationReview;
@@ -236,6 +249,183 @@ exports.run = async () => {
           target.migrationTool?.kind === migrationKind,
       ),
     );
+    if (migrationKind === "knex") {
+      assert.notEqual(
+        latest.migrationInsights.state,
+        "available",
+        "SQL Insights must not analyze Knex JavaScript.",
+      );
+      const entry = exports.knexReviewedCandidate(plan);
+      const sourceId = runtime(
+        "migration_source_review.js",
+      ).migrationSourceReviewId(plan, entry);
+      await vscode.commands.executeCommand(
+        "rehearsal.openWorkspace",
+        folder.uri.toString(),
+      );
+      phase = "knex-reviewed-input";
+      await writeJson(config.phasePath, {
+        state: "ready",
+        sourceId,
+        filename: entry.filename,
+        workspaceName: latest.workspaceName,
+        reviewedCodeOnly: true,
+      });
+      await wait(
+        () =>
+          sourceDispatches === 1 &&
+          sourceObservation &&
+          path.basename(
+            vscode.window.activeTextEditor?.document.uri.fsPath ?? "",
+          ) === entry.filename,
+      );
+      assert.equal(sourceDispatches, 1);
+      assert.ok(sourceObservation);
+      assert.equal(sourceObservation.result.result.status, "success");
+      assert.equal(
+        sourceObservation.result.result.rehearsalVersion,
+        config.coreVersion,
+      );
+      assert.deepEqual(
+        sourceObservation.command,
+        runtime("migration_source_review.js").reviewedMigrationSourceCommand(
+          plan,
+          entry,
+        ),
+      );
+      const reference = runtime(
+        "migration_source_review.js",
+      ).parseReviewedMigrationSource(
+        sourceObservation.result.result.data,
+        plan,
+        entry,
+      );
+      const source = {
+        filename: entry.filename,
+        sha256: entry.sha256,
+        workspaceRelativePath: reference.workspaceRelativePath,
+      };
+      const exact = await runtime(
+        "migration_source.js",
+      ).readExactMigrationInput(config.workspace, source, "knex");
+      assert.equal(
+        vscode.window.activeTextEditor?.document.uri.fsPath,
+        exact.path,
+      );
+      assert.equal(reference.filename, source.filename);
+      assert.equal(reference.sha256, source.sha256);
+      assert.equal(reference.candidateSha256, plan.candidateSha256);
+      const editor = vscode.window.activeTextEditor;
+      assert.equal(editor.document.uri.scheme, "file");
+      assert.equal(editor.document.uri.authority, "");
+      assert.equal(editor.document.isDirty, false);
+      assert.equal(editor.selection.active.line, 0);
+      assert.equal(editor.selection.active.character, 0);
+      assert.equal(
+        runtime("migration_source.js").migrationSourceDocumentMatches(
+          exact.text,
+          editor.document.getText(),
+        ),
+        true,
+      );
+      const rechecked = await runtime(
+        "migration_source.js",
+      ).readExactMigrationInput(config.workspace, source, "knex");
+      assert.equal(rechecked.identity, exact.identity);
+      assert.equal(
+        hash((await readRegular(exact.path, 8 * 1024 * 1024)).bytes),
+        source.sha256,
+      );
+      await writeJson(config.phasePath, { state: "reviewed-input-observed" });
+      await wait(async () => {
+        try {
+          return (
+            JSON.parse(
+              (
+                await readRegular(
+                  path.join(config.root, "reviewed-ui-done.json"),
+                  4096,
+                )
+              ).bytes.toString(),
+            ).complete === true
+          );
+        } catch {
+          return false;
+        }
+      });
+      assert.equal(vscode.window.activeTextEditor, editor);
+      assert.equal(editor.document.isDirty, false);
+      await vscode.commands.executeCommand(
+        "workbench.action.closeActiveEditor",
+      );
+      await vscode.commands.executeCommand(
+        "rehearsal.openWorkspace",
+        folder.uri.toString(),
+      );
+      assert.equal(
+        latest.migrationReview.candidateSha256,
+        plan.candidateSha256,
+      );
+      assert.equal(terminalCount, 0);
+      assert.equal(vscode.window.terminals.length, 0);
+      assert.ok(
+        vscode.workspace.textDocuments.every((document) => !document.isDirty),
+      );
+      assert.ok(commands.every((command) => command.command !== "other"));
+      await writeJson(config.phasePath, { state: "reviewed-code-returned" });
+      await wait(async () => {
+        try {
+          const value = JSON.parse(
+            (
+              await readRegular(path.join(config.root, "ui-done.json"), 4096)
+            ).bytes.toString(),
+          );
+          return value.complete === true && value.overview === true;
+        } catch {
+          return false;
+        }
+      });
+      await writeJson(config.resultPath, {
+        status: "passed",
+        scenario: config.scenario,
+        candidateSha256: config.candidateSha256,
+        coreArtifactSha256: config.coreArtifactSha256,
+        coreVersion: latest.version,
+        vscodeVersion: vscode.version,
+        baselineFormat: 5,
+        migrationKind,
+        nativeIdentity: entry.nativeIdentity,
+        baselineCutoff: latest.baseline.migrationCutoff,
+        candidateCount: plan.candidateCount,
+        filename: source.filename,
+        sourceSha256: source.sha256,
+        terminalCount,
+        sourceDispatches,
+        overviewReturned: true,
+        dirtyDocuments: 0,
+        insightsAvailable: false,
+        reviewedInput: {
+          candidateSha256: plan.candidateSha256,
+          nativeIdentity: entry.nativeIdentity,
+          filename: source.filename,
+          sha256: source.sha256,
+          clean: true,
+          line: 0,
+          column: 0,
+        },
+        checks: [
+          "canonical-ready-native-contract",
+          "real-reviewed-code-button-public-cli-root-binding",
+          "clean-exact-reviewed-code-at-file-top",
+          "return-to-overview",
+          "no-editor-terminal-or-dirty-document",
+        ],
+        limitations: [
+          "Knex input read as text only; no JavaScript execution, SQL Insights or failure-position attribution. Core owns genuine database and worker isolation qualification.",
+        ],
+      });
+      return;
+    }
     assert.equal(latest.migrationInsights.state, "available");
     const report = latest.migrationInsights.report;
     const finding = [
@@ -491,7 +681,7 @@ exports.run = async () => {
   } finally {
     snapshotRuntime.inspectProject = original;
     for (const revert of restore.reverse()) revert();
-    if (migrationKind === "drizzle")
+    if (migrationKind !== "prisma")
       processRuntime.runRehearsalJson = originalJson;
     listener.dispose();
   }

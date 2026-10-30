@@ -62,7 +62,10 @@ export const parseMigrationSourceInput = (
     path !== null &&
     (typeof path !== "string" ||
       Buffer.byteLength(path) < 1 ||
-      Buffer.byteLength(path) > 1024 ||
+      Buffer.byteLength(path) >
+        (allowDrizzle === "knex" && isSafeKnexMigrationFilename(data.filename)
+          ? 3072
+          : 1024) ||
       /[\\:%?#\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u.test(
         path,
       ) ||
