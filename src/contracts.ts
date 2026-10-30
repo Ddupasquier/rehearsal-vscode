@@ -1,3 +1,4 @@
+import type { PrismaMigrationToolBinding } from "./migration_review.js";
 import {
   parseEnvironmentClassification,
   parseEnvironmentProvenance,
@@ -86,7 +87,8 @@ export interface CandidatesData {
 }
 
 export interface BaselineData {
-  readonly formatVersion?: 1 | 2;
+  readonly formatVersion?: 1 | 2 | 3;
+  readonly nativeMigrations?: PrismaMigrationToolBinding;
   readonly generationId: string;
   readonly createdAt: string | null;
   readonly migrationCutoff: string;
@@ -104,7 +106,8 @@ export interface BaselineData {
     readonly generationId: string;
     readonly createdAt: string | null;
     readonly active: boolean;
-    readonly formatVersion: 1 | 2;
+    readonly formatVersion: 1 | 2 | 3;
+    readonly nativeMigrations?: PrismaMigrationToolBinding;
     readonly rowCount: number;
     readonly tableCount: number;
     readonly migrationCount: number;

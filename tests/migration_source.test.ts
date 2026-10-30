@@ -208,3 +208,105 @@ describe("exact static input without execution provenance", () => {
     await expect(readExactMigrationInput(root, input())).rejects.toThrow();
   });
 });
+
+describe("exact native SQL source confinement", () => {
+  const nativeInput = () => ({
+    ...input(),
+    filename: "20261009000100_Add_Index/migration.sql",
+    workspaceRelativePath:
+      "prisma/migrations/20261009000100_Add_Index/migration.sql",
+  });
+  it("reads the full native suffix and retains raw hash/model checks", async () => {
+    const root = await temporary(),
+      source = nativeInput();
+    await mkdir(join(root, "prisma/migrations/20261009000100_Add_Index"), {
+      recursive: true,
+    });
+    await writeFile(join(root, source.workspaceRelativePath), text);
+    expect((await readExactMigrationInput(root, source)).text).toBe(text);
+    expect(
+      migrationSourceDocumentMatches(text, text.replaceAll("\r\n", "\n")),
+    ).toBe(true);
+    await writeFile(
+      join(root, source.workspaceRelativePath),
+      text + "-- changed",
+    );
+    await expect(readExactMigrationInput(root, source)).rejects.toThrow();
+  });
+  it("rejects basename-only matches, traversal and noncanonical native segments", () => {
+    for (const patch of [
+      {
+        workspaceRelativePath:
+          "prisma/migrations/20261009000100_Other/migration.sql",
+      },
+      {
+        workspaceRelativePath:
+          "prisma/../20261009000100_Add_Index/migration.sql",
+      },
+      { filename: "20261009000100_é/migration.sql" },
+      { filename: "20261009000100_Add_Index/nested/migration.sql" },
+      { filename: "20261009000100_Add_Index/other.sql" },
+    ])
+      expect(() =>
+        parseMigrationSourceInput({ ...nativeInput(), ...patch }),
+      ).toThrow();
+  });
+  it("refuses a symlinked native directory and preserves its target", async () => {
+    const root = await temporary(),
+      outside = await temporary(),
+      source = nativeInput();
+    await mkdir(join(root, "prisma/migrations"), { recursive: true });
+    await writeFile(join(outside, "migration.sql"), text);
+    await symlink(
+      outside,
+      join(root, "prisma/migrations/20261009000100_Add_Index"),
+    );
+    await expect(readExactMigrationInput(root, source)).rejects.toThrow();
+    expect(await readFile(join(outside, "migration.sql"), "utf8")).toBe(text);
+  });
+});
+
+describe("native insight full identity", () => {
+  it("binds native source paths to the complete reviewed plan rather than migration.sql basename", () => {
+    const base = insightPlan(),
+      binding = {
+        schemaVersion: 1,
+        kind: "prisma",
+        version: "7.10.1",
+        provider: "postgresql",
+        lockSha256: "a".repeat(64),
+        toolchainSha256: "b".repeat(64),
+      };
+    const native = "20261009000100_add_index/migration.sql";
+    const plan = parseMigrationReviewPlan({
+      ...base,
+      safety: {
+        readsSqlBodiesForSafety: false,
+        executesSql: false,
+        startsEngine: false,
+      },
+      targets: base.targets.map((target) => ({
+        ...target,
+        migrationTool: binding,
+        entries: target.entries.map((entry) => ({
+          ...entry,
+          filename: native,
+        })),
+      })),
+    });
+    const raw = insightReport();
+    Object.assign(raw.targets[0]!.entries[0]!, {
+      filename: native,
+      workspaceRelativePath: `prisma/migrations/${native}`,
+    });
+    expect(
+      parseMigrationInsights(raw, plan, raw.inspectorVersion).targets[0]!
+        .entries[0]!.filename,
+    ).toBe(native);
+    raw.targets[0]!.entries[0]!.workspaceRelativePath =
+      "prisma/migrations/20261009000100_other/migration.sql";
+    expect(() =>
+      parseMigrationInsights(raw, plan, raw.inspectorVersion),
+    ).toThrow();
+  });
+});

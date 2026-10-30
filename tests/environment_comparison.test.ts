@@ -167,3 +167,21 @@ describe("reviewed environment comparison", () => {
     expect(subjects.some(({ id }) => id === "target:target-32")).toBe(false);
   });
 });
+
+describe("native baseline format comparison", () => {
+  it("compares format3 aggregates without declaring format2 equivalent", () => {
+    const native = subject({ provider: "postgresql", formatVersion: 3 });
+    expect(
+      compareEnvironmentEvidence(native, { ...native, id: "other" }).compatible,
+    ).toBe(true);
+    const legacy = compareEnvironmentEvidence(native, {
+      ...native,
+      id: "legacy",
+      formatVersion: 2,
+    });
+    expect(legacy.compatible).toBe(false);
+    expect(legacy.facts.find((fact) => fact.key === "rowCount")?.state).toBe(
+      "incompatible",
+    );
+  });
+});

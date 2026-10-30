@@ -645,3 +645,72 @@ aggregate baseline rows, two retained generations, three candidate migrations wi
 loopback application configuration. A full BlendCalc restore remains blocked by the local
 Colima disk being 94% full; no shared images or persistent volumes were removed. That
 resource limitation is not relabeled as Google, restore, or end-to-end acceptance.
+
+## Exact legacy consumer native acceptance
+
+`scripts/verify-native-real-consumer.ts` is an opt-in wrapper around the maintained
+Linux native launcher's closed `real-consumer` scenario, not a second installer or
+engine controller. It accepts the same ten explicit inputs:
+
+```sh
+../run editor node --import tsx scripts/verify-native-real-consumer.ts \
+  --vsix=/absolute/rehearsal-db-0.1.26.vsix --vsix-sha=REVIEWED_SHA256 \
+  --core-tar=/absolute/rehearsal-db-core-2.1.0.tgz --core-sha=REVIEWED_SHA256 \
+  --workspace=/absolute/owned-synthetic-blendcalc-consumer \
+  --code=/absolute/owned-code/bin/code --electron=/absolute/owned-code/code \
+  --electron-sha=REVIEWED_SHA256 --code-version=1.143.0 \
+  --evidence=/absolute/separate-owned-evidence
+```
+
+Caller-provided hashes must identify the reviewed artifacts; placeholders above are
+not runnable acceptance. Existing hosted Ubuntu 24/x64, memory, canonical external or
+hosted storage, exact installed payload, profile, loopback CDP and dirty/unknown-work
+cleanup guards remain. The wrapper downloads or prepares nothing. It requires an
+already READY idle two-Supabase consumer with a genuine pending static SQL finding.
+A fresh hosted fixture may use public BlendCalc source and authored synthetic data;
+private application baselines, credentials and recovery trees must not be uploaded.
+Any acceptance-only SQL must be a nonce-owned file in that explicitly disposable
+fixture, never the canonical application or retained historical private consumer.
+
+The installed extension executes its genuine public CLI inspection, visits seven
+actual keyboard destinations, opens a clean exact migration at its actual UTF-16
+finding, returns to the dashboard, then rechecks public baseline/candidate identities.
+Only forwarding observers collect actual responses; no snapshots, consent, SQL
+findings or successful results are invented. No terminal, migration, database or VM
+mutation is requested. Screenshots use the isolated Dark Modern window only and need
+independent visual inspection; they do not claim other themes or assistive technology.
+
+Before/after preservation fully hashes the selected package/configuration, Rehearsal
+baseline/policy/credential and Git metadata inputs. Reads are bounded to 8,192 regular
+files, 16,384 entries, depth 32, 4 GiB per file and 8 GiB total, with stable no-follow
+file identity checks. Links must remain inside the owned workspace; external linked
+credentials are refused. Only aggregate digest/count/byte receipts are retained, never
+plaintext or personal notes. This detects drift at those observations; it is neither
+an atomic filesystem snapshot nor physical database/volume-content verification. The
+fixture owner separately owns runtime/volume witnesses and all later service cleanup.
+
+Failure-only `failure.json` and UI-stage `ui-failure.json` retain fixed phase/category
+metadata before cleanup; raw provider errors, stdout, SQL, credentials and argument
+values are excluded. Missing companion evidence remains failure with unknown work
+retained. Earlier failed reports and historical exact-version harness copies remain
+immutable. Preparation, compilation and mocked tests are not native execution proof.
+
+### Installer coverage and remaining checks
+
+The existing `verify:vsix` helper accepts a supplied local candidate and optional
+previous same-identity VSIX. With the explicit reviewed Code CLI it checks isolated
+install, previous-to-current upgrade, reported version and uninstall:
+
+```sh
+VSCODE_CLI=/absolute/owned-code/bin/code ../run editor npm run verify:vsix -- \
+  /absolute/rehearsal-db-0.1.26.vsix /absolute/rehearsal-db-0.1.25.vsix
+```
+
+This is not rollback or enforced-offline proof. The smallest rollback exercise is the
+same isolated profile and local hash-verified artifacts: install current, verify its
+reported identity/version, install the reviewed previous VSIX with `--force`, verify
+that previous version, then uninstall and verify absence. It needs a bounded extension
+of the existing helper, preserving its manifest checks and cleanup, rather than a new
+installer. Offline acceptance additionally needs caller-owned network denial around
+that local-file sequence; disabled update preferences alone do not establish offline
+operation. Neither check becomes a new mandatory gate, and neither has run here.

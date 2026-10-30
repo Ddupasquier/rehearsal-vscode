@@ -10,7 +10,7 @@ export interface ComparisonSubject {
   readonly label: string;
   readonly kind: "target" | "baseline";
   readonly provider: "supabase" | "postgresql" | null;
-  readonly formatVersion: 1 | 2 | null;
+  readonly formatVersion: 1 | 2 | 3 | null;
   readonly baselineGenerationId: string | null;
   readonly migrationCutoff: string | null;
   readonly migrationHistorySha256: string | null;

@@ -442,6 +442,14 @@ A dirty document or changed source refuses with fixed guidance; no SQL is execut
 no position is guessed. SQL text is shown only in the explicitly opened native editor,
 never copied into webview HTML, diagnostics, exports or Memento.
 
+Native Prisma review keeps the Core-owned migration-tool binding (schema 1, Prisma
+7.10.1, PostgreSQL and exact lock/toolchain digests) on each target. Only that explicit
+binding permits `<timestamp>_<ASCII slug>/migration.sql` identities; ordinary SQL targets
+retain flat filename rules. Static source navigation compares the entire nested suffix
+and retains the same ancestry, symlink, raw-byte and clean native-model checks. Baseline
+formats 1 and 2 remain supported alongside format 3; format numbers do not grant runtime
+or database safety authority.
+
 Baseline privacy review is also target-bound: both explain scope and independently
 inspected baseline scope must name the target's reviewed provider. A contradiction
 refuses the inspection instead of presenting mixed evidence. Legacy baseline metadata

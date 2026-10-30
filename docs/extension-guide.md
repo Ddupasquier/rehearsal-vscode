@@ -486,6 +486,17 @@ document and exact recorded position. No acknowledgement file or timely chat rep
 is required. Keep operator visual/keyboard observations separate. No speech or database operation
 is involved, and full canonical activation remains a separate check.
 
+The automated real-consumer companion visits the dashboard pages before opening
+an exact SQL finding. It signals source-control readiness only after locating the
+matching rendered control; the focused 60-second document observation begins at
+that handoff. Page visits and screenshots retain the existing three-minute UI
+process deadline. Readiness is synchronization, not source-navigation acceptance:
+the companion still verifies the clean file bytes and exact finding coordinates. Final
+real-consumer reconciliation gets a separate bounded three-minute observation for
+the fresh public inspections and clean-editor finalization; individual command
+timeouts and preservation checks stay enforced. The phase record distinguishes
+refresh requested from completed, and a missing final result remains a failure.
+
 These steps are for developing the extension, not installing it into your application.
 Clone this repository first. The F5 launch configuration expects a sibling
 `rehearsal-test-lab` checkout; its maintained runbook owns fixture preparation and

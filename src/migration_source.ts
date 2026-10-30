@@ -22,6 +22,13 @@ export const isSafeMigrationFilename = (value: unknown): value is string =>
   !/[\\/%:#?\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u.test(
     value,
   );
+/** Prisma's public identity has exactly one ASCII directory and its fixed SQL leaf. */
+export const isSafeNativeMigrationFilename = (
+  value: unknown,
+): value is string =>
+  typeof value === "string" &&
+  Buffer.byteLength(value) <= 255 &&
+  /^\d{14}_[A-Za-z0-9_-]+\/migration\.sql$/u.test(value);
 export const parseMigrationSourceInput = (
   value: unknown,
 ): MigrationSourceInput => {
@@ -31,7 +38,8 @@ export const parseMigrationSourceInput = (
   if (
     Object.keys(data).sort().join(",") !==
       "filename,sha256,workspaceRelativePath" ||
-    !isSafeMigrationFilename(data.filename) ||
+    (!isSafeMigrationFilename(data.filename) &&
+      !isSafeNativeMigrationFilename(data.filename)) ||
     typeof data.sha256 !== "string" ||
     !/^[a-f0-9]{64}$/u.test(data.sha256)
   )
@@ -46,7 +54,7 @@ export const parseMigrationSourceInput = (
         path,
       ) ||
       path.split("/").some((part) => !part || part === "." || part === "..") ||
-      path.split("/").at(-1) !== data.filename)
+      !(path === data.filename || path.endsWith(`/${data.filename}`)))
   )
     return invalid();
   return {

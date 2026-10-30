@@ -1,3 +1,4 @@
+import type { PrismaMigrationToolBinding } from "./migration_review.js";
 import { realpath } from "node:fs/promises";
 import {
   parseEngineLifecycleStatus,
@@ -47,6 +48,7 @@ import { isLocalEndpoint } from "./local_endpoint.js";
 import {
   assertMatchingMigrationCandidates,
   parseMigrationReviewPlan,
+  matchingNativeMigrationHistory,
   type MigrationReviewPlan,
 } from "./migration_review.js";
 import {
@@ -102,7 +104,8 @@ export interface ProjectSnapshot {
     readonly rowCount: number;
     readonly migrationCount: number;
     readonly verification: string;
-    readonly formatVersion?: 1 | 2;
+    readonly formatVersion?: 1 | 2 | 3;
+    readonly nativeMigrations?: PrismaMigrationToolBinding;
     readonly migrationCutoff?: string;
     readonly migrationHistorySha256?: string | null;
     readonly sourceSchemaSha256?: string | null;
@@ -114,7 +117,8 @@ export interface ProjectSnapshot {
       readonly generationId: string;
       readonly createdAt: string | null;
       readonly active: boolean;
-      readonly formatVersion: 1 | 2;
+      readonly formatVersion: 1 | 2 | 3;
+      readonly nativeMigrations?: PrismaMigrationToolBinding;
       readonly rowCount: number;
       readonly tableCount: number;
       readonly migrationCount: number;
@@ -180,7 +184,8 @@ export interface ProjectSnapshot {
     readonly configurationSha256: string | null;
     readonly baseline: {
       readonly generationId: string;
-      readonly formatVersion: 1 | 2 | null;
+      readonly formatVersion: 1 | 2 | 3 | null;
+      readonly nativeMigrations?: PrismaMigrationToolBinding;
       readonly migrationCutoff: string;
       readonly migrationHistorySha256: string | null;
       readonly sourceSchemaSha256?: string | null;
@@ -929,6 +934,10 @@ export const inspectProject = async ({
           return (
             target.name !== migrationTarget.name ||
             target.provider !== migrationTarget.provider ||
+            !matchingNativeMigrationHistory(
+              target.baseline?.nativeMigrations,
+              migrationTarget.migrationTool,
+            ) ||
             (target.baseline !== null &&
               target.baseline.generationId !==
                 migrationTarget.baselineGenerationId)
@@ -968,6 +977,16 @@ export const inspectProject = async ({
         ),
       },
     };
+    if (
+      parsedMigrationReview &&
+      !matchingNativeMigrationHistory(
+        baseline.result.data.nativeMigrations,
+        parsedMigrationReview.targets[0]!.migrationTool,
+      )
+    )
+      throw new ContractError(
+        "Native baseline and current migration history identities disagree. Refresh the project.",
+      );
     const shape =
       baseline.result.data.shape === undefined ||
       baseline.result.data.shape === null
@@ -1018,6 +1037,9 @@ export const inspectProject = async ({
         ...(baseline.result.data.formatVersion
           ? { formatVersion: baseline.result.data.formatVersion }
           : {}),
+        ...(baseline.result.data.nativeMigrations
+          ? { nativeMigrations: baseline.result.data.nativeMigrations }
+          : {}),
         migrationCutoff: baseline.result.data.migrationCutoff,
         ...(baseline.result.data.migrationHistorySha256 !== undefined
           ? {
@@ -1046,6 +1068,9 @@ export const inspectProject = async ({
             createdAt: baseline.result.data.createdAt,
             active: true,
             formatVersion: baseline.result.data.formatVersion ?? 1,
+            ...(baseline.result.data.nativeMigrations
+              ? { nativeMigrations: baseline.result.data.nativeMigrations }
+              : {}),
             rowCount: baseline.result.data.rowCount,
             tableCount: baseline.result.data.tableCount,
             migrationCount: baseline.result.data.migrationCount,

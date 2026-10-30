@@ -1,6 +1,56 @@
 /** Strict bounded public migration plan; filenames never grant SQL safety. */
 import { ContractError } from "./contracts.js";
-import { isSafeMigrationFilename } from "./migration_source.js";
+import {
+  isSafeMigrationFilename,
+  isSafeNativeMigrationFilename,
+} from "./migration_source.js";
+export interface PrismaMigrationToolBinding {
+  readonly schemaVersion: 1;
+  readonly kind: "prisma";
+  readonly version: "7.10.1";
+  readonly provider: "postgresql";
+  readonly lockSha256: string;
+  readonly toolchainSha256: string;
+}
+export const parsePrismaMigrationToolBinding = (
+  value: unknown,
+): PrismaMigrationToolBinding => {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new ContractError("Invalid native migration tool binding.");
+  const input = value as Record<string, unknown>;
+  if (
+    Object.keys(input).sort().join(",") !==
+      "kind,lockSha256,provider,schemaVersion,toolchainSha256,version" ||
+    input.schemaVersion !== 1 ||
+    input.kind !== "prisma" ||
+    input.version !== "7.10.1" ||
+    input.provider !== "postgresql" ||
+    typeof input.lockSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(input.lockSha256) ||
+    typeof input.toolchainSha256 !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(input.toolchainSha256)
+  )
+    throw new ContractError("Invalid native migration tool binding.");
+  return {
+    schemaVersion: 1,
+    kind: "prisma",
+    version: "7.10.1",
+    provider: "postgresql",
+    lockSha256: input.lockSha256,
+    toolchainSha256: input.toolchainSha256,
+  };
+};
+/** Producer bytes may differ across platforms; history identity must not. */
+export const matchingNativeMigrationHistory = (
+  baseline: PrismaMigrationToolBinding | undefined,
+  current: PrismaMigrationToolBinding | undefined,
+): boolean =>
+  baseline === undefined || current === undefined
+    ? baseline === current
+    : baseline.kind === current.kind &&
+      baseline.version === current.version &&
+      baseline.provider === current.provider &&
+      baseline.lockSha256 === current.lockSha256;
 export interface MigrationReviewEntry {
   readonly id: string;
   readonly target: string;
@@ -27,6 +77,7 @@ export interface MigrationReviewPlan {
     readonly provider: "supabase" | "postgresql";
     readonly baselineGenerationId: string;
     readonly candidateSha256: string;
+    readonly migrationTool?: PrismaMigrationToolBinding;
     readonly entries: readonly MigrationReviewEntry[];
   }[];
 }
@@ -79,6 +130,14 @@ export const parseMigrationReviewPlan = (
       !Array.isArray(target.entries)
     )
       throw new Error("Invalid migration review target.");
+    const migrationTool =
+      target.migrationTool === undefined
+        ? undefined
+        : parsePrismaMigrationToolBinding(target.migrationTool);
+    if (migrationTool && target.provider !== "postgresql")
+      throw new ContractError(
+        "Native migration provider does not match its target.",
+      );
     const rawEntries = target.entries;
     names.add(name);
     total += rawEntries.length;
@@ -127,8 +186,11 @@ export const parseMigrationReviewPlan = (
       const migrationName = text(entry.name);
       const filename = text(entry.filename);
       if (
-        !isSafeMigrationFilename(filename) ||
-        filename !== `${version}_${migrationName}.sql` ||
+        (migrationTool
+          ? !isSafeNativeMigrationFilename(filename) ||
+            filename !== `${version}_${migrationName}/migration.sql`
+          : !isSafeMigrationFilename(filename) ||
+            filename !== `${version}_${migrationName}.sql`) ||
         (status === "candidate"
           ? entry.warnings.length !== 1
           : entry.warnings.length !== 0)
@@ -159,6 +221,7 @@ export const parseMigrationReviewPlan = (
       provider: target.provider as "supabase" | "postgresql",
       baselineGenerationId: text(target.baselineGenerationId),
       candidateSha256: digest(target.candidateSha256),
+      ...(migrationTool ? { migrationTool } : {}),
       entries,
     };
   });
