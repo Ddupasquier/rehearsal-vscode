@@ -1,3 +1,4 @@
+import { isSafeKnexMigrationFilename } from "./knex_migration_contract.js";
 /** One exact project-local input boundary shared by static and execution evidence. */
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
@@ -36,7 +37,7 @@ export const isSafeNativeMigrationFilename = (
   /^\d{14}_[A-Za-z0-9_-]+\/migration\.sql$/u.test(value);
 export const parseMigrationSourceInput = (
   value: unknown,
-  allowDrizzle = false,
+  allowDrizzle: boolean | "knex" = false,
 ): MigrationSourceInput => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return invalid();
@@ -45,7 +46,12 @@ export const parseMigrationSourceInput = (
     Object.keys(data).sort().join(",") !==
       "filename,sha256,workspaceRelativePath" ||
     (!isSafeMigrationFilename(data.filename) &&
-      !(allowDrizzle && isSafeDrizzleMigrationFilename(data.filename)) &&
+      !(
+        allowDrizzle === true && isSafeDrizzleMigrationFilename(data.filename)
+      ) &&
+      !(
+        allowDrizzle === "knex" && isSafeKnexMigrationFilename(data.filename)
+      ) &&
       !isSafeNativeMigrationFilename(data.filename)) ||
     typeof data.sha256 !== "string" ||
     !/^[a-f0-9]{64}$/u.test(data.sha256)
@@ -92,7 +98,7 @@ export const migrationSourceDocumentMatches = (
 export const readExactMigrationInput = async (
   workspaceRoot: string,
   value: unknown,
-  allowDrizzle = false,
+  allowDrizzle: boolean | "knex" = false,
 ): Promise<{
   readonly path: string;
   readonly text: string;
@@ -129,7 +135,11 @@ export const readExactMigrationInput = async (
   );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return invalid();
+    const maximumBytes =
+      allowDrizzle === "knex" && isSafeKnexMigrationFilename(source.filename)
+        ? 8 * 1024 * 1024
+        : 2 * 1024 * 1024;
+    if (!stat.isFile() || stat.size > maximumBytes) return invalid();
     const bytes = Buffer.alloc(stat.size + 1);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
     const current = await lstat(candidate);

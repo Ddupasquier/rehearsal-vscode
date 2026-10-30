@@ -82,6 +82,7 @@ export interface ResolvedRehearsal {
   readonly resourceManagerSchema: 1 | null;
   readonly migrationReviewSchema: 1 | null;
   readonly drizzleMigrationsSchema?: 1 | null;
+  readonly knexMigrationsSchema?: 1 | null;
   readonly migrationInsightsSchema: 1 | null;
   readonly configurationReviewSchema: 1 | null;
   readonly engineLifecycleSchema: 1 | null;
@@ -288,6 +289,7 @@ export const resolveWorkspaceRehearsal = async (
     resourceManagerSchema: contracts.resourceManager === 1 ? 1 : null,
     migrationReviewSchema: contracts.migrationReview === 1 ? 1 : null,
     drizzleMigrationsSchema: contracts.drizzleMigrations === 1 ? 1 : null,
+    knexMigrationsSchema: contracts.knexMigrations === 1 ? 1 : null,
     migrationInsightsSchema: contracts.migrationInsights === 1 ? 1 : null,
     configurationReviewSchema: contracts.configurationReview === 1 ? 1 : null,
     engineLifecycleSchema: contracts.containerEngineLifecycle === 1 ? 1 : null,

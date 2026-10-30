@@ -1073,10 +1073,12 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         resolved = await resolveWorkspaceRehearsal(root);
       requireCurrent();
       if (
-        resolved.drizzleMigrationsSchema !== 1 ||
+        (entry.nativeIdentity?.kind === "knex"
+          ? resolved.knexMigrationsSchema !== 1
+          : resolved.drizzleMigrationsSchema !== 1) ||
         resolved.version !== snapshot.version
       )
-        throw new Error("Drizzle source capability is unavailable.");
+        throw new Error("Native source capability is unavailable.");
       const activity = await runRehearsalJson<unknown>({
         workspaceRoot: root,
         signal: controller.signal,
@@ -1112,7 +1114,11 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           sha256: reference.sha256,
           workspaceRelativePath: reference.workspaceRelativePath,
         };
-      const checked = await readExactMigrationInput(root, source, true);
+      const checked = await readExactMigrationInput(
+        root,
+        source,
+        entry.nativeIdentity?.kind === "knex" ? "knex" : true,
+      );
       requireCurrent();
       const document = await vscode.workspace.openTextDocument(
         vscode.Uri.file(checked.path),
@@ -1131,7 +1137,11 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           throw new Error("Migration document changed.");
       };
       assertDocument();
-      const confirmed = await readExactMigrationInput(root, source, true);
+      const confirmed = await readExactMigrationInput(
+        root,
+        source,
+        entry.nativeIdentity?.kind === "knex" ? "knex" : true,
+      );
       assertDocument();
       if (confirmed.identity !== checked.identity)
         throw new Error("Migration source identity changed.");

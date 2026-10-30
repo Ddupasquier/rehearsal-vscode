@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased — Knex review candidate
+
+- Review explicit Knex 3.3.0 / pg 8.23.1 PostgreSQL code identities and format 5 baselines, preserving filename order and the historical-checksum-unavailable notice.
+- Open exact reviewed `.cjs` inputs as text through public Core selection; show isolated execution requirements without host execution or SQL Insights claims. Real SDK, worker and native acceptance remain separate.
+
 ## Unreleased — 0.1.27 Drizzle review candidate
 
 - Review explicit PostgreSQL Drizzle Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1 journal identities and format 4 baselines through the public Core contract. Preserve journal order and exact SQL bytes without rewriting migrations.

@@ -1,6 +1,6 @@
 import type {
   MigrationCutoff,
-  DrizzleMigrationIdentity,
+  NativeMigrationIdentity,
 } from "./native_migration_contract.js";
 import type { NativeMigrationToolBinding } from "./migration_review.js";
 import {
@@ -75,7 +75,7 @@ export interface CandidateTarget {
 
 export interface CandidateMigration {
   readonly version?: string;
-  readonly nativeIdentity?: DrizzleMigrationIdentity;
+  readonly nativeIdentity?: NativeMigrationIdentity;
   readonly name: string;
   readonly filename: string;
   readonly sha256: string;
@@ -92,7 +92,7 @@ export interface CandidatesData {
 }
 
 export interface BaselineData {
-  readonly formatVersion?: 1 | 2 | 3 | 4;
+  readonly formatVersion?: 1 | 2 | 3 | 4 | 5;
   readonly nativeMigrations?: NativeMigrationToolBinding;
   readonly generationId: string;
   readonly createdAt: string | null;
@@ -100,6 +100,7 @@ export interface BaselineData {
   readonly tableCount: number;
   readonly rowCount: number;
   readonly migrationCount: number;
+  readonly historicalFileChecksums?: "unavailable";
   readonly verification: string;
   readonly migrationHistorySha256?: string | null;
   readonly sourceSchemaSha256?: string | null;
@@ -111,11 +112,12 @@ export interface BaselineData {
     readonly generationId: string;
     readonly createdAt: string | null;
     readonly active: boolean;
-    readonly formatVersion: 1 | 2 | 3 | 4;
+    readonly formatVersion: 1 | 2 | 3 | 4 | 5;
     readonly nativeMigrations?: NativeMigrationToolBinding;
     readonly rowCount: number;
     readonly tableCount: number;
     readonly migrationCount: number;
+    readonly historicalFileChecksums?: "unavailable";
     readonly migrationCutoff: MigrationCutoff;
     readonly storageAssetCount: number;
   }[];

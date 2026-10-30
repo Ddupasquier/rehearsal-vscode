@@ -161,6 +161,7 @@ export const parseMigrationInsights = (
     MIGRATION_INSIGHTS_OUTPUT_BYTES
   )
     return fail();
+  if (plan.targets.some((t) => t.migrationTool?.kind === "knex")) return fail();
   const data = object(
     value,
     "candidateCount,candidateSha256,inspectorVersion,limitation,limits,safety,schemaVersion,summary,targets,verdict",
@@ -226,6 +227,7 @@ export const parseMigrationInsights = (
               : "coverage,filename,findings,sha256,unknownReasons,verdict,version,workspaceRelativePath",
           ),
           candidate = pending[index]!;
+        if (candidate.nativeIdentity?.kind === "knex") return fail();
         const source = parseMigrationSourceInput(
           {
             filename: entry.filename,

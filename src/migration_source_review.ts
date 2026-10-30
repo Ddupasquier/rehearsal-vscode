@@ -1,9 +1,9 @@
 /** Reviewed-source navigation is read-only and distinct from attempted SQL provenance. */
 import { createHash } from "node:crypto";
 import {
-  parseDrizzleMigrationIdentity,
-  sameDrizzleIdentity,
-  type DrizzleMigrationIdentity,
+  parseNativeMigrationIdentity,
+  sameNativeMigrationIdentity,
+  type NativeMigrationIdentity,
 } from "./native_migration_contract.js";
 import {
   parseMigrationSourceInput,
@@ -18,7 +18,7 @@ export interface ReviewedMigrationSource extends MigrationSourceInput {
   readonly evidence: "reviewed_source_input";
   readonly target: string;
   readonly candidateSha256: string;
-  readonly nativeIdentity: DrizzleMigrationIdentity;
+  readonly nativeIdentity: NativeMigrationIdentity;
   readonly line: null;
   readonly column: null;
 }
@@ -47,7 +47,11 @@ export const reviewedMigrationSourceCommand = (
   if (
     !entry.nativeIdentity ||
     !plan.targets.some(
-      (t) => t.migrationTool?.kind === "drizzle" && t.entries.includes(entry),
+      (t) =>
+        (t.migrationTool?.kind === "drizzle" ||
+          t.migrationTool?.kind === "knex") &&
+        t.migrationTool.kind === entry.nativeIdentity?.kind &&
+        t.entries.includes(entry),
     )
   )
     throw new Error("Migration review identity changed.");
@@ -76,7 +80,7 @@ export const parseReviewedMigrationSource = (
     x.target !== entry.target ||
     x.candidateSha256 !== plan.candidateSha256 ||
     !entry.nativeIdentity ||
-    !sameDrizzleIdentity(x.nativeIdentity, entry.nativeIdentity) ||
+    !sameNativeMigrationIdentity(x.nativeIdentity, entry.nativeIdentity) ||
     x.filename !== entry.filename ||
     x.sha256 !== entry.sha256 ||
     x.line !== null ||
@@ -89,7 +93,7 @@ export const parseReviewedMigrationSource = (
       sha256: x.sha256,
       workspaceRelativePath: x.workspaceRelativePath,
     },
-    true,
+    entry.nativeIdentity.kind === "knex" ? "knex" : true,
   );
   if (!source.workspaceRelativePath)
     throw new Error("Reviewed source is not project-local.");
@@ -99,7 +103,7 @@ export const parseReviewedMigrationSource = (
     evidence: "reviewed_source_input",
     target: entry.target,
     candidateSha256: plan.candidateSha256,
-    nativeIdentity: parseDrizzleMigrationIdentity(x.nativeIdentity),
+    nativeIdentity: parseNativeMigrationIdentity(x.nativeIdentity),
     line: null,
     column: null,
   };

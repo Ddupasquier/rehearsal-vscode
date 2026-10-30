@@ -1,5 +1,5 @@
 import {
-  parseDrizzleMigrationIdentity,
+  parseNativeMigrationIdentity,
   type MigrationCutoff,
 } from "./native_migration_contract.js";
 import { parseNativeMigrationToolBinding } from "./migration_review.js";
@@ -336,32 +336,63 @@ const createdAt = (value: unknown): string | null => {
   return value;
 };
 const cutoff = (value: unknown): MigrationCutoff => {
-  if (typeof value !== "string") return parseDrizzleMigrationIdentity(value);
+  if (typeof value !== "string") return parseNativeMigrationIdentity(value);
   if (typeof value !== "string" || !/^\d{14}$/u.test(value))
     throw new ContractError("Baseline migration boundary is invalid.");
   return value;
 };
-const formatVersion = (value: unknown): 1 | 2 | 3 | 4 => {
-  if (value !== 1 && value !== 2 && value !== 3 && value !== 4)
+const formatVersion = (value: unknown): 1 | 2 | 3 | 4 | 5 => {
+  if (value !== 1 && value !== 2 && value !== 3 && value !== 4 && value !== 5)
     throw new ContractError("Baseline format is unsupported.");
   return value;
 };
-const baselineNativeMetadata = (input: ObjectValue) => {
-  if (input.formatVersion === 3 || input.formatVersion === 4) {
+const baselineNativeMetadata = (input: ObjectValue, generation = false) => {
+  if (
+    input.formatVersion === 3 ||
+    input.formatVersion === 4 ||
+    input.formatVersion === 5
+  ) {
     const nativeMigrations = parseNativeMigrationToolBinding(
-      input.nativeMigrations,
-    );
+        input.nativeMigrations,
+      ),
+      kind =
+        input.formatVersion === 3
+          ? "prisma"
+          : input.formatVersion === 4
+            ? "drizzle"
+            : "knex";
     if (
-      (input.formatVersion === 4) !== (nativeMigrations.kind === "drizzle") ||
-      (input.formatVersion === 4) !==
-        (typeof input.migrationCutoff === "object")
+      nativeMigrations.kind !== kind ||
+      (kind === "prisma"
+        ? typeof input.migrationCutoff !== "string"
+        : parseNativeMigrationIdentity(input.migrationCutoff).kind !== kind)
     )
       throw new ContractError(
         "Native baseline format or cutoff contradicts its tool.",
       );
+    if (kind === "knex") {
+      if (
+        (!generation || input.historicalFileChecksums !== undefined) &&
+        input.historicalFileChecksums !== "unavailable"
+      )
+        throw new ContractError(
+          "Knex historical file checksums must remain unavailable.",
+        );
+      return {
+        nativeMigrations,
+        ...(!generation
+          ? { historicalFileChecksums: "unavailable" as const }
+          : {}),
+      };
+    }
+    if (input.historicalFileChecksums !== undefined)
+      throw new ContractError("Unexpected historical checksum status.");
     return { nativeMigrations };
   }
-  if (typeof input.migrationCutoff !== "string")
+  if (
+    typeof input.migrationCutoff !== "string" ||
+    input.historicalFileChecksums !== undefined
+  )
     throw new ContractError("SQL baseline requires its timestamp boundary.");
   if (input.nativeMigrations !== undefined)
     throw new ContractError(
@@ -439,7 +470,7 @@ export const parseBaselineInspectionData = (
               createdAt: createdAt(generation.createdAt),
               active: boolean(generation.active, "Active generation"),
               formatVersion: formatVersion(generation.formatVersion),
-              ...baselineNativeMetadata(generation),
+              ...baselineNativeMetadata(generation, true),
               rowCount: count(generation.rowCount, "Retained rows"),
               tableCount: count(generation.tableCount, "Retained tables"),
               migrationCount: count(
@@ -559,6 +590,9 @@ export const parseReviewTargets = (data: ExplainData) => {
             formatVersion: baseline.formatVersion ?? null,
             ...(baseline.nativeMigrations
               ? { nativeMigrations: baseline.nativeMigrations }
+              : {}),
+            ...(baseline.historicalFileChecksums
+              ? { historicalFileChecksums: baseline.historicalFileChecksums }
               : {}),
             migrationCutoff: baseline.migrationCutoff,
             migrationHistorySha256: baseline.migrationHistorySha256 ?? null,

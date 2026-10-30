@@ -1,6 +1,6 @@
 import {
   describeMigrationCutoff,
-  parseDrizzleMigrationIdentity,
+  parseNativeMigrationIdentity,
 } from "./native_migration_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 
@@ -139,7 +139,7 @@ export const buildVerificationReport = (
               return /^\d{14}$/u.test(cutoff) ? cutoff : null;
             try {
               return describeMigrationCutoff(
-                parseDrizzleMigrationIdentity(cutoff),
+                parseNativeMigrationIdentity(cutoff),
               );
             } catch {
               return null;
@@ -148,6 +148,9 @@ export const buildVerificationReport = (
           migrationHistorySha256: hash(
             snapshot.baseline.migrationHistorySha256,
           ),
+          ...(snapshot.baseline.historicalFileChecksums === "unavailable"
+            ? { historicalFileChecksums: "unavailable" as const }
+            : {}),
           policySha256: hash(snapshot.baseline.sanitizationPolicySha256),
           dataSha256: hash(snapshot.baseline.dataSha256),
           integrity:

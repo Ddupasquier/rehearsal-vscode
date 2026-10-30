@@ -3001,3 +3001,163 @@ describe("reviewed Drizzle source controller", () => {
     },
   );
 });
+
+describe("reviewed Knex source controller", () => {
+  const setupKnex = () => {
+    const nativeIdentity = { kind: "knex" as const, name: "200_change.cjs" },
+      sha = "a".repeat(64);
+    const plan = insightPlan(),
+      target = plan.targets[0]!,
+      entry = {
+        ...target.entries[0]!,
+        nativeIdentity,
+        id: "primary:knex:200_change.cjs",
+        name: "200_change.cjs",
+        filename: "200_change.cjs",
+        sha256: sha,
+      };
+    const { version: _v, timestamp: _t, ...nativeEntry } = entry;
+    const migrationTool = {
+      schemaVersion: 1 as const,
+      kind: "knex" as const,
+      version: "3.3.0" as const,
+      driver: "pg" as const,
+      driverVersion: "8.23.1" as const,
+      provider: "postgresql" as const,
+      bundleSha256: sha,
+      toolchainSha256: sha,
+      isolationPolicySha256: sha,
+      historicalFileChecksums: "unavailable" as const,
+      codeFiles: [{ filename: "200_change.cjs", fileSha256: sha, bytes: 34 }],
+      ledger: { schema: "public" as const, table: "knex_migrations" as const },
+    };
+    const migrationReview = {
+      ...plan,
+      targets: [
+        {
+          ...target,
+          migrationTool,
+          baselineHistorySha256: sha,
+          baselinePrefixVerification: "exact-reviewed-code-prefix" as const,
+          entries: [nativeEntry],
+        },
+      ],
+    };
+    const snapshot = { ...ready(), version: "2.3.0-dev.1", migrationReview },
+      fixture = harness(snapshot),
+      text = 'throw new Error("never execute source");',
+      path = `${snapshot.workspaceRoot}/migrations/200_change.cjs`;
+    const document = {
+      uri: editor.uri(path),
+      isDirty: false,
+      isClosed: false,
+      getText: () => text,
+    };
+    editor.resolvePackage.mockResolvedValue({
+      knexMigrationsSchema: 1,
+      version: "2.3.0-dev.1",
+    });
+    editor.read.mockImplementation(
+      async ({ expectedCommand }: { expectedCommand: string }) => ({
+        result: {
+          status: "success",
+          rehearsalVersion: "2.3.0-dev.1",
+          data:
+            expectedCommand === "activity"
+              ? { schemaVersion: 1, state: "idle", operation: null }
+              : {
+                  schemaVersion: 2,
+                  evidence: "reviewed_source_input",
+                  target: "primary",
+                  candidateSha256: plan.candidateSha256,
+                  nativeIdentity,
+                  filename: entry.filename,
+                  sha256: sha,
+                  workspaceRelativePath: "migrations/200_change.cjs",
+                  line: null,
+                  column: null,
+                },
+        },
+      }),
+    );
+    editor.readMigration.mockResolvedValue({
+      path,
+      text,
+      identity: "stable-file",
+    });
+    editor.module.workspace.openTextDocument.mockResolvedValue(document);
+    return { ...fixture, snapshot, document, migrationReview, nativeEntry };
+  };
+  it("uses genuine public source selection then exact clean file checks, without applying SQL", async () => {
+    const fixture = setupKnex();
+    await fixture.owner.open(key);
+    const { migrationSourceReviewId } =
+      await import("../src/migration_source_review.js");
+    await (
+      fixture.owner as unknown as {
+        handleMessage: (p: unknown, k: string, m: unknown) => Promise<void>;
+      }
+    ).handleMessage(editor.panels[0], key, {
+      type: "openReviewedMigration",
+      sourceId: migrationSourceReviewId(
+        fixture.migrationReview,
+        fixture.nativeEntry,
+      ),
+    });
+    expect(
+      editor.read.mock.calls.map(([request]) => request.expectedCommand),
+    ).toEqual(["activity", "inspect source"]);
+    expect(editor.readMigration).toHaveBeenCalledTimes(2);
+    expect(editor.module.window.showTextDocument).toHaveBeenCalledWith(
+      fixture.document,
+      {
+        preview: true,
+        selection: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: 0 },
+        },
+      },
+    );
+    expect(editor.module.workspace.applyEdit).not.toHaveBeenCalled();
+    expect(editor.write).not.toHaveBeenCalled();
+  });
+  it.each(["older-core", "dirty", "trust", "stale-snapshot", "unsafe-uri"])(
+    "refuses %s before opening source",
+    async (reason) => {
+      const fixture = setupKnex();
+      await fixture.owner.open(key);
+      if (reason === "older-core")
+        editor.resolvePackage.mockResolvedValue({
+          knexMigrationsSchema: null,
+          version: "2.3.0-dev.1",
+        });
+      if (reason === "dirty") fixture.document.isDirty = true;
+      if (reason === "trust") editor.module.workspace.isTrusted = false;
+      if (reason === "unsafe-uri") fixture.document.uri.authority = "remote";
+      if (reason === "stale-snapshot")
+        editor.readMigration.mockImplementationOnce(async () => {
+          fixture.update({ ...fixture.snapshot });
+          return {
+            path: fixture.document.uri.fsPath,
+            text: fixture.document.getText(),
+            identity: "stable-file",
+          };
+        });
+      const { migrationSourceReviewId } =
+        await import("../src/migration_source_review.js");
+      await (
+        fixture.owner as unknown as {
+          handleMessage: (p: unknown, k: string, m: unknown) => Promise<void>;
+        }
+      ).handleMessage(editor.panels[0], key, {
+        type: "openReviewedMigration",
+        sourceId: migrationSourceReviewId(
+          fixture.migrationReview,
+          fixture.nativeEntry,
+        ),
+      });
+      expect(editor.module.window.showTextDocument).not.toHaveBeenCalled();
+      expect(editor.write).not.toHaveBeenCalled();
+    },
+  );
+});

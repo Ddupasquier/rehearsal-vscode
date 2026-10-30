@@ -1,6 +1,6 @@
 import {
   describeMigrationCutoff,
-  parseDrizzleMigrationIdentity,
+  parseNativeMigrationIdentity,
 } from "./native_migration_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 
@@ -14,7 +14,7 @@ export interface ComparisonSubject {
   readonly label: string;
   readonly kind: "target" | "baseline";
   readonly provider: "supabase" | "postgresql" | null;
-  readonly formatVersion: 1 | 2 | 3 | 4 | null;
+  readonly formatVersion: 1 | 2 | 3 | 4 | 5 | null;
   readonly baselineGenerationId: string | null;
   readonly migrationCutoff: string | null;
   readonly migrationHistorySha256: string | null;
@@ -42,7 +42,7 @@ const text = (value: unknown): string | null =>
 const comparisonCutoff = (value: unknown): string | null => {
   if (typeof value === "string") return /^\d{14}$/u.test(value) ? value : null;
   try {
-    return describeMigrationCutoff(parseDrizzleMigrationIdentity(value));
+    return describeMigrationCutoff(parseNativeMigrationIdentity(value));
   } catch {
     return null;
   }

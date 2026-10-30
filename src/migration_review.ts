@@ -1,9 +1,15 @@
 import {
+  parseKnexMigrationToolBinding,
+  matchingKnexReviewedPrefix,
+  type KnexMigrationToolBinding,
+} from "./knex_migration_contract.js";
+import {
   parseDrizzleMigrationToolBinding,
-  parseDrizzleMigrationIdentity,
+  parseNativeMigrationIdentity,
   migrationIdentityKey,
   sameDrizzleIdentity,
-  type DrizzleMigrationIdentity,
+  sameNativeMigrationIdentity,
+  type NativeMigrationIdentity,
   type DrizzleMigrationToolBinding,
 } from "./native_migration_contract.js";
 /** Strict bounded public migration plan; filenames never grant SQL safety. */
@@ -49,15 +55,21 @@ export const parsePrismaMigrationToolBinding = (
   };
 };
 export type NativeMigrationToolBinding =
-  PrismaMigrationToolBinding | DrizzleMigrationToolBinding;
+  | PrismaMigrationToolBinding
+  | DrizzleMigrationToolBinding
+  | KnexMigrationToolBinding;
 export const parseNativeMigrationToolBinding = (
   value: unknown,
 ): NativeMigrationToolBinding =>
   value &&
   typeof value === "object" &&
-  (value as { kind?: unknown }).kind === "drizzle"
-    ? parseDrizzleMigrationToolBinding(value)
-    : parsePrismaMigrationToolBinding(value);
+  (value as { kind?: unknown }).kind === "knex"
+    ? parseKnexMigrationToolBinding(value)
+    : value &&
+        typeof value === "object" &&
+        (value as { kind?: unknown }).kind === "drizzle"
+      ? parseDrizzleMigrationToolBinding(value)
+      : parsePrismaMigrationToolBinding(value);
 /** Producer bytes may differ across platforms; history identity must not. */
 export const matchingNativeMigrationHistory = (
   baseline: NativeMigrationToolBinding | undefined,
@@ -66,6 +78,8 @@ export const matchingNativeMigrationHistory = (
   if (baseline === undefined || current === undefined)
     return baseline === current;
   if (baseline.kind !== current.kind) return false;
+  if (baseline.kind === "knex" && current.kind === "knex")
+    return matchingKnexReviewedPrefix(baseline, current);
   if (baseline.kind === "drizzle" && current.kind === "drizzle")
     return (
       baseline.kitVersion === current.kitVersion &&
@@ -87,7 +101,7 @@ export interface MigrationReviewEntry {
   readonly id: string;
   readonly target: string;
   readonly version?: string;
-  readonly nativeIdentity?: DrizzleMigrationIdentity;
+  readonly nativeIdentity?: NativeMigrationIdentity;
   readonly name: string;
   readonly filename: string;
   readonly sha256: string;
@@ -97,7 +111,11 @@ export interface MigrationReviewEntry {
     "candidate" | "represented_by_baseline" | "applied_to_current_runtime";
   readonly required: boolean;
   readonly dependsOn: readonly string[];
-  readonly warnings: readonly "sql_safety_not_inferred"[];
+  readonly warnings: readonly (
+    | "sql_safety_not_inferred"
+    | "historical_file_checksums_unavailable"
+    | "native_javascript_isolated_execution_required"
+  )[];
   readonly selectionReason: string;
 }
 export interface MigrationReviewPlan {
@@ -112,7 +130,8 @@ export interface MigrationReviewPlan {
     readonly candidateSha256: string;
     readonly migrationTool?: NativeMigrationToolBinding;
     readonly baselineHistorySha256?: string;
-    readonly baselinePrefixVerification?: "exact-native-semantic-prefix";
+    readonly baselinePrefixVerification?:
+      "exact-native-semantic-prefix" | "exact-reviewed-code-prefix";
     readonly entries: readonly MigrationReviewEntry[];
   }[];
 }
@@ -174,16 +193,20 @@ export const parseMigrationReviewPlan = (
         "Native migration provider does not match its target.",
       );
     if (
-      migrationTool?.kind === "drizzle" &&
-      (target.baselinePrefixVerification !== "exact-native-semantic-prefix" ||
+      (migrationTool?.kind === "drizzle" || migrationTool?.kind === "knex") &&
+      (target.baselinePrefixVerification !==
+        (migrationTool.kind === "knex"
+          ? "exact-reviewed-code-prefix"
+          : "exact-native-semantic-prefix") ||
         typeof target.baselineHistorySha256 !== "string" ||
         !/^[a-f0-9]{64}$/u.test(target.baselineHistorySha256))
     )
       throw new ContractError(
-        "Drizzle baseline prefix verification is unavailable.",
+        "Native baseline prefix verification is unavailable.",
       );
     if (
       migrationTool?.kind !== "drizzle" &&
+      migrationTool?.kind !== "knex" &&
       (target.baselinePrefixVerification !== undefined ||
         target.baselineHistorySha256 !== undefined)
     )
@@ -197,15 +220,16 @@ export const parseMigrationReviewPlan = (
     const entries = rawEntries.map((rawEntry, index): MigrationReviewEntry => {
       const entry = record(rawEntry);
       const nativeIdentity =
-        migrationTool?.kind === "drizzle"
-          ? parseDrizzleMigrationIdentity(entry.nativeIdentity)
+        migrationTool?.kind === "drizzle" || migrationTool?.kind === "knex"
+          ? parseNativeMigrationIdentity(entry.nativeIdentity)
           : undefined;
       const version = nativeIdentity ? undefined : text(entry.version, 14);
       if (
         nativeIdentity
           ? Object.hasOwn(entry, "version") ||
             Object.hasOwn(entry, "timestamp") ||
-            nativeIdentity.idx !== index
+            nativeIdentity.kind !== migrationTool?.kind ||
+            (nativeIdentity.kind === "drizzle" && nativeIdentity.idx !== index)
           : entry.nativeIdentity !== undefined
       )
         throw new ContractError(
@@ -230,9 +254,15 @@ export const parseMigrationReviewPlan = (
         entry.dependsOn.length !== (index ? 1 : 0) ||
         (index &&
           entry.dependsOn[0] !==
-            `${name}:${migrationIdentityKey(record(rawEntries[index - 1]) as { version?: string; nativeIdentity?: DrizzleMigrationIdentity })}`) ||
+            `${name}:${migrationIdentityKey(record(rawEntries[index - 1]) as { version?: string; nativeIdentity?: NativeMigrationIdentity })}`) ||
         !Array.isArray(entry.warnings) ||
-        entry.warnings.some((w) => w !== "sql_safety_not_inferred")
+        (migrationTool?.kind === "knex"
+          ? JSON.stringify(entry.warnings) !==
+            JSON.stringify([
+              "historical_file_checksums_unavailable",
+              "native_javascript_isolated_execution_required",
+            ])
+          : entry.warnings.some((w) => w !== "sql_safety_not_inferred"))
       )
         throw new Error(
           "Inconsistent migration dependency or safety evidence.",
@@ -251,17 +281,32 @@ export const parseMigrationReviewPlan = (
       const migrationName = text(entry.name);
       const filename = text(entry.filename);
       if (
-        (migrationTool?.kind === "drizzle"
-          ? filename !== `${nativeIdentity!.tag}.sql` ||
-            migrationName !== nativeIdentity!.tag
-          : migrationTool
-            ? !isSafeNativeMigrationFilename(filename) ||
-              filename !== `${version}_${migrationName}/migration.sql`
-            : !isSafeMigrationFilename(filename) ||
-              filename !== `${version}_${migrationName}.sql`) ||
-        (status === "candidate"
-          ? entry.warnings.length !== 1
-          : entry.warnings.length !== 0)
+        (migrationTool?.kind === "knex"
+          ? nativeIdentity?.kind !== "knex" ||
+            filename !== nativeIdentity.name ||
+            migrationName !== nativeIdentity.name ||
+            !migrationTool.codeFiles.some(
+              (f) => f.filename === filename && f.fileSha256 === entry.sha256,
+            )
+          : migrationTool?.kind === "drizzle"
+            ? filename !==
+                `${(nativeIdentity as Extract<NativeMigrationIdentity, { kind: "drizzle" }>).tag}.sql` ||
+              migrationName !==
+                (
+                  nativeIdentity as Extract<
+                    NativeMigrationIdentity,
+                    { kind: "drizzle" }
+                  >
+                ).tag
+            : migrationTool
+              ? !isSafeNativeMigrationFilename(filename) ||
+                filename !== `${version}_${migrationName}/migration.sql`
+              : !isSafeMigrationFilename(filename) ||
+                filename !== `${version}_${migrationName}.sql`) ||
+        (migrationTool?.kind !== "knex" &&
+          (status === "candidate"
+            ? entry.warnings.length !== 1
+            : entry.warnings.length !== 0))
       )
         throw new Error(
           "Migration filename or review warnings contradict its history.",
@@ -287,7 +332,15 @@ export const parseMigrationReviewPlan = (
         (e, i) =>
           i > 0 &&
           (e.nativeIdentity
-            ? e.nativeIdentity.when <= entries[i - 1]!.nativeIdentity!.when
+            ? e.nativeIdentity.kind === "knex"
+              ? e.filename <= entries[i - 1]!.filename
+              : e.nativeIdentity.when <=
+                (
+                  entries[i - 1]!.nativeIdentity as Extract<
+                    NativeMigrationIdentity,
+                    { kind: "drizzle" }
+                  >
+                ).when
             : e.version! <= entries[i - 1]!.version!),
       )
     )
@@ -298,10 +351,13 @@ export const parseMigrationReviewPlan = (
       baselineGenerationId: text(target.baselineGenerationId),
       candidateSha256: digest(target.candidateSha256),
       ...(migrationTool ? { migrationTool } : {}),
-      ...(migrationTool?.kind === "drizzle"
+      ...(migrationTool?.kind === "drizzle" || migrationTool?.kind === "knex"
         ? {
             baselineHistorySha256: digest(target.baselineHistorySha256),
-            baselinePrefixVerification: "exact-native-semantic-prefix" as const,
+            baselinePrefixVerification:
+              migrationTool.kind === "knex"
+                ? ("exact-reviewed-code-prefix" as const)
+                : ("exact-native-semantic-prefix" as const),
           }
         : {}),
       entries,
@@ -352,7 +408,10 @@ export const assertMatchingMigrationCandidates = (
     return (
       (entry.nativeIdentity
         ? candidate.version === undefined &&
-          sameDrizzleIdentity(candidate.nativeIdentity, entry.nativeIdentity)
+          sameNativeMigrationIdentity(
+            candidate.nativeIdentity,
+            entry.nativeIdentity,
+          )
         : candidate.nativeIdentity === undefined &&
           candidate.version === entry.version) &&
       candidate.name === entry.name &&
@@ -423,6 +482,42 @@ export const matchingDrizzleBaselineReview = (
     represented.length === baseline.migrationCount &&
     represented.length > 0 &&
     sameDrizzleIdentity(
+      baseline.migrationCutoff,
+      represented.at(-1)!.nativeIdentity,
+    )
+  );
+};
+
+export const matchingKnexBaselineReview = (
+  baseline:
+    | {
+        readonly nativeMigrations?: NativeMigrationToolBinding;
+        readonly migrationHistorySha256?: string | null;
+        readonly migrationCutoff?: unknown;
+        readonly migrationCount: number;
+        readonly historicalFileChecksums?: "unavailable";
+      }
+    | null
+    | undefined,
+  target: MigrationReviewPlan["targets"][number],
+): boolean => {
+  if (target.migrationTool?.kind !== "knex") return true;
+  const represented = target.entries.filter(
+    (e) => e.status === "represented_by_baseline",
+  );
+  return (
+    !!baseline &&
+    baseline.nativeMigrations?.kind === "knex" &&
+    baseline.historicalFileChecksums === "unavailable" &&
+    matchingKnexReviewedPrefix(
+      baseline.nativeMigrations,
+      target.migrationTool,
+    ) &&
+    target.baselinePrefixVerification === "exact-reviewed-code-prefix" &&
+    target.baselineHistorySha256 === baseline.migrationHistorySha256 &&
+    represented.length === baseline.migrationCount &&
+    represented.length > 0 &&
+    sameNativeMigrationIdentity(
       baseline.migrationCutoff,
       represented.at(-1)!.nativeIdentity,
     )

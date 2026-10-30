@@ -789,3 +789,23 @@ and exact native identity correlation. No SDK/private Core imports, project
 execution, source regeneration or lifecycle ownership moves into the editor.
 SQL/Prisma formats 1/2/3 retain their existing validation. Exact packaged native
 Drizzle/SDK/Lab execution remains unverified until separately observed.
+
+### Knex reviewed-code candidate
+
+The isolated Knex candidate consumes public `knexMigrations: 1` and format 5
+without changing SQL, Prisma or Drizzle identities. `knex_migration_contract.ts`
+owns the pinned Knex 3.3.0 / pg 8.23.1/default-ledger binding, canonical bounded
+code-file receipts and flat `.cjs` filename identities. The editor compares the
+public baseline history digest and exact reviewed-code prefix, including unchanged
+producer helper receipts and isolation policy; it does not equate appended whole
+bundle or platform toolchain hashes. Historical applied-file checksums remain
+explicitly unavailable. Ledger times never become migration identity or date filters.
+
+Source schema 2 uses the existing current-review/target/native-identity/raw-hash
+binding and Core `inspect source` command. Only this explicit Knex path admits
+8 MiB `.cjs` files; existing SQL limits and trust, clean-document, confined-path
+and stable raw-read checks remain. The editor reads JavaScript as text and never
+loads its SDK or executes project JavaScript. SQL Insights does not analyze Knex
+JavaScript. Core doctor owns worker readiness; parsing a binding is not execution
+qualification. Genuine SDK/isolated-worker/packaged-native acceptance is separate
+and remains unverified for this candidate.

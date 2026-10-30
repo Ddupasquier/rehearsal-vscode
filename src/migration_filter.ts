@@ -7,11 +7,14 @@ export interface MigrationFilterEntry {
   readonly target: string;
   readonly status: string;
   readonly version?: string;
-  readonly nativeIdentity?: {
-    readonly idx: number;
-    readonly when: number;
-    readonly tag: string;
-  };
+  readonly nativeIdentity?:
+    | {
+        readonly kind?: "drizzle";
+        readonly idx: number;
+        readonly when: number;
+        readonly tag: string;
+      }
+    | { readonly kind: "knex"; readonly name: string };
   readonly order: number;
   readonly hasWarning: boolean;
 }
@@ -35,7 +38,10 @@ export function selectMigrationView<T extends MigrationFilterEntry>(
   const from = filters.from.replaceAll("-", "");
   const to = filters.to.replaceAll("-", "");
   const migrationTime = (entry: MigrationFilterEntry): number => {
-    if (entry.nativeIdentity) return entry.nativeIdentity.when;
+    if (entry.nativeIdentity)
+      return entry.nativeIdentity.kind === "knex"
+        ? 0
+        : entry.nativeIdentity.when;
     const v = entry.version ?? "";
     return /^\d{14}$/u.test(v)
       ? Date.UTC(
@@ -63,21 +69,25 @@ export function selectMigrationView<T extends MigrationFilterEntry>(
     return left.order - right.order;
   });
   const visible = ordered.filter((entry) => {
-    const date = entry.nativeIdentity
-      ? entry.nativeIdentity.when <= 8640000000000000
-        ? new Date(entry.nativeIdentity.when)
-            .toISOString()
-            .slice(0, 10)
-            .replaceAll("-", "")
-        : ""
-      : (entry.version ?? "").slice(0, 8);
+    const date =
+      entry.nativeIdentity?.kind === "knex"
+        ? ""
+        : entry.nativeIdentity
+          ? entry.nativeIdentity.when <= 8640000000000000
+            ? new Date(entry.nativeIdentity.when)
+                .toISOString()
+                .slice(0, 10)
+                .replaceAll("-", "")
+            : ""
+          : (entry.version ?? "").slice(0, 8);
     return (
       filters.targets.includes(entry.target) &&
       (filters.status === "all" || filters.status === entry.status) &&
       (!query ||
-        `${entry.name} ${entry.target} ${entry.nativeIdentity ? `${entry.nativeIdentity.idx} ${entry.nativeIdentity.when} ${entry.nativeIdentity.tag}` : (entry.version ?? "")}`
+        `${entry.name} ${entry.target} ${entry.nativeIdentity ? (entry.nativeIdentity.kind === "knex" ? entry.nativeIdentity.name : `${entry.nativeIdentity.idx} ${entry.nativeIdentity.when} ${entry.nativeIdentity.tag}`) : (entry.version ?? "")}`
           .toLowerCase()
           .includes(query)) &&
+      (!(from || to) || date !== "") &&
       (!from || date >= from) &&
       (!to || date <= to) &&
       (filters.warning !== "warnings" || entry.hasWarning)

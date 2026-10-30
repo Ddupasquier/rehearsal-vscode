@@ -1,3 +1,7 @@
+import {
+  parseKnexMigrationIdentity,
+  type KnexMigrationIdentity,
+} from "./knex_migration_contract.js";
 /** Public native identities: journal order is never a timestamp-file version. */
 import { ContractError } from "./contracts.js";
 export interface DrizzleMigrationIdentity {
@@ -6,7 +10,9 @@ export interface DrizzleMigrationIdentity {
   readonly when: number;
   readonly tag: string;
 }
-export type MigrationCutoff = string | DrizzleMigrationIdentity;
+export type NativeMigrationIdentity =
+  DrizzleMigrationIdentity | KnexMigrationIdentity;
+export type MigrationCutoff = string | NativeMigrationIdentity;
 export interface DrizzleMigrationToolBinding {
   readonly schemaVersion: 1;
   readonly kind: "drizzle";
@@ -91,10 +97,12 @@ export const parseDrizzleMigrationToolBinding = (
 };
 export const migrationIdentityKey = (entry: {
   readonly version?: string | undefined;
-  readonly nativeIdentity?: DrizzleMigrationIdentity | undefined;
+  readonly nativeIdentity?: NativeMigrationIdentity | undefined;
 }): string =>
   entry.nativeIdentity
-    ? `drizzle:${entry.nativeIdentity.idx}:${entry.nativeIdentity.when}:${entry.nativeIdentity.tag}`
+    ? entry.nativeIdentity.kind === "knex"
+      ? `knex:${entry.nativeIdentity.name}`
+      : `drizzle:${entry.nativeIdentity.idx}:${entry.nativeIdentity.when}:${entry.nativeIdentity.tag}`
     : (entry.version ?? "");
 export const describeMigrationCutoff = (
   value: MigrationCutoff | string | undefined | null,
@@ -102,13 +110,37 @@ export const describeMigrationCutoff = (
   typeof value === "string"
     ? value
     : value
-      ? `Drizzle #${value.idx} (${value.when}, ${value.tag})`
+      ? value.kind === "knex"
+        ? `Knex ${value.name}`
+        : `Drizzle #${value.idx} (${value.when}, ${value.tag})`
       : "Unavailable";
 export const sameDrizzleIdentity = (a: unknown, b: unknown): boolean => {
   try {
     return (
       JSON.stringify(parseDrizzleMigrationIdentity(a)) ===
       JSON.stringify(parseDrizzleMigrationIdentity(b))
+    );
+  } catch {
+    return false;
+  }
+};
+
+export const parseNativeMigrationIdentity = (
+  value: unknown,
+): NativeMigrationIdentity =>
+  value &&
+  typeof value === "object" &&
+  (value as { kind?: unknown }).kind === "knex"
+    ? parseKnexMigrationIdentity(value)
+    : parseDrizzleMigrationIdentity(value);
+export const sameNativeMigrationIdentity = (
+  a: unknown,
+  b: unknown,
+): boolean => {
+  try {
+    return (
+      JSON.stringify(parseNativeMigrationIdentity(a)) ===
+      JSON.stringify(parseNativeMigrationIdentity(b))
     );
   } catch {
     return false;

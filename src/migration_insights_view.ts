@@ -20,6 +20,16 @@ export const migrationInsightsMarkup = (
 } => {
   const entries = new Map<string, string>();
   const state = snapshot.migrationInsights;
+  if (
+    snapshot.migrationReview?.targets.some(
+      (t) => t.migrationTool?.kind === "knex",
+    )
+  )
+    return {
+      summary:
+        '<p class="control-note">Static SQL Insights does not analyze Knex JavaScript. Review the exact migration source; no SQL validity, execution safety or past applied-byte evidence is inferred.</p>',
+      entries,
+    };
   if (!state) return { summary: "", entries };
   if (state.state === "unavailable")
     return {
