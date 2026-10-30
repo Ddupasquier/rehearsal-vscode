@@ -7,8 +7,8 @@ const { setTimeout: delay } = require("node:timers/promises");
 const vscode = require("vscode");
 const { readConfiguration } = require("./native-editor-driver.cjs");
 const { readRegular, writeJson } = require("./native-editor-reads.cjs");
-const wait = async (check) => {
-  const end = Date.now() + 60000;
+const wait = async (check, budgetMs = 60000) => {
+  const end = Date.now() + budgetMs;
   while (Date.now() < end) {
     if (await check()) return;
     await delay(100);
@@ -163,6 +163,25 @@ exports.run = async () => {
       findingId,
       workspaceName: latest.workspaceName,
     });
+    // Page navigation and screenshots belong to the UI's existing 180-second
+    // budget; do not spend the focused source-opening budget before activation.
+    phase = "keyboard-pages";
+    await wait(async () => {
+      try {
+        const ready = await readRegular(
+          path.join(path.dirname(config.phasePath), "ui-source-ready.json"),
+        );
+        const value = JSON.parse(ready.bytes.toString("utf8"));
+        return (
+          value.state === "source-control-ready" &&
+          value.findingId === findingId
+        );
+      } catch (error) {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      }
+    }, 180000);
+    phase = "exact-source-opening";
     await wait(
       () => vscode.window.activeTextEditor?.document.uri.fsPath === exact.path,
     );
@@ -228,12 +247,22 @@ exports.run = async () => {
     });
     const priorReads = snapshotReads;
     phase = "fresh-read-only-reconciliation";
+    await writeJson(config.phasePath, {
+      state: "refresh-requested",
+      at: Date.now(),
+    });
     await vscode.commands.executeCommand("rehearsal.refresh");
+    await writeJson(config.phasePath, {
+      state: "refresh-completed",
+      at: Date.now(),
+    });
     await wait(() => snapshotReads > priorReads);
+    phase = "fresh-snapshot-identity";
     assert.deepEqual(snapshotIdentity(latest), before);
+    phase = "required-read-commands";
     for (const required of [
       "engine status",
-      "inspect configuration",
+      "configuration",
       "activity",
       "doctor",
       "explain",

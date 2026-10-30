@@ -689,7 +689,18 @@ async function drive(
     }
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
     observePhase("ui-source-control");
-    await activate(`[data-open-migration-insight="${phase.findingId}"]`);
+    const sourceSelector = `[data-open-migration-insight="${phase.findingId}"]`;
+    await find(sourceSelector, true);
+    if (phase.consumerReview === true)
+      await writeFile(
+        join(root, "ui-source-ready.json"),
+        JSON.stringify({
+          state: "source-control-ready",
+          findingId: phase.findingId,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
+    await activate(sourceSelector);
     await waitOwned(async () => {
       try {
         return (
@@ -1144,16 +1155,19 @@ export async function runNativeEditorAcceptance(
       controller.abort();
     }
     phase = "companion-finalization";
-    const result = await wait(async () => {
-      try {
-        const value = JSON.parse(
-          (await regular(resultPath, 256 * 1024)).toString(),
-        );
-        return value.driverFinalized ? value : false;
-      } catch {
-        return false;
-      }
-    });
+    const result = await wait(
+      async () => {
+        try {
+          const value = JSON.parse(
+            (await regular(resultPath, 256 * 1024)).toString(),
+          );
+          return value.driverFinalized ? value : false;
+        } catch {
+          return false;
+        }
+      },
+      scenario === "real-consumer" ? nativeObservationBudgetMs : 30000,
+    );
     phase = "companion-result-validation";
     assert.equal(result.status, "passed");
     assert.equal(result.driverFinalized, true);
