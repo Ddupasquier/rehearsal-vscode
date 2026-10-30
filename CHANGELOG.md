@@ -1,12 +1,13 @@
 # Changelog
 
-## 0.1.26 — Native migration review candidate
+## 0.1.26 — Native migration review
 
 - Understand opt-in Core Prisma 7.10.1/PostgreSQL migration paths and format 3
   baselines while preserving strict SQL history validation.
 - Keep source navigation bound to the full native path and exact reviewed bytes;
   the extension continues to use Core for migration execution.
-- Independent installed-package and native editor acceptance is pending. Core 2.0.0
+- Qualify native Prisma review for PostgreSQL 17 on Ubuntu 24.04 x64 with Node 24
+  and VS Code 1.143.0; other SDK/host combinations remain unqualified. Core 2.0.x
   and earlier do not provide this native migration capability.
 
 ## 0.1.25 — VM shutdown and Back navigation
