@@ -47,12 +47,13 @@ selected in your project terminal. Container-backed rehearsals also need a suppo
 local container engine. Windows uses the **WSL 2 compatibility preview**, with the
 project and tools inside Linux; native Windows execution is unsupported.
 
-**0.1.25 is a release candidate targeting Core 2.0.0.** Source versions do not mean
-publication is complete. Check the [release assets](https://github.com/Ddupasquier/rehearsal-vscode/releases)
-and [upgrade guidance](docs/extension-guide.md#install-and-open-your-project) before upgrading.
+Check the [published release assets](https://github.com/Ddupasquier/rehearsal-vscode/releases)
+and [Core compatibility guidance](docs/extension-guide.md#core-compatibility-and-upgrades)
+before upgrading. Source versions do not prove publication; GitHub and Marketplace
+availability can differ.
 
-The candidate adds a prominent **Shut down VM…** control with a workload review and
-confirmation, plus **Back to Rehearsal**. VM shutdown initially supports **macOS Apple
+Introduced in 0.1.25, the prominent **Shut down VM…** control includes a workload
+review and confirmation, plus **Back to Rehearsal**. VM shutdown initially supports **macOS Apple
 Silicon, Colima 0.10.3, VZ and the default profile** with a compatible core. It stops
 the shared VM, including other projects' workloads, while preserving data volumes.
 Use **Stop project services** when you only want to stop this project's services.
