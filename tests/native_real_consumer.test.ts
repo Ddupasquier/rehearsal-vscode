@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { runInNewContext } from "node:vm";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,6 +27,129 @@ const args = () => [
   "--code-version=1.143.0",
   "--evidence=/approved/evidence",
 ];
+describe("failure-only native consumer diagnostics", () => {
+  const api: {
+    consumerDiagnostic?: (error: unknown) => unknown;
+  } = {};
+  const nativeRequire = createRequire(__filename);
+  runInNewContext(
+    readFileSync(
+      join(__dirname, "../scripts/native-editor-driver.cjs"),
+      "utf8",
+    ),
+    {
+      exports: api,
+      require: (name: string) =>
+        name === "vscode" || name.startsWith("./") ? {} : nativeRequire(name),
+    },
+  );
+  it("distinguishes assertions, bounded observations and reads without exception payloads", () => {
+    for (const [code, expected] of [
+      ["ERR_ASSERTION", "ASSERTION_FAILED"],
+      ["NATIVE_OBSERVATION_TIMEOUT", "OBSERVATION_TIMEOUT"],
+      ["ENOENT", "INPUT_READ_FAILED"],
+      ["PRIVATE_TOKEN", "UNCLASSIFIED_ERROR"],
+    ]) {
+      const observation = api.consumerDiagnostic!({
+        code,
+        message: "https://private.invalid/TOKEN",
+        actual: "PRIVATE_SOURCE",
+        expected: "PRIVATE_PATH",
+        stack:
+          "Error PRIVATE\n at /private/root/native-real-consumer-test.cjs:194:12",
+      });
+      expect(observation).toEqual({
+        code: expected,
+        location: "native-real-consumer-test.cjs:194:12",
+      });
+      expect(JSON.stringify(observation)).not.toMatch(/private|PRIVATE|TOKEN/);
+    }
+  });
+  it("refuses arbitrary locations and malformed or absent error values", () => {
+    for (const value of [
+      null,
+      undefined,
+      {},
+      { code: 7, stack: "https://private.invalid:123:4" },
+    ])
+      expect(api.consumerDiagnostic!(value)).toEqual({
+        code: "UNCLASSIFIED_ERROR",
+        location: "native-real-consumer-test",
+      });
+  });
+});
+describe("source activation and document observation aggregate budget", () => {
+  const fixture = () => {
+    let clock = 0;
+    const api: {
+      observeSourceOpening?: (
+        activation: () => Promise<boolean>,
+        document: () => boolean,
+        phase: (value: string) => void,
+      ) => Promise<void>;
+    } = {};
+    const nativeRequire = createRequire(__filename);
+    runInNewContext(
+      readFileSync(
+        join(__dirname, "../scripts/native-real-consumer-test.cjs"),
+        "utf8",
+      ),
+      {
+        exports: api,
+        Date: { now: () => clock },
+        require: (name: string) =>
+          name === "node:timers/promises"
+            ? {
+                setTimeout: async (ms: number) => {
+                  clock += ms;
+                },
+              }
+            : name === "vscode" || name.startsWith("./")
+              ? {}
+              : nativeRequire(name),
+      },
+    );
+    return { observe: api.observeSourceOpening!, now: () => clock };
+  };
+  it("distinguishes missing activation from dispatched activation without renewing the sixty-second budget", async () => {
+    const missing = fixture(),
+      missingPhases: string[] = [];
+    await expect(
+      missing.observe(
+        async () => false,
+        () => true,
+        (p) => missingPhases.push(p),
+      ),
+    ).rejects.toMatchObject({ code: "NATIVE_OBSERVATION_TIMEOUT" });
+    expect(missingPhases).toEqual(["source-activation-dispatch"]);
+    expect(missing.now()).toBe(60000);
+    const late = fixture(),
+      phases: string[] = [];
+    await expect(
+      late.observe(
+        async () => late.now() >= 40000,
+        () => late.now() >= 65000,
+        (p) => phases.push(p),
+      ),
+    ).rejects.toMatchObject({ code: "NATIVE_OBSERVATION_TIMEOUT" });
+    expect(phases).toEqual([
+      "source-activation-dispatch",
+      "source-document-observation",
+    ]);
+    expect(late.now()).toBe(60000);
+  });
+  it("accepts actual document observation after dispatch within the shared budget", async () => {
+    const f = fixture();
+    await expect(
+      f.observe(
+        async () => f.now() >= 100,
+        () => f.now() >= 200,
+        () => {},
+      ),
+    ).resolves.toBeUndefined();
+    expect(f.now()).toBe(200);
+  });
+});
 describe("closed real-consumer native protocol", () => {
   it("keeps native tool selectors limited to migration review", () => {
     for (const kind of ["drizzle", "knex"]) {

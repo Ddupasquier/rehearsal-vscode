@@ -36,6 +36,25 @@ function diagnostic(error) {
       : undefined;
   return { code, location: location ?? "native-editor-driver" };
 }
+// Failure-only projection: never serialize exception messages, paths or values.
+function consumerDiagnostic(error) {
+  const code =
+    error?.code === "ERR_ASSERTION"
+      ? "ASSERTION_FAILED"
+      : error?.code === "NATIVE_OBSERVATION_TIMEOUT"
+        ? "OBSERVATION_TIMEOUT"
+        : ["ENOENT", "EACCES", "EPERM", "ELOOP"].includes(error?.code)
+          ? "INPUT_READ_FAILED"
+          : "UNCLASSIFIED_ERROR";
+  const location =
+    typeof error?.stack === "string"
+      ? error.stack.match(
+          /native-real-consumer-test\.cjs:\d{1,7}:\d{1,5}/u,
+        )?.[0]
+      : undefined;
+  return { code, location: location ?? "native-real-consumer-test" };
+}
+exports.consumerDiagnostic = consumerDiagnostic;
 async function readObject(file, maximumBytes) {
   const handle = await fs.open(
     file,
