@@ -1,11 +1,10 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { promisify } from "node:util";
+import { setTimeout as delay } from "node:timers/promises";
 
-const execFileAsync = promisify(execFile);
 const repositoryRoot = resolve(__dirname, "..");
 /** VS Code itself exports VSCODE_CLI=1 as a marker, not an executable path. */
 export const resolveVerificationVsCodeCli = (
@@ -23,15 +22,397 @@ type ExtensionManifest = {
   pricing?: unknown;
 };
 
-const run = async (
-  command: string,
-  arguments_: string[],
-): Promise<{ stdout: string; stderr: string }> =>
-  execFileAsync(command, arguments_, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    maxBuffer: outputLimit,
+type ProcessIdentity = {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  started: string;
+  executable: string;
+};
+const processTools = require("./native-editor-reads.cjs") as {
+  processes: () => Promise<Map<number, ProcessIdentity>>;
+  processArguments: () => string[];
+  parseProcessRows: (value: string) => Map<number, ProcessIdentity>;
+  same: (
+    left: ProcessIdentity | undefined,
+    right: ProcessIdentity | undefined,
+  ) => boolean;
+  collect: (
+    rows: Map<number, ProcessIdentity>,
+    captured: Map<number, ProcessIdentity>,
+    roots: number[],
+  ) => void;
+};
+const observeInstallationProcesses = (): Promise<
+  Map<number, ProcessIdentity>
+> =>
+  new Promise((resolve, reject) => {
+    // Trusted /bin/ps has no intended descendants; bound its own exact child too.
+    const child = execFile(
+      "/bin/ps",
+      processTools.processArguments(),
+      {
+        encoding: "utf8",
+        timeout: 200,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024 * 1024,
+      },
+      (error, stdout) => {
+        if (error) reject(new Error("Process sample unavailable."));
+        else resolve(processTools.parseProcessRows(stdout));
+      },
+    );
+    let exited = false;
+    child.once("exit", () => {
+      exited = true;
+    });
+    const retirement = setTimeout(() => {
+      if (!exited && child.exitCode === null && child.signalCode === null)
+        child.kill("SIGKILL");
+      child.unref();
+      for (const stream of [child.stdout, child.stderr])
+        (stream as typeof stream & { unref?: () => void })?.unref?.();
+    }, 300);
+    child.once("close", () => clearTimeout(retirement));
   });
+const settleWithin = <T>(
+  promise: Promise<T>,
+  milliseconds: number,
+): Promise<{ settled: true; value: T } | { settled: false }> =>
+  new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ settled: false }), milliseconds);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve({ settled: true, value });
+      },
+      () => {
+        clearTimeout(timer);
+        resolve({ settled: false });
+      },
+    );
+  });
+
+export type InstallationCommandReceipt = {
+  index: number;
+  scope: "observed-posix-group" | "windows-direct-child";
+  pid: number | null;
+  pgid: number | null;
+  phase: "spawned" | "finished";
+  exitCode: number | null;
+  signal: string | null;
+  exited: boolean;
+  closed: boolean;
+  group: "unknown" | "present" | "absent";
+  reason:
+    | "running"
+    | "exit"
+    | "deadline"
+    | "output-limit"
+    | "spawn-failed"
+    | "cancelled"
+    | "observation-failed";
+};
+/** One lifecycle owner for CLI verification, never a GUI launcher or arbitrary group reaper. */
+export const createInstallationCommandRunner = ({
+  cwd,
+  environment,
+  persist,
+  timeoutMs = 120000,
+  maximumBytes = outputLimit,
+  observe = observeInstallationProcesses,
+  platform = process.platform,
+}: {
+  cwd: string;
+  environment: NodeJS.ProcessEnv;
+  persist: (receipts: readonly InstallationCommandReceipt[]) => Promise<void>;
+  timeoutMs?: number;
+  maximumBytes?: number;
+  observe?: () => Promise<Map<number, ProcessIdentity>>;
+  platform?: NodeJS.Platform;
+}) => {
+  if (!["darwin", "linux", "win32"].includes(platform))
+    throw new Error(
+      "CLI process identity verification is unavailable on this platform.",
+    );
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 10 ||
+    timeoutMs > 120000 ||
+    !Number.isSafeInteger(maximumBytes) ||
+    maximumBytes < 64 ||
+    maximumBytes > outputLimit
+  )
+    throw new Error("Invalid bounded installation command limits.");
+  const receipts: InstallationCommandReceipt[] = [];
+  let active = false;
+  const run = async (
+    command: string,
+    arguments_: string[],
+  ): Promise<{ stdout: string; stderr: string }> => {
+    if (active) throw new Error("Installation commands must be serial.");
+    active = true;
+    const child = spawn(command, arguments_, {
+      cwd,
+      env: environment,
+      detached: platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const receipt: InstallationCommandReceipt = {
+      index: receipts.length,
+      scope:
+        platform === "win32" ? "windows-direct-child" : "observed-posix-group",
+      pid: child.pid ?? null,
+      pgid: platform === "win32" ? null : (child.pid ?? null),
+      phase: "spawned",
+      exitCode: null,
+      signal: null,
+      exited: false,
+      closed: false,
+      group: "unknown",
+      reason: "running",
+    };
+    receipts.push(receipt);
+    const captured = new Map<number, ProcessIdentity>();
+    let stdout = Buffer.alloc(0),
+      stderr = Buffer.alloc(0),
+      interrupted = false;
+    const deadline = performance.now() + timeoutMs;
+    const interrupt = (reason: InstallationCommandReceipt["reason"]) => {
+      interrupted = true;
+      if (receipt.reason === "running") receipt.reason = reason;
+      // ChildProcess tracks this exact live child; never signal a closed/exited/reused PID.
+      if (
+        !receipt.exited &&
+        !receipt.closed &&
+        child.exitCode === null &&
+        child.signalCode === null
+      ) {
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          receipt.group = "unknown";
+        }
+      }
+    };
+    const onSignal = () => interrupt("cancelled");
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+      process.on(signal, onSignal);
+    child.once("error", () => {
+      receipt.reason = "spawn-failed";
+    });
+    child.once("exit", (code, signal) => {
+      receipt.exited = true;
+      receipt.exitCode = code;
+      receipt.signal = signal;
+    });
+    child.once("close", (code, signal) => {
+      receipt.closed = true;
+      receipt.exitCode = code;
+      receipt.signal = signal;
+    });
+    const append = (which: "stdout" | "stderr", bytes: Buffer) => {
+      const existing = which === "stdout" ? stdout : stderr;
+      if (existing.length + bytes.length > maximumBytes)
+        return interrupt("output-limit");
+      if (which === "stdout") stdout = Buffer.concat([existing, bytes]);
+      else stderr = Buffer.concat([existing, bytes]);
+    };
+    child.stdout.on("data", (bytes: Buffer) => append("stdout", bytes));
+    child.stderr.on("data", (bytes: Buffer) => append("stderr", bytes));
+    const timer = setTimeout(() => interrupt("deadline"), timeoutMs);
+    let latestRows = new Map<number, ProcessIdentity>();
+    let pendingObservation: Promise<Map<number, ProcessIdentity>> | null = null;
+    let pendingPersistence: Promise<void> | null = null;
+    const persistBounded = async () => {
+      if (!pendingPersistence) {
+        const current = Promise.resolve().then(() => persist(receipts));
+        pendingPersistence = current;
+        void current.then(
+          () => {
+            if (pendingPersistence === current) pendingPersistence = null;
+          },
+          () => {
+            if (pendingPersistence === current) pendingPersistence = null;
+          },
+        );
+      }
+      // This bounds waiting, not physical filesystem/kernel completion. Uncertainty retains the profile.
+      if (!(await settleWithin(pendingPersistence, 1000)).settled)
+        throw new Error("Lifecycle persistence unconfirmed.");
+    };
+    const inspect = async () => {
+      // Keep bounded direct-child Windows execution; no maintained descendant observer exists.
+      if (platform === "win32") {
+        receipt.group = "unknown";
+        return true;
+      }
+      try {
+        if (!pendingObservation) {
+          const current = Promise.resolve().then(observe);
+          pendingObservation = current;
+          void current.then(
+            () => {},
+            () => {
+              if (pendingObservation === current) pendingObservation = null;
+            },
+          );
+        }
+        const current = pendingObservation;
+        const sample = await settleWithin(current, 100);
+        if (!sample.settled) {
+          receipt.group = "unknown";
+          return false;
+        }
+        pendingObservation = null;
+        const rows = sample.value;
+        latestRows = rows;
+        const root = child.pid ? rows.get(child.pid) : undefined;
+        const previous = child.pid ? captured.get(child.pid) : undefined;
+        if (previous && root && !processTools.same(previous, root)) {
+          receipt.group = "unknown";
+          return false;
+        }
+        processTools.collect(
+          rows,
+          captured,
+          child.pid && !receipt.exited ? [child.pid] : [],
+        );
+        receipt.group =
+          child.pid && [...rows.values()].some((row) => row.pgid === child.pid)
+            ? "present"
+            : child.pid
+              ? "absent"
+              : "unknown";
+        return true;
+      } catch {
+        receipt.group = "unknown";
+        return false;
+      }
+    };
+    let failed = false;
+    try {
+      // Persist exact direct-child PID/PGID before any exit/closure assertion can throw.
+      await persistBounded();
+      while (!receipt.closed && !interrupted) {
+        await inspect();
+        if (performance.now() >= deadline) interrupt("deadline");
+        if (!receipt.closed && !interrupted) await delay(25);
+      }
+    } catch {
+      failed = true;
+      interrupt("observation-failed");
+    } finally {
+      // Every post-spawn failure shares this cleanup path, including persistence failure.
+      const cleanupStarted = performance.now();
+      const closureDeadline = cleanupStarted + 3000;
+      let killedChild = false;
+      do {
+        const known = await inspect();
+        if (
+          receipt.closed &&
+          (platform === "win32" || (receipt.group === "absent" && known))
+        )
+          break;
+        if (interrupted) {
+          // The captured ChildProcess is authoritative only until its known exit.
+          if (
+            !killedChild &&
+            performance.now() >= cleanupStarted + 1000 &&
+            !receipt.exited &&
+            !receipt.closed &&
+            child.exitCode === null &&
+            child.signalCode === null
+          ) {
+            killedChild = true;
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              receipt.group = "unknown";
+            }
+          }
+          if (known && platform !== "win32") {
+            for (const identity of [...captured.values()].reverse()) {
+              if (
+                identity.pid === child.pid ||
+                !processTools.same(identity, latestRows.get(identity.pid))
+              )
+                continue;
+              try {
+                process.kill(
+                  identity.pid,
+                  performance.now() >= cleanupStarted + 1500
+                    ? "SIGKILL"
+                    : "SIGTERM",
+                );
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+                  receipt.group = "unknown";
+              }
+            }
+          }
+        }
+        await delay(25);
+      } while (performance.now() < closureDeadline);
+      clearTimeout(timer);
+      for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const)
+        process.off(signal, onSignal);
+      if (receipt.reason === "running")
+        receipt.reason =
+          platform !== "win32" && receipt.group === "unknown"
+            ? "observation-failed"
+            : "exit";
+      receipt.phase = "finished";
+      if (!receipt.closed) {
+        // Explicit uncertainty retention must not leave this verifier's event loop hostage
+        // to inherited pipes. Do not destroy streams or claim descendant cleanup.
+        child.unref();
+        for (const stream of [child.stdout, child.stderr])
+          (stream as typeof stream & { unref?: () => void }).unref?.();
+      }
+      try {
+        await persistBounded();
+      } catch {
+        failed = true;
+      }
+      active = !(
+        receipt.exited &&
+        receipt.closed &&
+        (platform === "win32" || receipt.group === "absent")
+      );
+    }
+    if (
+      failed ||
+      receipt.reason !== "exit" ||
+      receipt.exitCode !== 0 ||
+      receipt.signal !== null ||
+      !receipt.exited ||
+      !receipt.closed ||
+      (platform !== "win32" && receipt.group !== "absent")
+    )
+      throw new Error(
+        "Bounded installation command failed or closure is unconfirmed; its private profile and lifecycle receipt are retained.",
+      );
+    return { stdout: stdout.toString("utf8"), stderr: stderr.toString("utf8") };
+  };
+  return { run, receipts };
+};
+
+export const canRemoveInstallationProfile = (
+  uninstallConfirmed: boolean,
+  receipts: readonly InstallationCommandReceipt[],
+): boolean =>
+  uninstallConfirmed &&
+  receipts.length > 0 &&
+  receipts.every(
+    (receipt) =>
+      receipt.reason === "exit" &&
+      receipt.exitCode === 0 &&
+      receipt.signal === null &&
+      receipt.exited &&
+      receipt.closed &&
+      receipt.group === "absent",
+  );
 
 export const assertArchiveContents = (entries: readonly string[]): void => {
   const required = [
@@ -72,6 +453,23 @@ const main = async (): Promise<void> => {
   const temporaryRoot = await mkdtemp(
     resolve(tmpdir(), "rehearsal-vscode-private-install-"),
   );
+  await chmod(temporaryRoot, 0o700);
+  const environment = { ...process.env };
+  for (const key of ["VSCODE_IPC_HOOK_CLI", "VSCODE_PORTABLE"])
+    delete environment[key];
+  const lifecycle = createInstallationCommandRunner({
+    cwd: repositoryRoot,
+    environment,
+    persist: async (receipts) => {
+      await writeFile(
+        resolve(temporaryRoot, "command-lifecycle.json"),
+        JSON.stringify({ schemaVersion: 1, receipts }, null, 2) + "\n",
+        { mode: 0o600 },
+      );
+    },
+  });
+  const run = lifecycle.run;
+  let uninstallConfirmed = false;
   const suppliedCandidate = process.argv[2];
   const previousCandidate = process.argv[3]
     ? resolve(process.cwd(), process.argv[3]!)
@@ -207,6 +605,7 @@ const main = async (): Promise<void> => {
       throw new Error("Isolated VS Code uninstall left Rehearsal installed.");
     }
 
+    uninstallConfirmed = true;
     console.log(
       JSON.stringify(
         {
@@ -220,6 +619,11 @@ const main = async (): Promise<void> => {
             : "generated for verification",
           upgradeFrom,
           vscodeCli,
+          commandLifecycle: lifecycle.receipts,
+          processCleanupScope:
+            process.platform === "win32"
+              ? "direct-child-only-descendants-unverified-profile-retained"
+              : "observed-owned-posix-groups",
           isolation: {
             userData: true,
             extensions: true,
@@ -231,7 +635,12 @@ const main = async (): Promise<void> => {
       ),
     );
   } finally {
-    await rm(temporaryRoot, { recursive: true, force: true });
+    if (canRemoveInstallationProfile(uninstallConfirmed, lifecycle.receipts))
+      await rm(temporaryRoot, { recursive: true, force: true });
+    else
+      console.error(
+        `Private verification profile retained for recovery: ${temporaryRoot}`,
+      );
   }
 };
 
