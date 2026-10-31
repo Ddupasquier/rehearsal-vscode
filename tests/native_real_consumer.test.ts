@@ -2,7 +2,14 @@ import { describe, it, expect } from "vitest";
 import { runInNewContext } from "node:vm";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, writeFile, symlink, rm } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  writeFile,
+  symlink,
+  rm,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -76,6 +83,149 @@ describe("failure-only native consumer diagnostics", () => {
         code: "UNCLASSIFIED_ERROR",
         location: "native-real-consumer-test",
       });
+  });
+});
+describe("closed native companion scenario dispatch", () => {
+  const nativeRequire = createRequire(__filename);
+  const source = readFileSync(
+    join(__dirname, "../scripts/native-editor-driver.cjs"),
+    "utf8",
+  );
+  it("accepts the launcher Knex configuration and dispatches only its existing native review companion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "knex-companion-config-"));
+    try {
+      const evidence = join(root, "evidence");
+      await mkdir(evidence);
+      const resultPath = join(evidence, "result.json"),
+        configPath = join(root, "config.json");
+      const config = {
+        scenario: "knex-review",
+        migrationKind: "knex",
+        root,
+        evidence,
+        resultPath,
+      };
+      await writeFile(configPath, JSON.stringify(config), { mode: 0o600 });
+      const selected: string[] = [];
+      let resolveClosed!: () => void;
+      const closed = new Promise<void>((resolve) => {
+        resolveClosed = resolve;
+      });
+      const api: {
+        readConfiguration?: () => Promise<unknown>;
+        activate?: () => void;
+      } = {};
+      runInNewContext(source, {
+        exports: api,
+        Buffer,
+        process: { env: { REHEARSAL_NATIVE_CANCELLATION_CONFIG: configPath } },
+        require: (name: string) => {
+          if (name === "vscode")
+            return {
+              workspace: { textDocuments: [] },
+              commands: {
+                executeCommand: async (command: string) => {
+                  expect(command).toBe("workbench.action.closeWindow");
+                  resolveClosed();
+                },
+              },
+            };
+          if (name === "./native-editor-recovery.cjs")
+            return nativeRequire(
+              join(__dirname, "../scripts/native-editor-recovery.cjs"),
+            );
+          if (name.startsWith("./")) {
+            selected.push(name);
+            expect(name).toBe("./native-prisma-review-test.cjs");
+            return {
+              run: async () => {
+                await writeFile(
+                  resultPath,
+                  JSON.stringify({ status: "passed", scenario: "knex-review" }),
+                );
+              },
+            };
+          }
+          return nativeRequire(name);
+        },
+      });
+      expect(await api.readConfiguration!()).toEqual(config);
+      api.activate!();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          closed,
+          new Promise((_, reject) => {
+            timer = setTimeout(
+              () => reject(Error("Companion dispatch incomplete")),
+              1000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      expect(selected).toEqual(["./native-prisma-review-test.cjs"]);
+      expect(JSON.parse(await readFile(resultPath, "utf8"))).toMatchObject({
+        status: "passed",
+        scenario: "knex-review",
+        driverFinalized: true,
+        recoveryRequired: false,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+  it("refuses unknown and path-like scenarios before selecting any companion", async () => {
+    const root = await mkdtemp(join(tmpdir(), "unknown-companion-config-"));
+    try {
+      const configPath = join(root, "config.json");
+      for (const scenario of [
+        "knex-review/private-canary",
+        "knex-review ",
+        "KNEX-review",
+        "unknown",
+      ]) {
+        await writeFile(
+          configPath,
+          JSON.stringify({
+            scenario,
+            migrationKind: "knex",
+            root,
+            evidence: root,
+            resultPath: join(root, "result.json"),
+          }),
+          { mode: 0o600 },
+        );
+        const selected: string[] = [];
+        const api: { readConfiguration?: () => Promise<unknown> } = {};
+        runInNewContext(source, {
+          exports: api,
+          Buffer,
+          process: {
+            env: { REHEARSAL_NATIVE_CANCELLATION_CONFIG: configPath },
+          },
+          require: (name: string) => {
+            if (name === "vscode") return {};
+            if (name === "./native-editor-recovery.cjs")
+              return nativeRequire(
+                join(__dirname, "../scripts/native-editor-recovery.cjs"),
+              );
+            if (name.startsWith("./")) {
+              selected.push(name);
+              throw Error("Unexpected companion selection");
+            }
+            return nativeRequire(name);
+          },
+        });
+        await expect(api.readConfiguration!()).rejects.toThrow(
+          "Unknown native editor scenario.",
+        );
+        expect(selected).toEqual([]);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 describe("source activation and document observation aggregate budget", () => {
