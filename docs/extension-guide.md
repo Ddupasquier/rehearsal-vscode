@@ -11,7 +11,7 @@ For a quick start, see the [extension overview](../README.md).
 - [Move from an older preview](#move-from-a-preview-through-0118)
 - [Manage updates](#keep-the-canonical-installation-current)
 - [Use the workbench](#what-the-workbench-shows)
-- [Shut down the VM](#vm-shutdown--0125-release-candidate)
+- [Shut down the VM](#vm-shutdown)
 - [Contribute and test locally](#contributing-and-local-development)
 - [Licensing and support](#licensing-and-planned-editions)
 - [Supported environments](#product-boundary)
@@ -67,40 +67,60 @@ default; installation requires an explicit option and never starts a database.
 
 ### Core compatibility and upgrades
 
-The **0.1.25 release candidate** targets core **2.0.0**; `0.1.0-rc.4` remains
-the minimum core contract. A source version is not proof of npm publication.
+Extension **0.1.28** targets **Core 2.3.0**. Its opt-in PostgreSQL Knex path
+requires **Knex 3.3.0 and pg 8.23.1**, with format 5 baselines and exact reviewed
+`.cjs` inputs. Core 2.2.x and earlier do not supply this Knex capability. The editor
+opens code as text; Core owns isolated execution and recovery. Knex execution and
+exact native qualification remain pending; a source version does not establish them.
+
+Drizzle review retains the **Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1** pins and format 4
+baselines introduced with extension 0.1.27 / Core 2.2.0. Its native review scope is
+**PostgreSQL 17, Ubuntu 24.04 x64, Node.js 24 and VS Code 1.143.0**.
+
+Native Prisma review, introduced in extension **0.1.26 / Core 2.1.0**, requires
+**Prisma Migrate 7.10.1 / PostgreSQL 17** and uses format 3 baselines with exact
+migration SQL navigation. Its recorded native qualification covers **Ubuntu 24.04
+x64, Node.js 24 and VS Code 1.143.0**. Core 2.0.x and earlier do not supply this capability.
+Rebuilt artifacts require their own exact-artifact qualification.
+
+Existing SQL workflows retain the minimum core contract of `0.1.0-rc.4`; individual
+features require their advertised compatible contracts. VM controls were introduced
+in extension 0.1.25 targeting Core 2.0.0, with the [shutdown limits](#vm-shutdown) below.
+A source version is not proof of npm or extension publication.
 Before explicitly upgrading a 1.x project, review the core
 [upgrade notes](https://github.com/Ddupasquier/rehearsal-db/blob/main/CHANGELOG.md):
 omitted lifecycle settings now stop database targets after a run or application
 exit, preserving data volumes and reconstruction receipts. Explicit
 `keep-until-stop` remains available. Automatic CLI updates do not cross major versions.
-The new persistent migration diagnoses require core 1.0.2; an older compatible
+Persistent migration diagnoses require core 1.0.2; an older compatible
 package cannot supply that evidence.
 Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
 for safe setup and baseline inputs.
 
 ### Direct GitHub installation
 
-The reviewed VSIX is an alternative to Marketplace. Source **0.1.25** is a release
-candidate until the official [0.1.25 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.25)
-provides `rehearsal-db-0.1.25.vsix` and `SHA256SUMS`. If those assets are absent,
-publication has not completed; do not substitute an engineering candidate's checksum.
-The [previous 0.1.24 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.24)
-retains its original assets and does not contain the new VM controls.
+The reviewed VSIX is an alternative to Marketplace. For **0.1.28**, use the official
+[0.1.28 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.28)
+only when it publishes `rehearsal-db-0.1.28.vsix` and `SHA256SUMS`. A draft or source
+version does not prove availability. If either asset is absent, publication has not
+completed; do not substitute an engineering candidate's checksum. Marketplace may
+list a different version.
+The [previous 0.1.27 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.27)
+retains its original assets for rollback when published; it does not provide native Knex review.
 
-1. Download `rehearsal-db-0.1.25.vsix` and `SHA256SUMS` from the same official release.
+1. Download `rehearsal-db-0.1.28.vsix` and `SHA256SUMS` from the same official release.
 2. Calculate the downloaded VSIX's SHA-256:
 
    **macOS**
 
    ```sh
-   shasum -a 256 /path/to/rehearsal-db-0.1.25.vsix
+   shasum -a 256 /path/to/rehearsal-db-0.1.28.vsix
    ```
 
    **Linux**
 
    ```sh
-   sha256sum /path/to/rehearsal-db-0.1.25.vsix
+   sha256sum /path/to/rehearsal-db-0.1.28.vsix
    ```
 
 3. Compare the result with `SHA256SUMS`. **Stop if they differ.**
@@ -110,7 +130,7 @@ retains its original assets and does not contain the new VM controls.
 If the `code` command is available, step 4 can instead use:
 
 ```sh
-code --install-extension /absolute/path/to/rehearsal-db-0.1.25.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.28.vsix --force
 ```
 
 [Back to navigation](#on-this-page)
@@ -427,10 +447,12 @@ it does not execute project code. Once core advertises the versioned Project Pro
 contract, the extension uses `rehearsal discover --json` and stops duplicating broader
 discovery rules.
 
-### VM shutdown — 0.1.25 release candidate
+<a id="vm-shutdown--0125-release-candidate"></a>
 
-The 0.1.25 candidate adds an always-visible **Shut down VM…** control below the dashboard
-header, plus **Rehearsal: Shut Down VM** in the Command Palette and Projects title bar.
+### VM shutdown
+
+Introduced in 0.1.25, the always-visible **Shut down VM…** control sits below the dashboard
+header. **Rehearsal: Shut Down VM** is also in the Command Palette and Projects title bar.
 **Stop project services** stops this project's services; shutting down the shared VM
 also interrupts other projects. Review the listed workloads and confirm before shutdown.
 Data volumes, baselines and recovery files are not selected for deletion.
@@ -624,7 +646,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.25.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.28.vsix --force
 ```
 
 Read the bundled [license](../LICENSE), [privacy statement](../PRIVACY.md), and
