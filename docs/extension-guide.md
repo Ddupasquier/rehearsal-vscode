@@ -70,8 +70,9 @@ default; installation requires an explicit option and never starts a database.
 Extension **0.1.28** targets **Core 2.3.0**. Its opt-in PostgreSQL Knex path
 requires **Knex 3.3.0 and pg 8.23.1**, with format 5 baselines and exact reviewed
 `.cjs` inputs. Core 2.2.x and earlier do not supply this Knex capability. The editor
-opens code as text; Core owns isolated execution and recovery. Knex execution and
-exact native qualification remain pending; a source version does not establish them.
+opens code as text; Core owns isolated execution and recovery. A source version does
+not establish execution or native qualification; the
+[published release](https://github.com/Ddupasquier/rehearsal-vscode/releases) records its exact verified scope.
 
 Drizzle review retains the **Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1** pins and format 4
 baselines introduced with extension 0.1.27 / Core 2.2.0. Its native review scope is
@@ -277,8 +278,9 @@ Knex does not record historical file checksums. The editor verifies today's revi
 files; it cannot prove which bytes were applied previously. SQL Insights and impact
 analysis do not analyze JavaScript. Core owns execution, isolation and recovery; use
 its [configuration guide](https://github.com/Ddupasquier/rehearsal-db/blob/main/docs/configuration.md)
-for supported versions and limits. Exact packaged/native qualification is still
-pending for this candidate.
+for supported versions and limits. Check the
+[published release](https://github.com/Ddupasquier/rehearsal-vscode/releases) for exact
+packaged/native qualification; a source version alone does not establish it.
 
 ### Static Migration Insights
 

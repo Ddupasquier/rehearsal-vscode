@@ -62,7 +62,8 @@ Extension **0.1.28** targets **Core 2.3.0** for pinned PostgreSQL Knex reviewed-
 inputs and format 5 baselines, alongside Prisma and Drizzle review. The editor opens
 `.cjs` inputs as text and does not execute JavaScript. See the
 [compatibility and limits](docs/extension-guide.md#core-compatibility-and-upgrades);
-Knex execution and native qualification remain pending.
+source versions do not establish execution or native qualification. Check the
+[published release](https://github.com/Ddupasquier/rehearsal-vscode/releases) for its exact verified scope.
 
 ## Free Starter, optional updates
 
