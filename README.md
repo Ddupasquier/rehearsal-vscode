@@ -58,6 +58,11 @@ Silicon, Colima 0.10.3, VZ and the default profile** with a compatible core. It 
 the shared VM, including other projects' workloads, while preserving data volumes.
 Use **Stop project services** when you only want to stop this project's services.
 
+Extension **0.1.27** targets **Core 2.2.0** for pinned PostgreSQL Drizzle journal
+review, format 4 baselines and exact SQL navigation. See the
+[compatibility and limits](docs/extension-guide.md#core-compatibility-and-upgrades);
+source availability does not establish publication or qualify a rebuilt artifact.
+
 ## Free Starter, optional updates
 
 Starter's included features remain yours **indefinitely at no charge** for personal

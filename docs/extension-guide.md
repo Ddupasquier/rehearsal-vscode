@@ -67,10 +67,17 @@ default; installation requires an explicit option and never starts a database.
 
 ### Core compatibility and upgrades
 
-Extension **0.1.26** pairs with **Core 2.1.0** for opt-in native **Prisma Migrate
-7.10.1 / PostgreSQL 17** review, including format 3 baselines and exact migration SQL
-source navigation. This native path is qualified on **Ubuntu 24.04 x64, Node.js 24
-and VS Code 1.143.0**. Core 2.0.x and earlier do not supply the native Prisma capability.
+Extension **0.1.27** targets **Core 2.2.0**. Its opt-in PostgreSQL Drizzle path
+requires **Drizzle Kit 0.31.11, ORM 0.45.4 and pg 8.23.1**, with format 4 baselines
+and journal-order SQL review. Core 2.1.x and earlier do not supply this Drizzle
+capability. The native review scope is **PostgreSQL 17, Ubuntu 24.04 x64, Node.js 24
+and VS Code 1.143.0**; other SDK/host combinations remain unqualified.
+
+Native Prisma review, introduced in extension **0.1.26 / Core 2.1.0**, requires
+**Prisma Migrate 7.10.1 / PostgreSQL 17** and uses format 3 baselines with exact
+migration SQL navigation. Its recorded native qualification covers **Ubuntu 24.04
+x64, Node.js 24 and VS Code 1.143.0**. Core 2.0.x and earlier do not supply this capability.
+Rebuilt artifacts require their own exact-artifact qualification.
 
 Existing SQL workflows retain the minimum core contract of `0.1.0-rc.4`; individual
 features require their advertised compatible contracts. VM controls were introduced
@@ -88,28 +95,28 @@ for safe setup and baseline inputs.
 
 ### Direct GitHub installation
 
-The reviewed VSIX is an alternative to Marketplace. For **0.1.26**, use the official
-[0.1.26 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.26)
-only when it publishes `rehearsal-db-0.1.26.vsix` and `SHA256SUMS`. A draft or source
+The reviewed VSIX is an alternative to Marketplace. For **0.1.27**, use the official
+[0.1.27 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.27)
+only when it publishes `rehearsal-db-0.1.27.vsix` and `SHA256SUMS`. A draft or source
 version does not prove availability. If either asset is absent, publication has not
 completed; do not substitute an engineering candidate's checksum. Marketplace may
 list a different version.
-The [previous 0.1.25 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.25)
-retains its original assets for rollback; it does not provide native Prisma review.
+The [previous 0.1.26 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.26)
+retains its original assets for rollback when published; it does not provide native Drizzle review.
 
-1. Download `rehearsal-db-0.1.26.vsix` and `SHA256SUMS` from the same official release.
+1. Download `rehearsal-db-0.1.27.vsix` and `SHA256SUMS` from the same official release.
 2. Calculate the downloaded VSIX's SHA-256:
 
    **macOS**
 
    ```sh
-   shasum -a 256 /path/to/rehearsal-db-0.1.26.vsix
+   shasum -a 256 /path/to/rehearsal-db-0.1.27.vsix
    ```
 
    **Linux**
 
    ```sh
-   sha256sum /path/to/rehearsal-db-0.1.26.vsix
+   sha256sum /path/to/rehearsal-db-0.1.27.vsix
    ```
 
 3. Compare the result with `SHA256SUMS`. **Stop if they differ.**
@@ -119,7 +126,7 @@ retains its original assets for rollback; it does not provide native Prisma revi
 If the `code` command is available, step 4 can instead use:
 
 ```sh
-code --install-extension /absolute/path/to/rehearsal-db-0.1.26.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.27.vsix --force
 ```
 
 [Back to navigation](#on-this-page)
@@ -622,7 +629,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.26.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.27.vsix --force
 ```
 
 Read the bundled [license](../LICENSE), [privacy statement](../PRIVACY.md), and

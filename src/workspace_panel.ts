@@ -1,3 +1,8 @@
+import {
+  findReviewedMigration,
+  parseReviewedMigrationSource,
+  reviewedMigrationSourceCommand,
+} from "./migration_source_review.js";
 import { randomBytes } from "node:crypto";
 import { engineShutdownUpdateFor } from "./engine_lifecycle_view.js";
 import { constants as filesystemConstants } from "node:fs";
@@ -329,13 +334,20 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     const snapshot = this.projects.snapshotFor(workspaceKey);
     if (!snapshot) return;
     if (
+      message.type === "openReviewedMigration" ||
       message.type === "openMigrationInsight" ||
       message.type === "openMigrationFailure"
     ) {
       if (this.disposed || this.sourceNavigationPending) return;
       this.sourceNavigationPending = true;
       try {
-        if (message.type === "openMigrationInsight")
+        if (message.type === "openReviewedMigration")
+          await this.openReviewedMigration(
+            panel,
+            workspaceKey,
+            message.sourceId,
+          );
+        else if (message.type === "openMigrationInsight")
           await this.openMigrationInsight(
             panel,
             workspaceKey,
@@ -1016,6 +1028,129 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
     }
   }
 
+  private async openReviewedMigration(
+    panel: vscode.WebviewPanel,
+    workspaceKey: string,
+    sourceId: string,
+  ): Promise<void> {
+    const controller = new AbortController();
+    const subscriptions = [
+      panel.onDidDispose(() => controller.abort()),
+      this.projects.onDidUpdateSnapshot((event) => {
+        if (event.workspaceKey === workspaceKey) controller.abort();
+      }),
+      vscode.workspace.onDidChangeWorkspaceFolders(() => controller.abort()),
+    ];
+    try {
+      const snapshot = this.projects.snapshotFor(workspaceKey),
+        plan = snapshot?.migrationReview;
+      if (!snapshot || !plan) return;
+      const entry = findReviewedMigration(plan, sourceId);
+      if (!entry) return;
+      const requireCurrent = () => {
+        const folder = vscode.workspace.workspaceFolders?.find(
+          (f) => f.uri.toString() === workspaceKey,
+        );
+        if (
+          this.disposed ||
+          controller.signal.aborted ||
+          this.panels.get(workspaceKey) !== panel ||
+          !vscode.workspace.isTrusted ||
+          !folder ||
+          folder.uri.scheme !== "file" ||
+          folder.uri.authority ||
+          folder.uri.query ||
+          folder.uri.fragment ||
+          folder.uri.fsPath !== snapshot.workspaceRoot ||
+          this.projects.snapshotFor(workspaceKey) !== snapshot ||
+          snapshot.availability !== "ready" ||
+          snapshot.activity?.state !== "idle"
+        )
+          throw new Error("Migration source context changed.");
+        return folder.uri.fsPath;
+      };
+      const root = requireCurrent(),
+        resolved = await resolveWorkspaceRehearsal(root);
+      requireCurrent();
+      if (
+        resolved.drizzleMigrationsSchema !== 1 ||
+        resolved.version !== snapshot.version
+      )
+        throw new Error("Drizzle source capability is unavailable.");
+      const activity = await runRehearsalJson<unknown>({
+        workspaceRoot: root,
+        signal: controller.signal,
+        command: ["activity"],
+        expectedCommand: "activity",
+      });
+      requireCurrent();
+      if (
+        parseActivityData(activity.result.data).state !== "idle" ||
+        activity.result.rehearsalVersion !== resolved.version
+      )
+        throw new Error("Migration source is busy.");
+      const response = await runRehearsalJson<unknown>({
+        workspaceRoot: root,
+        signal: controller.signal,
+        command: reviewedMigrationSourceCommand(plan, entry),
+        expectedCommand: "inspect source",
+        ...(snapshot.configPath ? { configPath: snapshot.configPath } : {}),
+      });
+      requireCurrent();
+      if (
+        response.result.status !== "success" ||
+        response.result.rehearsalVersion !== resolved.version
+      )
+        throw new Error("Migration source did not complete.");
+      const reference = parseReviewedMigrationSource(
+          response.result.data,
+          plan,
+          entry,
+        ),
+        source = {
+          filename: reference.filename,
+          sha256: reference.sha256,
+          workspaceRelativePath: reference.workspaceRelativePath,
+        };
+      const checked = await readExactMigrationInput(root, source, true);
+      requireCurrent();
+      const document = await vscode.workspace.openTextDocument(
+        vscode.Uri.file(checked.path),
+      );
+      const assertDocument = () => {
+        requireCurrent();
+        if (
+          document.uri.scheme !== "file" ||
+          document.uri.authority ||
+          document.uri.query ||
+          document.uri.fragment ||
+          document.uri.fsPath !== checked.path ||
+          document.isDirty ||
+          !migrationSourceDocumentMatches(checked.text, document.getText())
+        )
+          throw new Error("Migration document changed.");
+      };
+      assertDocument();
+      const confirmed = await readExactMigrationInput(root, source, true);
+      assertDocument();
+      if (confirmed.identity !== checked.identity)
+        throw new Error("Migration source identity changed.");
+      const position = new vscode.Position(0, 0);
+      await vscode.window.showTextDocument(document, {
+        preview: true,
+        selection: new vscode.Range(position, position),
+      });
+    } catch {
+      if (!controller.signal.aborted)
+        void vscode.window.showWarningMessage(
+          "This reviewed migration no longer matches an unchanged local input. Refresh and review it again. No SQL was executed and no file was changed.",
+        );
+    } finally {
+      controller.abort();
+      for (const subscription of subscriptions) subscription.dispose();
+    }
+  }
+
   private async openMigrationInsight(
     panel: vscode.WebviewPanel,
     workspaceKey: string,
@@ -1052,7 +1187,11 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
         workspaceRelativePath: initial.entry.workspaceRelativePath,
       };
       const root = requireCurrent(),
-        checked = await readExactMigrationInput(root, source);
+        checked = await readExactMigrationInput(
+          root,
+          source,
+          !!initial.entry.nativeIdentity,
+        );
       if (requireCurrent() !== root) throw new Error("Workspace changed.");
       const document = await vscode.workspace.openTextDocument(
         vscode.Uri.file(checked.path),
@@ -1071,7 +1210,11 @@ export class RehearsalWorkspacePanels implements vscode.Disposable {
           throw new Error("Static migration input or position changed.");
       };
       requireExactDocument();
-      const confirmed = await readExactMigrationInput(root, source);
+      const confirmed = await readExactMigrationInput(
+        root,
+        source,
+        !!initial.entry.nativeIdentity,
+      );
       requireExactDocument();
       if (confirmed.identity !== checked.identity || requireCurrent() !== root)
         throw new Error("Migration input changed.");

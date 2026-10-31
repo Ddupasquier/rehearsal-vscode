@@ -57,6 +57,13 @@ describe("failure-only native Prisma snapshot projection", () => {
       baselineFormat: null,
     });
   });
+  it("retains the known Drizzle baseline format without claiming native acceptance", () => {
+    expect(
+      api.snapshotObservation({
+        baseline: { formatVersion: 4, nativeMigrations: { kind: "drizzle" } },
+      }),
+    ).toMatchObject({ baselineFormat: 4, hasNativeBinding: true });
+  });
   it("handles unavailable observations with bounded fixed fields", () => {
     expect(api.snapshotObservation(undefined)).toEqual({
       availability: null,

@@ -14,7 +14,7 @@ async function wait(check) {
     if (await check()) return;
     await delay(100);
   }
-  throw Error("Native Prisma observation incomplete.");
+  throw Error("Native migration observation incomplete.");
 }
 const diagnosticCodes = new Set([
   "platform_unsupported",
@@ -50,7 +50,7 @@ exports.snapshotObservation = (latest) => ({
   errorCode: diagnosticCode(latest?.error?.code),
   activity: enumValue(latest?.activity?.state, ["idle", "busy", "unknown"]),
   readiness: enumValue(latest?.readiness?.state, ["READY", "NOT READY"]),
-  baselineFormat: [1, 2, 3].includes(latest?.baseline?.formatVersion)
+  baselineFormat: [1, 2, 3, 4].includes(latest?.baseline?.formatVersion)
     ? latest.baseline.formatVersion
     : null,
   hasNativeBinding: Boolean(latest?.baseline?.nativeMigrations),
@@ -58,7 +58,12 @@ exports.snapshotObservation = (latest) => ({
 });
 exports.run = async () => {
   const config = await readConfiguration();
-  assert.equal(config.scenario, "prisma-review");
+  const migrationKind = config.migrationKind ?? "prisma";
+  assert.ok(migrationKind === "prisma" || migrationKind === "drizzle");
+  assert.equal(
+    config.scenario,
+    migrationKind === "drizzle" ? "drizzle-review" : "prisma-review",
+  );
   assert.equal(process.platform, "linux");
   assert.equal(process.arch, "x64");
   assert.equal(vscode.workspace.isTrusted, true);
@@ -75,7 +80,21 @@ exports.run = async () => {
   const runtime = (name) =>
     require(path.join(extension.extensionPath, "dist/src", name));
   const snapshotRuntime = runtime("project_snapshot.js"),
-    original = snapshotRuntime.inspectProject;
+    original = snapshotRuntime.inspectProject,
+    processRuntime = runtime("process_adapter.js"),
+    originalJson = processRuntime.runRehearsalJson;
+  let sourceDispatches = 0,
+    sourceObservation;
+  if (migrationKind === "drizzle")
+    processRuntime.runRehearsalJson = async (...args) => {
+      const selected =
+        args[0].workspaceRoot === config.workspace &&
+        args[0].expectedCommand === "inspect source";
+      if (selected) sourceDispatches++;
+      const result = await originalJson(...args);
+      if (selected) sourceObservation = { command: args[0].command, result };
+      return result;
+    };
   let latest,
     phase = "activation",
     terminalCount = 0;
@@ -95,6 +114,7 @@ exports.run = async () => {
     "inspect baseline",
     "inspect plan",
     "inspect insights",
+    "inspect source",
     "inspect config",
     "inspect configuration",
     "configuration",
@@ -202,7 +222,10 @@ exports.run = async () => {
     assert.equal(latest.availability, "ready");
     assert.equal(latest.activity.state, "idle");
     assert.equal(latest.version, config.coreVersion);
-    assert.equal(latest.baseline.formatVersion, 3);
+    assert.equal(
+      latest.baseline.formatVersion,
+      migrationKind === "drizzle" ? 4 : 3,
+    );
     assert.ok(latest.baseline.nativeMigrations);
     const plan = latest.migrationReview;
     assert.equal(plan.schemaVersion, 1);
@@ -210,7 +233,7 @@ exports.run = async () => {
       plan.targets.every(
         (target) =>
           target.provider === "postgresql" &&
-          target.migrationTool?.kind === "prisma",
+          target.migrationTool?.kind === migrationKind,
       ),
     );
     assert.equal(latest.migrationInsights.state, "available");
@@ -220,7 +243,12 @@ exports.run = async () => {
     ].find(
       ([, item]) =>
         item.entry.workspaceRelativePath &&
-        /^\d{14}_[A-Za-z0-9_-]+\/migration\.sql$/u.test(item.entry.filename),
+        (migrationKind === "drizzle"
+          ? item.entry.nativeIdentity?.kind === "drizzle" &&
+            item.entry.filename === `${item.entry.nativeIdentity.tag}.sql`
+          : /^\d{14}_[A-Za-z0-9_-]+\/migration\.sql$/u.test(
+              item.entry.filename,
+            )),
     );
     assert.ok(
       finding,
@@ -235,18 +263,133 @@ exports.run = async () => {
     const exact = await runtime("migration_source.js").readExactMigrationInput(
       config.workspace,
       source,
+      migrationKind === "drizzle",
     );
     await vscode.commands.executeCommand(
       "rehearsal.openWorkspace",
       folder.uri.toString(),
     );
+    const reviewedEntry =
+      migrationKind === "drizzle"
+        ? plan.targets
+            .flatMap((target) => target.entries)
+            .find(
+              (entry) =>
+                entry.filename === source.filename &&
+                entry.sha256 === source.sha256 &&
+                runtime("native_migration_contract.js").sameDrizzleIdentity(
+                  entry.nativeIdentity,
+                  item.entry.nativeIdentity,
+                ),
+            )
+        : undefined;
+    if (migrationKind === "drizzle") assert.ok(reviewedEntry);
+    const sourceId = reviewedEntry
+      ? runtime("migration_source_review.js").migrationSourceReviewId(
+          plan,
+          reviewedEntry,
+        )
+      : undefined;
     phase = "rendered-source";
     await writeJson(config.phasePath, {
       state: "ready",
       findingId,
+      ...(sourceId ? { sourceId } : {}),
       filename: source.filename,
       workspaceName: latest.workspaceName,
     });
+    if (migrationKind === "drizzle") {
+      phase = "reviewed-input";
+      await wait(
+        () =>
+          sourceDispatches === 1 &&
+          vscode.window.activeTextEditor?.document.uri.fsPath === exact.path,
+      );
+      assert.equal(sourceDispatches, 1);
+      assert.ok(sourceObservation);
+      assert.equal(sourceObservation.result.result.status, "success");
+      assert.equal(
+        sourceObservation.result.result.rehearsalVersion,
+        config.coreVersion,
+      );
+      assert.deepEqual(
+        sourceObservation.command,
+        runtime("migration_source_review.js").reviewedMigrationSourceCommand(
+          plan,
+          reviewedEntry,
+        ),
+      );
+      const reference = runtime(
+        "migration_source_review.js",
+      ).parseReviewedMigrationSource(
+        sourceObservation.result.result.data,
+        plan,
+        reviewedEntry,
+      );
+      assert.equal(
+        reference.candidateSha256,
+        latest.migrationReview.candidateSha256,
+      );
+      assert.equal(reference.filename, source.filename);
+      assert.equal(reference.sha256, source.sha256);
+      const reviewedEditor = vscode.window.activeTextEditor;
+      assert.equal(reviewedEditor.document.uri.scheme, "file");
+      assert.equal(reviewedEditor.document.uri.authority, "");
+      assert.equal(reviewedEditor.document.isDirty, false);
+      assert.equal(reviewedEditor.selection.active.line, 0);
+      assert.equal(reviewedEditor.selection.active.character, 0);
+      assert.equal(
+        runtime("migration_source.js").migrationSourceDocumentMatches(
+          exact.text,
+          reviewedEditor.document.getText(),
+        ),
+        true,
+      );
+      const rechecked = await runtime(
+        "migration_source.js",
+      ).readExactMigrationInput(config.workspace, source, true);
+      assert.equal(rechecked.identity, exact.identity);
+      assert.equal(
+        hash((await readRegular(exact.path, 2 * 1024 * 1024)).bytes),
+        source.sha256,
+      );
+      await writeJson(config.phasePath, { state: "reviewed-input-observed" });
+      await wait(async () => {
+        try {
+          return (
+            JSON.parse(
+              (
+                await readRegular(
+                  path.join(config.root, "reviewed-ui-done.json"),
+                  4096,
+                )
+              ).bytes.toString(),
+            ).complete === true
+          );
+        } catch {
+          return false;
+        }
+      });
+      assert.equal(vscode.window.activeTextEditor, reviewedEditor);
+      assert.equal(reviewedEditor.document.isDirty, false);
+      await vscode.commands.executeCommand(
+        "workbench.action.closeActiveEditor",
+      );
+      await wait(
+        () =>
+          vscode.window.activeTextEditor?.document.uri.fsPath !== exact.path,
+      );
+      await vscode.commands.executeCommand(
+        "rehearsal.openWorkspace",
+        folder.uri.toString(),
+      );
+      assert.equal(
+        latest.migrationReview.candidateSha256,
+        plan.candidateSha256,
+      );
+      await writeJson(config.phasePath, { state: "finding-ready" });
+      phase = "static-finding";
+    }
     await wait(
       () => vscode.window.activeTextEditor?.document.uri.fsPath === exact.path,
     );
@@ -265,6 +408,7 @@ exports.run = async () => {
       hash((await readRegular(exact.path, 2 * 1024 * 1024)).bytes),
       source.sha256,
     );
+    if (migrationKind === "drizzle") assert.equal(sourceDispatches, 1);
     assert.equal(terminalCount, 0);
     assert.equal(vscode.window.terminals.length, 0);
     await writeJson(config.phasePath, { state: "source-observed" });
@@ -288,15 +432,42 @@ exports.run = async () => {
       coreArtifactSha256: config.coreArtifactSha256,
       coreVersion: latest.version,
       vscodeVersion: vscode.version,
-      baselineFormat: 3,
+      baselineFormat: latest.baseline.formatVersion,
+      migrationKind,
+      ...(migrationKind === "drizzle"
+        ? {
+            nativeIdentity: item.entry.nativeIdentity,
+            baselineCutoff: latest.baseline.migrationCutoff,
+          }
+        : {}),
       candidateCount: plan.candidateCount,
       filename: source.filename,
       sourceSha256: source.sha256,
       line: item.finding.line,
       column: item.finding.column,
       terminalCount,
+      sourceDispatches,
+      ...(migrationKind === "drizzle"
+        ? {
+            reviewedInput: {
+              candidateSha256: plan.candidateSha256,
+              nativeIdentity: reviewedEntry.nativeIdentity,
+              filename: source.filename,
+              sha256: source.sha256,
+              clean: true,
+              line: 0,
+              column: 0,
+            },
+          }
+        : {}),
       checks: [
         "canonical-ready-native-contract",
+        ...(migrationKind === "drizzle"
+          ? [
+              "real-reviewed-input-button-public-cli-root-binding",
+              "clean-exact-reviewed-input-at-file-top",
+            ]
+          : []),
         "real-rendered-keyboard-source-navigation",
         "clean-exact-native-sql-and-position",
       ],
@@ -311,15 +482,17 @@ exports.run = async () => {
       phase,
       candidateSha256: config.candidateSha256,
       coreArtifactSha256: config.coreArtifactSha256,
-      observed: exports.snapshotObservation(latest),
+      observed: { ...exports.snapshotObservation(latest), sourceDispatches },
       commands,
       parserFailures,
       terminalCount,
     });
-    throw Error("Native Prisma review failed; private output withheld.");
+    throw Error("Native migration review failed; private output withheld.");
   } finally {
     snapshotRuntime.inspectProject = original;
     for (const revert of restore.reverse()) revert();
+    if (migrationKind === "drizzle")
+      processRuntime.runRehearsalJson = originalJson;
     listener.dispose();
   }
 };

@@ -1,3 +1,7 @@
+import {
+  describeMigrationCutoff,
+  parseDrizzleMigrationIdentity,
+} from "./native_migration_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 
 /** A default leaf inside the chosen workspace, never a user-supplied path. */
@@ -129,11 +133,18 @@ export const buildVerificationReport = (
           rowCount: count(snapshot.baseline.rowCount),
           tableCount: count(snapshot.baseline.tableCount),
           migrationCount: count(snapshot.baseline.migrationCount),
-          migrationCutoff: /^\d{14}$/u.test(
-            snapshot.baseline.migrationCutoff ?? "",
-          )
-            ? snapshot.baseline.migrationCutoff
-            : null,
+          migrationCutoff: (() => {
+            const cutoff = snapshot.baseline.migrationCutoff;
+            if (typeof cutoff === "string")
+              return /^\d{14}$/u.test(cutoff) ? cutoff : null;
+            try {
+              return describeMigrationCutoff(
+                parseDrizzleMigrationIdentity(cutoff),
+              );
+            } catch {
+              return null;
+            }
+          })(),
           migrationHistorySha256: hash(
             snapshot.baseline.migrationHistorySha256,
           ),
