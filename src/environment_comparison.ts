@@ -1,3 +1,7 @@
+import {
+  describeMigrationCutoff,
+  parseNativeMigrationIdentity,
+} from "./native_migration_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 
 export const COMPARISON_LIMITS = {
@@ -10,7 +14,7 @@ export interface ComparisonSubject {
   readonly label: string;
   readonly kind: "target" | "baseline";
   readonly provider: "supabase" | "postgresql" | null;
-  readonly formatVersion: 1 | 2 | 3 | null;
+  readonly formatVersion: 1 | 2 | 3 | 4 | 5 | null;
   readonly baselineGenerationId: string | null;
   readonly migrationCutoff: string | null;
   readonly migrationHistorySha256: string | null;
@@ -34,6 +38,15 @@ const text = (value: unknown): string | null =>
   typeof value === "string" && /^[A-Za-z0-9_. -]{1,128}$/u.test(value)
     ? value
     : null;
+
+const comparisonCutoff = (value: unknown): string | null => {
+  if (typeof value === "string") return /^\d{14}$/u.test(value) ? value : null;
+  try {
+    return describeMigrationCutoff(parseNativeMigrationIdentity(value));
+  } catch {
+    return null;
+  }
+};
 
 export const comparisonSubjects = (
   snapshot: ProjectSnapshot,
@@ -59,7 +72,7 @@ export const comparisonSubjects = (
       baselineGenerationId: text(
         baseline?.generationId ?? target.baselineGenerationId,
       ),
-      migrationCutoff: text(baseline?.migrationCutoff),
+      migrationCutoff: comparisonCutoff(baseline?.migrationCutoff),
       migrationHistorySha256: hash(baseline?.migrationHistorySha256),
       sourceSchemaSha256: hash(baseline?.sourceSchemaSha256),
       candidateSha256: hash(
@@ -93,7 +106,7 @@ export const comparisonSubjects = (
       provider: primaryProvider,
       formatVersion: baseline.formatVersion,
       baselineGenerationId: generationId,
-      migrationCutoff: text(baseline.migrationCutoff),
+      migrationCutoff: comparisonCutoff(baseline.migrationCutoff),
       migrationHistorySha256: active
         ? hash(snapshot.baseline?.migrationHistorySha256)
         : null,

@@ -194,9 +194,9 @@ export function verifyWorkbenchReviewSamples(value: unknown) {
                       .toLowerCase()
                       .localeCompare(right.sortName.toLowerCase())
                   : sort === "date"
-                    ? left.version.localeCompare(right.version)
+                    ? left.version!.localeCompare(right.version!)
                     : left.target.localeCompare(right.target) ||
-                      left.version.localeCompare(right.version);
+                      left.version!.localeCompare(right.version!);
             requireEvidence(comparison <= 0);
           }
         }

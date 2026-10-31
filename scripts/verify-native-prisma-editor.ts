@@ -524,7 +524,7 @@ async function drive(
           "Runtime.callFunctionOn",
           {
             objectId: listener.handler.objectId,
-            functionDeclaration: `function(){return Function.prototype.toString.call(this).includes(${JSON.stringify(selector.startsWith("[data-rehearsal-page") ? "data-rehearsal-page" : "data-open-migration-insight")});}`,
+            functionDeclaration: `function(){return Function.prototype.toString.call(this).includes(${JSON.stringify(selector.startsWith("[data-rehearsal-page") ? "data-rehearsal-page" : selector.startsWith("[data-open-reviewed-migration") ? "data-open-reviewed-migration" : "data-open-migration-insight")});}`,
             returnByValue: true,
           },
           context.session,
@@ -637,6 +637,31 @@ async function drive(
         ),
       );
     };
+    const settleKnexView = async (page: string) => {
+      const context = await find("#" + page);
+      const visible = `(()=>{const node=document.getElementById(${JSON.stringify(page)}),rect=node?.getBoundingClientRect();return !!node&&!node.hidden&&rect.width>0&&rect.height>0;})()`;
+      await waitOwned(() =>
+        evaluate(
+          context,
+          `(()=>{if(!${visible})return false;return !document.getElementById(${JSON.stringify(page)}).getAnimations({subtree:true}).some(animation=>animation.playState==='running'&&Number.isFinite(animation.effect?.getComputedTiming().endTime));})()`,
+        ),
+      );
+      const rendered = await send(
+        "Runtime.evaluate",
+        {
+          contextId: context.id,
+          returnByValue: true,
+          awaitPromise: true,
+          expression: `Promise.race([new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(${visible})))),new Promise(resolve=>setTimeout(()=>resolve(false),1000))])`,
+        },
+        context.session,
+      );
+      assert.equal(
+        rendered.result?.value,
+        true,
+        "Knex view capture did not settle within its bounded rendering checkpoint.",
+      );
+    };
     if (phase.consumerReview === true) {
       for (const page of [
         "overview",
@@ -652,7 +677,61 @@ async function drive(
       }
     }
     await navigate("migrations");
+    if (phase.reviewedCodeOnly === true) await settleKnexView("migrations");
     await screenshot("prisma-migrations");
+    if (phase.sourceId !== undefined) {
+      assert.match(phase.sourceId, /^[a-f0-9]{64}$/);
+      await activate(`[data-open-reviewed-migration="${phase.sourceId}"]`);
+      await waitOwned(async () => {
+        try {
+          return (
+            JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
+              .state === "reviewed-input-observed"
+          );
+        } catch {
+          return false;
+        }
+      });
+      await screenshot(
+        phase.reviewedCodeOnly === true
+          ? "knex-reviewed-code"
+          : "drizzle-reviewed-input",
+      );
+      await writeFile(
+        join(root, "reviewed-ui-done.json"),
+        JSON.stringify({ complete: true }),
+        { mode: 0o600 },
+      );
+      await waitOwned(async () => {
+        try {
+          return (
+            JSON.parse(await readFile(join(root, "phase.json"), "utf8"))
+              .state ===
+            (phase.reviewedCodeOnly === true
+              ? "reviewed-code-returned"
+              : "finding-ready")
+          );
+        } catch {
+          return false;
+        }
+      });
+      const restored = await find("#migrations");
+      await waitOwned(() =>
+        evaluate(restored, "!document.getElementById('migrations').hidden"),
+      );
+    }
+    if (phase.reviewedCodeOnly === true) {
+      assert.equal(phase.findingId, undefined);
+      await navigate("overview");
+      await settleKnexView("overview");
+      await screenshot("knex-returned-overview");
+      await writeFile(
+        join(root, "ui-done.json"),
+        JSON.stringify({ complete: true, overview: true }),
+        { mode: 0o600 },
+      );
+      return;
+    }
     assert.match(phase.findingId, /^[a-f0-9]{64}$/);
     observePhase("ui-source-control");
     const sourceSelector = `[data-open-migration-insight="${phase.findingId}"]`;
@@ -667,6 +746,15 @@ async function drive(
         { mode: 0o600, flag: "wx" },
       );
     await activate(sourceSelector);
+    if (phase.consumerReview === true)
+      await writeFile(
+        join(root, "ui-source-dispatched.json"),
+        JSON.stringify({
+          state: "source-activation-dispatched",
+          findingId: phase.findingId,
+        }),
+        { mode: 0o600, flag: "wx" },
+      );
     await waitOwned(async () => {
       try {
         return (
@@ -768,10 +856,19 @@ export const parseNativeEditorAcceptanceArguments = (
   const args = new Map<string, string>();
   for (const raw of values) {
     const match = /^--([a-z-]+)=(.+)$/u.exec(raw);
-    assert.ok(match && names.includes(match[1]!) && !args.has(match[1]!));
+    assert.ok(
+      match &&
+        (names.includes(match[1]!) ||
+          (scenario === "prisma-review" && match[1] === "migration-kind")) &&
+        !args.has(match[1]!),
+    );
     args.set(match[1]!, match[2]!);
   }
-  assert.equal(args.size, names.length);
+  assert.equal(args.size, names.length + (args.has("migration-kind") ? 1 : 0));
+  if (args.has("migration-kind"))
+    assert.ok(
+      ["prisma", "drizzle", "knex"].includes(args.get("migration-kind")!),
+    );
   for (const name of ["vsix-sha", "core-sha", "electron-sha"])
     assert.match(args.get(name)!, /^[a-f0-9]{64}$/u);
   assert.match(args.get("code-version")!, /^\d+\.\d+\.\d+$/u);
@@ -805,6 +902,7 @@ export async function runNativeEditorAcceptance(
     "Native editor requires3GiB available memory.",
   );
   const args = parseNativeEditorAcceptanceArguments(values, scenario);
+  const migrationKind = args.get("migration-kind") ?? "prisma";
   const get = (name: string) => args.get(name)!;
   const approved = await realpath(process.env.REHEARSAL_DEVELOPMENT_ROOT!);
   await nativeStorageRoot();
@@ -937,6 +1035,18 @@ export async function runNativeEditorAcceptance(
       (await regular(join(coreRoot, "package.json"), 1024 * 1024)).toString(),
     );
     assert.equal(coreManifest.name, "@rehearsal-db/core");
+    if (scenario !== "real-consumer") {
+      assert.equal(
+        coreManifest.rehearsalContracts?.[
+          migrationKind === "knex"
+            ? "knexMigrations"
+            : migrationKind === "drizzle"
+              ? "drizzleMigrations"
+              : "nativeMigrations"
+        ],
+        1,
+      );
+    }
     if (scenario === "real-consumer") {
       phase = "initial-consumer-preservation";
       consumerBefore = await (
@@ -1029,7 +1139,9 @@ export async function runNativeEditorAcceptance(
     await writeFile(
       configPath,
       JSON.stringify({
-        scenario,
+        scenario:
+          scenario === "real-consumer" ? scenario : migrationKind + "-review",
+        migrationKind,
         root,
         evidence,
         resultPath,
@@ -1114,6 +1226,18 @@ export async function runNativeEditorAcceptance(
     );
     phase = "companion-result-validation";
     assert.equal(result.status, "passed");
+    if (migrationKind === "knex" && scenario !== "real-consumer") {
+      assert.equal(result.migrationKind, "knex");
+      assert.equal(result.baselineFormat, 5);
+      assert.equal(result.insightsAvailable, false);
+      assert.equal(result.overviewReturned, true);
+      assert.equal(result.dirtyDocuments, 0);
+      assert.equal(result.terminalCount, 0);
+      assert.equal(result.sourceDispatches, 1);
+      assert.equal(result.reviewedInput?.clean, true);
+      assert.equal(result.reviewedInput?.line, 0);
+      assert.equal(result.reviewedInput?.column, 0);
+    }
     assert.equal(result.driverFinalized, true);
     assert.equal(result.recoveryRequired, false);
     recoveryRequired = false;
@@ -1161,6 +1285,7 @@ export async function runNativeEditorAcceptance(
         coreArtifactSha256: get("core-sha"),
         electronSha256: get("electron-sha"),
         codeVersion: get("code-version"),
+        migrationKind,
         coreFiles,
         extensionFiles,
         ownedProcessGroupClosed: closed,
@@ -1270,8 +1395,13 @@ export async function runNativeEditorAcceptance(
       "consumer-returned.png",
       "prisma-migrations.png",
       "prisma-native-sql.png",
+      "drizzle-reviewed-input.png",
+      "knex-reviewed-code.png",
+      "knex-returned-overview.png",
       "prisma-failure.png",
       "phase.json",
+      "ui-source-ready.json",
+      "ui-source-dispatched.json",
       "ui-observations.json",
     ])
       await copyFile(join(root, name), join(evidence, name)).catch(() => {});

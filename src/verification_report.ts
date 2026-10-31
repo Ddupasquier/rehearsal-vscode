@@ -1,3 +1,7 @@
+import {
+  describeMigrationCutoff,
+  parseNativeMigrationIdentity,
+} from "./native_migration_contract.js";
 import type { ProjectSnapshot } from "./project_snapshot.js";
 
 /** A default leaf inside the chosen workspace, never a user-supplied path. */
@@ -129,14 +133,24 @@ export const buildVerificationReport = (
           rowCount: count(snapshot.baseline.rowCount),
           tableCount: count(snapshot.baseline.tableCount),
           migrationCount: count(snapshot.baseline.migrationCount),
-          migrationCutoff: /^\d{14}$/u.test(
-            snapshot.baseline.migrationCutoff ?? "",
-          )
-            ? snapshot.baseline.migrationCutoff
-            : null,
+          migrationCutoff: (() => {
+            const cutoff = snapshot.baseline.migrationCutoff;
+            if (typeof cutoff === "string")
+              return /^\d{14}$/u.test(cutoff) ? cutoff : null;
+            try {
+              return describeMigrationCutoff(
+                parseNativeMigrationIdentity(cutoff),
+              );
+            } catch {
+              return null;
+            }
+          })(),
           migrationHistorySha256: hash(
             snapshot.baseline.migrationHistorySha256,
           ),
+          ...(snapshot.baseline.historicalFileChecksums === "unavailable"
+            ? { historicalFileChecksums: "unavailable" as const }
+            : {}),
           policySha256: hash(snapshot.baseline.sanitizationPolicySha256),
           dataSha256: hash(snapshot.baseline.dataSha256),
           integrity:

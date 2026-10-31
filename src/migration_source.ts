@@ -1,3 +1,4 @@
+import { isSafeKnexMigrationFilename } from "./knex_migration_contract.js";
 /** One exact project-local input boundary shared by static and execution evidence. */
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
@@ -15,6 +16,11 @@ const invalid = (): never => {
   );
 };
 /** Public inventory names may be uppercase/Unicode; they never supply a path. */
+export const isSafeDrizzleMigrationFilename = (
+  value: unknown,
+): value is string =>
+  typeof value === "string" &&
+  /^[A-Za-z0-9][A-Za-z0-9_-]{0,190}\.sql$/u.test(value);
 export const isSafeMigrationFilename = (value: unknown): value is string =>
   typeof value === "string" &&
   Buffer.byteLength(value) <= 255 &&
@@ -31,6 +37,7 @@ export const isSafeNativeMigrationFilename = (
   /^\d{14}_[A-Za-z0-9_-]+\/migration\.sql$/u.test(value);
 export const parseMigrationSourceInput = (
   value: unknown,
+  allowDrizzle: boolean | "knex" = false,
 ): MigrationSourceInput => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return invalid();
@@ -39,6 +46,12 @@ export const parseMigrationSourceInput = (
     Object.keys(data).sort().join(",") !==
       "filename,sha256,workspaceRelativePath" ||
     (!isSafeMigrationFilename(data.filename) &&
+      !(
+        allowDrizzle === true && isSafeDrizzleMigrationFilename(data.filename)
+      ) &&
+      !(
+        allowDrizzle === "knex" && isSafeKnexMigrationFilename(data.filename)
+      ) &&
       !isSafeNativeMigrationFilename(data.filename)) ||
     typeof data.sha256 !== "string" ||
     !/^[a-f0-9]{64}$/u.test(data.sha256)
@@ -49,7 +62,10 @@ export const parseMigrationSourceInput = (
     path !== null &&
     (typeof path !== "string" ||
       Buffer.byteLength(path) < 1 ||
-      Buffer.byteLength(path) > 1024 ||
+      Buffer.byteLength(path) >
+        (allowDrizzle === "knex" && isSafeKnexMigrationFilename(data.filename)
+          ? 3072
+          : 1024) ||
       /[\\:%?#\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u.test(
         path,
       ) ||
@@ -85,12 +101,13 @@ export const migrationSourceDocumentMatches = (
 export const readExactMigrationInput = async (
   workspaceRoot: string,
   value: unknown,
+  allowDrizzle: boolean | "knex" = false,
 ): Promise<{
   readonly path: string;
   readonly text: string;
   readonly identity: string;
 }> => {
-  const source = parseMigrationSourceInput(value);
+  const source = parseMigrationSourceInput(value, allowDrizzle);
   if (!source.workspaceRelativePath || !isAbsolute(workspaceRoot))
     return invalid();
   const root = await realpath(workspaceRoot);
@@ -121,7 +138,11 @@ export const readExactMigrationInput = async (
   );
   try {
     const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > 2 * 1024 * 1024) return invalid();
+    const maximumBytes =
+      allowDrizzle === "knex" && isSafeKnexMigrationFilename(source.filename)
+        ? 8 * 1024 * 1024
+        : 2 * 1024 * 1024;
+    if (!stat.isFile() || stat.size > maximumBytes) return invalid();
     const bytes = Buffer.alloc(stat.size + 1);
     const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
     const current = await lstat(candidate);

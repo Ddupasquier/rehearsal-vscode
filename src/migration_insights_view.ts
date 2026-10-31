@@ -1,3 +1,4 @@
+import { migrationIdentityKey } from "./native_migration_contract.js";
 /** Compact static warnings inside the existing migration rows, never approval controls. */
 import type { ProjectSnapshot } from "./project_snapshot.js";
 import {
@@ -19,6 +20,16 @@ export const migrationInsightsMarkup = (
 } => {
   const entries = new Map<string, string>();
   const state = snapshot.migrationInsights;
+  if (
+    snapshot.migrationReview?.targets.some(
+      (t) => t.migrationTool?.kind === "knex",
+    )
+  )
+    return {
+      summary:
+        '<p class="control-note">Static SQL Insights does not analyze Knex JavaScript. Review the exact migration source; no SQL validity, execution safety or past applied-byte evidence is inferred.</p>',
+      entries,
+    };
   if (!state) return { summary: "", entries };
   if (state.state === "unavailable")
     return {
@@ -35,14 +46,14 @@ export const migrationInsightsMarkup = (
     }[]
   >();
   for (const [id, item] of migrationInsightIndex(report)) {
-    const key = `${item.target}:${item.entry.version}`,
+    const key = `${item.target}:${migrationIdentityKey(item.entry)}`,
       list = actions.get(key) ?? [];
     list.push({ id, finding: item.finding });
     actions.set(key, list);
   }
   for (const target of report.targets)
     for (const entry of target.entries) {
-      const key = `${target.name}:${entry.version}`,
+      const key = `${target.name}:${migrationIdentityKey(entry)}`,
         items = actions.get(key) ?? [];
       const unknown = entry.unknownReasons.length
         ? "<p>Coverage is incomplete: unsupported, malformed or bounded SQL remains unknown. Review this migration manually.</p>"

@@ -58,6 +58,13 @@ Silicon, Colima 0.10.3, VZ and the default profile** with a compatible core. It 
 the shared VM, including other projects' workloads, while preserving data volumes.
 Use **Stop project services** when you only want to stop this project's services.
 
+Extension **0.1.28** targets **Core 2.3.0** for pinned PostgreSQL Knex reviewed-code
+inputs and format 5 baselines, alongside Prisma and Drizzle review. The editor opens
+`.cjs` inputs as text and does not execute JavaScript. See the
+[compatibility and limits](docs/extension-guide.md#core-compatibility-and-upgrades);
+source versions do not establish execution or native qualification. Check the
+[published release](https://github.com/Ddupasquier/rehearsal-vscode/releases) for its exact verified scope.
+
 ## Free Starter, optional updates
 
 Starter's included features remain yours **indefinitely at no charge** for personal

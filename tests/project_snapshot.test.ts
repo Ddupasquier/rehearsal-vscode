@@ -1845,3 +1845,244 @@ describe("configuration-independent engine lifecycle inspection", () => {
     ]);
   });
 });
+
+describe("Drizzle snapshot public cross-view binding", () => {
+  const inspectDrizzle = async (change = "valid") => {
+    const { rawPlan, baseline: rawBaseline } =
+        await import("./drizzle_fixture.js"),
+      base = client(),
+      plan = rawPlan(),
+      baseline = rawBaseline(),
+      candidate = plan.targets[0]!.entries[1]!;
+    if (change === "unknown-plan-schema") plan.schemaVersion = 2;
+    if (change === "cutoff-drift")
+      baseline.migrationCutoff = { ...baseline.migrationCutoff, tag: "other" };
+    if (change === "count-drift") baseline.migrationCount = 2;
+    if (change === "append")
+      plan.targets[0]!.migrationTool.journalSha256 = "b".repeat(64);
+    if (change === "prefix-drift")
+      plan.targets[0]!.baselineHistorySha256 = "b".repeat(64);
+    if (change === "unverified-prefix")
+      plan.targets[0]!.baselinePrefixVerification = "unknown";
+    return inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        version: async (...args) => ({
+          ...(await base.version(...args)),
+          ...(change === "missing-plan"
+            ? {}
+            : {
+                migrationReviewSchema:
+                  change === "unknown-plan" ? null : (1 as const),
+              }),
+          ...(change === "old-core" ? {} : { drizzleMigrationsSchema: 1 }),
+        }),
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          if (options.expectedCommand === "inspect plan")
+            return envelope("inspect plan", plan) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (options.expectedCommand === "inspect baseline")
+            return envelope("inspect baseline", baseline) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (options.expectedCommand === "candidates") {
+            const c = {
+              nativeIdentity: candidate.nativeIdentity,
+              name: candidate.name,
+              filename: candidate.filename,
+              sha256: candidate.sha256,
+              status: "candidate",
+            };
+            return envelope("candidates", {
+              baselineGenerationId: "baseline-1",
+              candidateSha256: plan.candidateSha256,
+              candidateCount: 1,
+              candidates: [c],
+              targets: [
+                {
+                  name: "primary",
+                  configPath: "/workspace/rehearsal.config.mjs",
+                  candidateSha256: plan.targets[0]!.candidateSha256,
+                  candidateCount: 1,
+                  candidates: [c],
+                },
+              ],
+            }) as { result: ResultEnvelope<Data>; exitCode: number };
+          }
+          const execution = await base.command<Data>(options);
+          if (options.expectedCommand === "explain") {
+            const explained = execution.result.data as unknown as ExplainData;
+            return {
+              ...execution,
+              result: {
+                ...execution.result,
+                data: {
+                  ...explained,
+                  targets: [
+                    { name: "primary", plan: { ...explained, baseline } },
+                  ],
+                },
+              },
+            } as { result: ResultEnvelope<Data>; exitCode: number };
+          }
+          return execution;
+        },
+      },
+    });
+  };
+  it("preserves format4/cutoff/native candidates with matching independent baseline evidence", async () => {
+    const result = await inspectDrizzle();
+    expect(result.availability).toBe("ready");
+    expect(result.baseline?.formatVersion).toBe(4);
+    expect(
+      result.migrationReview?.targets[0]!.entries[1]!.nativeIdentity?.kind,
+    ).toBe("drizzle");
+    expect(result.candidates?.files[0]).not.toHaveProperty("version");
+  });
+  it("accepts a verified append with changed raw journal bytes", async () =>
+    expect((await inspectDrizzle("append")).availability).toBe("ready"));
+  it.each([
+    "old-core",
+    "missing-plan",
+    "unknown-plan",
+    "unknown-plan-schema",
+    "prefix-drift",
+    "unverified-prefix",
+    "cutoff-drift",
+    "count-drift",
+  ])("fails closed for %s", async (change) => {
+    const result = await inspectDrizzle(change);
+    expect(result.availability).toBe("error");
+    expect(result.migrationReview).toBeUndefined();
+  });
+});
+
+describe("Knex snapshot public cross-view binding", () => {
+  const inspectKnex = async (change = "valid") => {
+    const { knexPlan: rawPlan, knexBaseline: rawBaseline } =
+        await import("./knex_fixture.js"),
+      base = client(),
+      plan = rawPlan(),
+      baseline = rawBaseline(),
+      candidate = plan.targets[0]!.entries[1]!;
+    if (change === "unknown-plan-schema") plan.schemaVersion = 2;
+    if (change === "cutoff-drift")
+      baseline.migrationCutoff = {
+        ...baseline.migrationCutoff,
+        name: "other.cjs",
+      };
+    if (change === "count-drift") baseline.migrationCount = 2;
+    if (change === "append")
+      plan.targets[0]!.migrationTool.toolchainSha256 = "b".repeat(64);
+    if (change === "prefix-drift")
+      plan.targets[0]!.baselineHistorySha256 = "b".repeat(64);
+    if (change === "unverified-prefix")
+      plan.targets[0]!.baselinePrefixVerification = "unknown";
+    return inspectProject({
+      workspaceName: "fixture",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...base,
+        version: async (...args) => ({
+          ...(await base.version(...args)),
+          ...(change === "missing-plan"
+            ? {}
+            : {
+                migrationReviewSchema:
+                  change === "unknown-plan" ? null : (1 as const),
+              }),
+          ...(change === "old-core" ? {} : { knexMigrationsSchema: 1 }),
+        }),
+        command: async <Data>(
+          options: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          if (options.expectedCommand === "inspect plan")
+            return envelope("inspect plan", plan) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (options.expectedCommand === "inspect baseline")
+            return envelope("inspect baseline", baseline) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (options.expectedCommand === "candidates") {
+            const c = {
+              nativeIdentity: candidate.nativeIdentity,
+              name: candidate.name,
+              filename: candidate.filename,
+              sha256: candidate.sha256,
+              status: "candidate",
+            };
+            return envelope("candidates", {
+              baselineGenerationId: "baseline-1",
+              candidateSha256: plan.candidateSha256,
+              candidateCount: 1,
+              candidates: [c],
+              targets: [
+                {
+                  name: "primary",
+                  configPath: "/workspace/rehearsal.config.mjs",
+                  candidateSha256: plan.targets[0]!.candidateSha256,
+                  candidateCount: 1,
+                  candidates: [c],
+                },
+              ],
+            }) as { result: ResultEnvelope<Data>; exitCode: number };
+          }
+          const execution = await base.command<Data>(options);
+          if (options.expectedCommand === "explain") {
+            const explained = execution.result.data as unknown as ExplainData;
+            return {
+              ...execution,
+              result: {
+                ...execution.result,
+                data: {
+                  ...explained,
+                  targets: [
+                    { name: "primary", plan: { ...explained, baseline } },
+                  ],
+                },
+              },
+            } as { result: ResultEnvelope<Data>; exitCode: number };
+          }
+          return execution;
+        },
+      },
+    });
+  };
+  it("preserves format5/cutoff/native candidates with matching independent baseline evidence", async () => {
+    const result = await inspectKnex();
+    expect(result.availability).toBe("ready");
+    expect(result.baseline?.formatVersion).toBe(5);
+    expect(
+      result.migrationReview?.targets[0]!.entries[1]!.nativeIdentity?.kind,
+    ).toBe("knex");
+    expect(result.candidates?.files[0]).not.toHaveProperty("version");
+  });
+  it("accepts a verified append with changed platform toolchain bytes", async () =>
+    expect((await inspectKnex("append")).availability).toBe("ready"));
+  it.each([
+    "old-core",
+    "missing-plan",
+    "unknown-plan",
+    "unknown-plan-schema",
+    "prefix-drift",
+    "unverified-prefix",
+    "cutoff-drift",
+    "count-drift",
+  ])("fails closed for %s", async (change) => {
+    const result = await inspectKnex(change);
+    expect(result.availability).toBe("error");
+    expect(result.migrationReview).toBeUndefined();
+  });
+});
