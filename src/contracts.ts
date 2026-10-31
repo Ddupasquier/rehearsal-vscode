@@ -1,4 +1,8 @@
-import type { PrismaMigrationToolBinding } from "./migration_review.js";
+import type {
+  MigrationCutoff,
+  DrizzleMigrationIdentity,
+} from "./native_migration_contract.js";
+import type { NativeMigrationToolBinding } from "./migration_review.js";
 import {
   parseEnvironmentClassification,
   parseEnvironmentProvenance,
@@ -70,7 +74,8 @@ export interface CandidateTarget {
 }
 
 export interface CandidateMigration {
-  readonly version: string;
+  readonly version?: string;
+  readonly nativeIdentity?: DrizzleMigrationIdentity;
   readonly name: string;
   readonly filename: string;
   readonly sha256: string;
@@ -87,11 +92,11 @@ export interface CandidatesData {
 }
 
 export interface BaselineData {
-  readonly formatVersion?: 1 | 2 | 3;
-  readonly nativeMigrations?: PrismaMigrationToolBinding;
+  readonly formatVersion?: 1 | 2 | 3 | 4;
+  readonly nativeMigrations?: NativeMigrationToolBinding;
   readonly generationId: string;
   readonly createdAt: string | null;
-  readonly migrationCutoff: string;
+  readonly migrationCutoff: MigrationCutoff;
   readonly tableCount: number;
   readonly rowCount: number;
   readonly migrationCount: number;
@@ -106,12 +111,12 @@ export interface BaselineData {
     readonly generationId: string;
     readonly createdAt: string | null;
     readonly active: boolean;
-    readonly formatVersion: 1 | 2 | 3;
-    readonly nativeMigrations?: PrismaMigrationToolBinding;
+    readonly formatVersion: 1 | 2 | 3 | 4;
+    readonly nativeMigrations?: NativeMigrationToolBinding;
     readonly rowCount: number;
     readonly tableCount: number;
     readonly migrationCount: number;
-    readonly migrationCutoff: string;
+    readonly migrationCutoff: MigrationCutoff;
     readonly storageAssetCount: number;
   }[];
 }

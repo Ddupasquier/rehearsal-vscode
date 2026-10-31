@@ -1,3 +1,8 @@
+import {
+  migrationIdentityKey,
+  sameDrizzleIdentity,
+  type DrizzleMigrationIdentity,
+} from "./native_migration_contract.js";
 /** Optional, bounded static warnings. Never SQL validity or database safety evidence. */
 import { createHash } from "node:crypto";
 import type { MigrationReviewPlan } from "./migration_review.js";
@@ -63,7 +68,8 @@ export interface MigrationInsightFinding {
   readonly suggestion: string;
 }
 export interface MigrationInsightEntry extends MigrationSourceInput {
-  readonly version: string;
+  readonly version?: string;
+  readonly nativeIdentity?: DrizzleMigrationIdentity;
   readonly verdict: Verdict;
   readonly coverage: "recognized_lexical_rules" | "incomplete";
   readonly unknownReasons: readonly UnknownReason[];
@@ -215,17 +221,27 @@ export const parseMigrationInsights = (
       (rawEntry, index): MigrationInsightEntry => {
         const entry = object(
             rawEntry,
-            "coverage,filename,findings,sha256,unknownReasons,verdict,version,workspaceRelativePath",
+            pending[index]!.nativeIdentity
+              ? "coverage,filename,findings,nativeIdentity,sha256,unknownReasons,verdict,workspaceRelativePath"
+              : "coverage,filename,findings,sha256,unknownReasons,verdict,version,workspaceRelativePath",
           ),
           candidate = pending[index]!;
-        const source = parseMigrationSourceInput({
-          filename: entry.filename,
-          sha256: entry.sha256,
-          workspaceRelativePath: entry.workspaceRelativePath,
-        });
+        const source = parseMigrationSourceInput(
+          {
+            filename: entry.filename,
+            sha256: entry.sha256,
+            workspaceRelativePath: entry.workspaceRelativePath,
+          },
+          !!candidate.nativeIdentity,
+        );
         if (
           ++entriesCount > 1000 ||
-          entry.version !== candidate.version ||
+          (candidate.nativeIdentity
+            ? !sameDrizzleIdentity(
+                entry.nativeIdentity,
+                candidate.nativeIdentity,
+              )
+            : entry.version !== candidate.version) ||
           source.filename !== candidate.filename ||
           source.sha256 !== candidate.sha256 ||
           !Array.isArray(entry.findings) ||
@@ -286,7 +302,9 @@ export const parseMigrationInsights = (
           return fail();
         if (incomplete) unknownCount++;
         return {
-          version: candidate.version,
+          ...(candidate.nativeIdentity
+            ? { nativeIdentity: candidate.nativeIdentity }
+            : { version: candidate.version! }),
           ...source,
           verdict: entry.verdict as Verdict,
           coverage: incomplete ? "incomplete" : "recognized_lexical_rules",
@@ -368,7 +386,7 @@ export const migrationInsightIndex = (
             JSON.stringify([
               binding,
               target.name,
-              entry.version,
+              migrationIdentityKey(entry),
               entry.sha256,
               order,
               finding,

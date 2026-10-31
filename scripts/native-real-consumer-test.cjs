@@ -5,7 +5,10 @@ const fs = require("node:fs/promises");
 const { createHash } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
 const vscode = require("vscode");
-const { readConfiguration } = require("./native-editor-driver.cjs");
+const {
+  readConfiguration,
+  consumerDiagnostic,
+} = require("./native-editor-driver.cjs");
 const { readRegular, writeJson } = require("./native-editor-reads.cjs");
 const wait = async (check, budgetMs = 60000) => {
   const end = Date.now() + budgetMs;
@@ -13,8 +16,18 @@ const wait = async (check, budgetMs = 60000) => {
     if (await check()) return;
     await delay(100);
   }
-  throw Error("Owned real-consumer observation incomplete.");
+  const error = Error("Owned real-consumer observation incomplete.");
+  error.code = "NATIVE_OBSERVATION_TIMEOUT";
+  throw error;
 };
+const observeSourceOpening = async (activation, document, phase) => {
+  const deadline = Date.now() + 60000;
+  phase("source-activation-dispatch");
+  await wait(activation, Math.max(0, deadline - Date.now()));
+  phase("source-document-observation");
+  await wait(document, Math.max(0, deadline - Date.now()));
+};
+exports.observeSourceOpening = observeSourceOpening;
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const snapshotIdentity = (s) => ({
   version: s.version,
@@ -181,18 +194,45 @@ exports.run = async () => {
         throw error;
       }
     }, 180000);
-    phase = "exact-source-opening";
-    await wait(
+    await observeSourceOpening(
+      async () => {
+        try {
+          const value = JSON.parse(
+            (
+              await readRegular(
+                path.join(
+                  path.dirname(config.phasePath),
+                  "ui-source-dispatched.json",
+                ),
+              )
+            ).bytes.toString("utf8"),
+          );
+          return (
+            value.state === "source-activation-dispatched" &&
+            value.findingId === findingId
+          );
+        } catch (error) {
+          if (error.code === "ENOENT") return false;
+          throw error;
+        }
+      },
       () => vscode.window.activeTextEditor?.document.uri.fsPath === exact.path,
+      (value) => {
+        phase = value;
+      },
     );
     const editor = vscode.window.activeTextEditor;
+    phase = "source-document-uri";
     assert.equal(editor.document.uri.scheme, "file");
     assert.equal(editor.document.uri.authority, "");
     assert.equal(editor.document.uri.query, "");
     assert.equal(editor.document.uri.fragment, "");
+    phase = "source-document-cleanliness";
     assert.equal(editor.document.isDirty, false);
+    phase = "source-document-selection";
     assert.equal(editor.selection.active.line, item.finding.line - 1);
     assert.equal(editor.selection.active.character, item.finding.column - 1);
+    phase = "source-document-content";
     assert.equal(
       runtime("migration_source.js").migrationSourceDocumentMatches(
         exact.text,
@@ -200,6 +240,7 @@ exports.run = async () => {
       ),
       true,
     );
+    phase = "source-input-revalidation";
     const afterRead = await runtime(
       "migration_source.js",
     ).readExactMigrationInput(config.workspace, source);
@@ -312,11 +353,12 @@ exports.run = async () => {
         "Screenshots require independent visual review; no synthetic acknowledgements replace actual keyboard or native document observations.",
       ],
     });
-  } catch {
+  } catch (error) {
     await writeJson(config.resultPath, {
       status: "failed",
       scenario: config.scenario,
       phase,
+      diagnostic: consumerDiagnostic(error),
       candidateSha256: config.candidateSha256,
       coreArtifactSha256: config.coreArtifactSha256,
       observed: {
