@@ -6,6 +6,34 @@ Native harnesses use explicit developer-owned storage; shared coordination and e
 fixture/evidence migration require all affected owners. No system-temp fallback or
 implicit sibling Lab checkout is selected by the suite development entry point.
 
+## Repository layout
+
+| Parent                  | Responsibility                                                       |
+| ----------------------- | -------------------------------------------------------------------- |
+| `src/workspace/`        | Project discovery, tree, dashboard, actions and view state           |
+| `src/migrations/`       | Migration contracts, review, findings and source navigation          |
+| `src/configuration/`    | Literal configuration, forms and reviewed edits                      |
+| `src/runtime/`          | CLI transport, engines, resources, operation state and reports       |
+| `src/review/`           | Shared approval panels and stale-review protection                   |
+| `src/updates/`          | Release checks, installation identity, preferences and updates       |
+| `scripts/build/`        | Compatible flat runtime output                                       |
+| `scripts/native/`       | Native editor launchers, drivers and synthetic fixtures              |
+| `scripts/preview/`      | Loopback workspace and theme previews                                |
+| `scripts/verification/` | Package, controller, platform and Lab verification                   |
+| `tests/`                | Matching product domains, plus native, build and packaging contracts |
+
+`src/extension.ts` remains the activation entry point; `src/contracts.ts` owns shared
+snapshot types. Tool configuration and public documents keep their conventional paths.
+Tests and verification automation are excluded from the installed extension.
+
+Source folders do not change the installed layout: the build compiles TypeScript and
+then maps modules, declaration references and source maps to flat `dist/src/` files.
+`dist/src/extension.js`, manifest commands and the strict VSIX allowlist stay stable.
+The mapper refuses ambiguous names, missing or escaping targets and unsupported module
+loads before replacing generated output. It pads rewritten import literals to preserve
+subsequent source-map positions and rebases original source paths. Generated output is
+never edited manually or used as a second source owner.
+
 ## Product identity
 
 | Decision      | Product-candidate contract                                                 |
@@ -560,7 +588,7 @@ regressions do not replace separately pending native acceptance.
 
 The developer-only native panel companion accepts the independent Lab's private
 `migration-insights-native-fixture` handoff through
-`scripts/verify-native-migration-failure.ts`. The existing launcher owns archive
+`scripts/native/verify-native-migration-failure.ts`. The existing launcher owns archive
 verification, exact isolated installation, fresh normal-memory checks, the bounded
 owned process group and profile teardown; historical pinned cancellation/comparison
 scenarios are not relaxed. `native-insights-fixture.ts` validates the closed schema,

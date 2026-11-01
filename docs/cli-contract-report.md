@@ -221,7 +221,7 @@ Then run this from the extension checkout, using its report path and the exact a
 SHA-256 printed by Test Lab:
 
 ```bash
-node --import tsx scripts/verify-operation-activity.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+node --import tsx scripts/native/verify-operation-activity.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
 ```
 
 The extension's production parser and HTML generator must accept all four safe samples
@@ -234,7 +234,7 @@ Add `--editor-review` to the Lab command to exercise read-only configuration pro
 and actual retained baseline generations in the same isolated consumer. Then run:
 
 ```bash
-node --import tsx scripts/verify-editor-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+node --import tsx scripts/native/verify-editor-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
 ```
 
 This companion uses production configuration/baseline parsing, comparison and JSON/Markdown
@@ -251,7 +251,7 @@ activation, project terminal, Activity cancellation and public CLI state. It is 
 not a new CI or release gate:
 
 ```bash
-node --import tsx scripts/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json
+node --import tsx scripts/native/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json
 ```
 
 The closed fixture contract in the launcher requires a fresh leased manual PostgreSQL
@@ -319,7 +319,7 @@ After cancellation acceptance finishes, the same opt-in launcher can reuse that 
 synthetic workspace without a reset:
 
 ```bash
-node --import tsx scripts/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json workbench-review
+node --import tsx scripts/native/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json workbench-review
 ```
 
 This fixed scenario requires the original active 10,003-row baseline and a genuinely
@@ -385,7 +385,7 @@ artifacts are not accepted for this new scenario. It does not create a second co
 engine or mutate the baseline for a demo.
 
 ```bash
-node --import tsx scripts/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json comparison-export
+node --import tsx scripts/native/verify-native-cancellation.ts /absolute/rehearsal-db-0.1.23.vsix FULL_VSIX_SHA256 /absolute/prepared-fixture.json comparison-export
 ```
 
 In the actual Activity & reports view, compare the primary environment first with the
@@ -430,7 +430,7 @@ of `inspect plan`, `candidates` and read-only endpoint proposals. Require a pass
 report, passing `workbenchReview` and removed workspace. Then run:
 
 ```bash
-node --import tsx scripts/verify-workbench-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+node --import tsx scripts/native/verify-workbench-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
 ```
 
 This companion uses the production migration parser, cross-snapshot guard, shared display
@@ -460,7 +460,7 @@ its full SHA-256, recorded public samples, and an optional fourth exact attempte
 file:
 
 ```bash
-node --import tsx scripts/verify-native-migration-failure.ts /absolute/candidate.vsix FULL_VSIX_SHA256 /absolute/public-samples.json /absolute/attempted-migration.sql
+node --import tsx scripts/native/verify-native-migration-failure.ts /absolute/candidate.vsix FULL_VSIX_SHA256 /absolute/public-samples.json /absolute/attempted-migration.sql
 ```
 
 Omit the SQL argument when source-link acceptance is not requested. The samples file
@@ -506,7 +506,7 @@ audited. Require a passing main report, `scopePolicyReview.status: "passed"`, ze
 audited tool calls and removed workspace. Then run:
 
 ```bash
-node --import tsx scripts/verify-scope-policy-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
+node --import tsx scripts/native/verify-scope-policy-review.ts /absolute/path/to/operation-activity.json FULL_ARTIFACT_SHA256
 ```
 
 The companion uses the production baseline/provider and policy parsers, aggregate scope
@@ -682,12 +682,12 @@ resource limitation is not relabeled as Google, restore, or end-to-end acceptanc
 
 ## Exact legacy consumer native acceptance
 
-`scripts/verify-native-real-consumer.ts` is an opt-in wrapper around the maintained
+`scripts/native/verify-native-real-consumer.ts` is an opt-in wrapper around the maintained
 Linux native launcher's closed `real-consumer` scenario, not a second installer or
 engine controller. It accepts the same ten explicit inputs:
 
 ```sh
-../run editor node --import tsx scripts/verify-native-real-consumer.ts \
+../run editor node --import tsx scripts/native/verify-native-real-consumer.ts \
   --vsix=/absolute/rehearsal-db-0.1.26.vsix --vsix-sha=REVIEWED_SHA256 \
   --core-tar=/absolute/rehearsal-db-core-2.1.0.tgz --core-sha=REVIEWED_SHA256 \
   --workspace=/absolute/owned-synthetic-blendcalc-consumer \
