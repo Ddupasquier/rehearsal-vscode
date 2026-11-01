@@ -6,6 +6,56 @@ Native harnesses use explicit developer-owned storage; shared coordination and e
 fixture/evidence migration require all affected owners. No system-temp fallback or
 implicit sibling Lab checkout is selected by the suite development entry point.
 
+## Repository layout
+
+| Parent                  | Responsibility                                                       |
+| ----------------------- | -------------------------------------------------------------------- |
+| `src/workspace/`        | Project discovery, tree, dashboard, actions and view state           |
+| `src/migrations/`       | Migration contracts, review, findings and source navigation          |
+| `src/configuration/`    | Literal configuration, forms and reviewed edits                      |
+| `src/runtime/`          | CLI transport, engines, resources, operation state and reports       |
+| `src/review/`           | Shared approval panels and stale-review protection                   |
+| `src/updates/`          | Release checks, installation identity, preferences and updates       |
+| `scripts/build/`        | Compatible flat runtime output                                       |
+| `scripts/native/`       | Native editor launchers, drivers and synthetic fixtures              |
+| `scripts/preview/`      | Loopback workspace and theme previews                                |
+| `scripts/verification/` | Package, controller, platform and Lab verification                   |
+| `tests/`                | Matching product domains, plus native, build and packaging contracts |
+
+`src/extension.ts` remains the activation entry point; `src/contracts.ts` owns shared
+snapshot types. Tool configuration and public documents keep their conventional paths.
+Tests and verification automation are excluded from the installed extension.
+
+Source folders do not change the installed layout: the build compiles TypeScript and
+then maps modules, declaration references and source maps to flat `dist/src/` files.
+`dist/src/extension.js`, manifest commands and the strict VSIX allowlist stay stable.
+The mapper refuses ambiguous names, missing or escaping targets and unsupported module
+loads before replacing generated output. It pads rewritten import literals to preserve
+subsequent source-map positions and rebases original source paths. Generated output is
+never edited manually or used as a second source owner.
+
+## Fresh fixture adapter verification
+
+`scripts/verification/verify-test-lab.ts` inspects an explicitly prepared, parent-owned
+Lab workspace. Its private manifest binds the workspace snapshot, PostgreSQL configuration,
+expected resource identity and allocated loopback application address to one exact Core
+archive. The reviewed Lab parent owns preparation, archive extraction, lifetime and cleanup;
+the verifier independently checks the archive hash and every published Core file in both
+installations against that parent's bounded payload inventory. npm may install a separate
+compatible dependency beneath Core when an application's dependency version differs.
+Only a canonical, nonsymlink direct `node_modules` directory is separated from the Core
+payload; extra files elsewhere, changed payload bytes and redirected dependency roots
+still refuse. Dependency subtrees remain parent-managed and are outside this Core-payload
+proof. This is an explicit producer trust boundary, not an independent archive-extraction
+proof or a hostile-process sandbox.
+
+The read-only check retains the 10,003-row baseline, active and retained generations,
+activity, runtime, resources and discovery assertions, plus clean-room Library setup
+guidance. It validates confined canonical storage and baseline links, and neither installs
+dependencies nor prepares a runtime. Lab invokes it before PostgreSQL teardown in the two
+fresh shaped acceptance rounds. Packaged native UI, rendering/accessibility, installation
+and offline behavior have their own checks.
+
 ## Product identity
 
 | Decision      | Product-candidate contract                                                 |
@@ -560,7 +610,7 @@ regressions do not replace separately pending native acceptance.
 
 The developer-only native panel companion accepts the independent Lab's private
 `migration-insights-native-fixture` handoff through
-`scripts/verify-native-migration-failure.ts`. The existing launcher owns archive
+`scripts/native/verify-native-migration-failure.ts`. The existing launcher owns archive
 verification, exact isolated installation, fresh normal-memory checks, the bounded
 owned process group and profile teardown; historical pinned cancellation/comparison
 scenarios are not relaxed. `native-insights-fixture.ts` validates the closed schema,
@@ -789,3 +839,23 @@ and exact native identity correlation. No SDK/private Core imports, project
 execution, source regeneration or lifecycle ownership moves into the editor.
 SQL/Prisma formats 1/2/3 retain their existing validation. Exact packaged native
 Drizzle/SDK/Lab execution remains unverified until separately observed.
+
+### Knex reviewed-code candidate
+
+The isolated Knex candidate consumes public `knexMigrations: 1` and format 5
+without changing SQL, Prisma or Drizzle identities. `knex_migration_contract.ts`
+owns the pinned Knex 3.3.0 / pg 8.23.1/default-ledger binding, canonical bounded
+code-file receipts and flat `.cjs` filename identities. The editor compares the
+public baseline history digest and exact reviewed-code prefix, including unchanged
+producer helper receipts and isolation policy; it does not equate appended whole
+bundle or platform toolchain hashes. Historical applied-file checksums remain
+explicitly unavailable. Ledger times never become migration identity or date filters.
+
+Source schema 2 uses the existing current-review/target/native-identity/raw-hash
+binding and Core `inspect source` command. Only this explicit Knex path admits
+8 MiB `.cjs` files; existing SQL limits and trust, clean-document, confined-path
+and stable raw-read checks remain. The editor reads JavaScript as text and never
+loads its SDK or executes project JavaScript. SQL Insights does not analyze Knex
+JavaScript. Core doctor owns worker readiness; parsing a binding is not execution
+qualification. Genuine SDK/isolated-worker/packaged-native acceptance is separate
+and remains unverified for this candidate.

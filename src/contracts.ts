@@ -1,13 +1,13 @@
 import type {
   MigrationCutoff,
-  DrizzleMigrationIdentity,
-} from "./native_migration_contract.js";
-import type { NativeMigrationToolBinding } from "./migration_review.js";
+  NativeMigrationIdentity,
+} from "./migrations/native_migration_contract.js";
+import type { NativeMigrationToolBinding } from "./migrations/migration_review.js";
 import {
   parseEnvironmentClassification,
   parseEnvironmentProvenance,
   parseResourceCatalog,
-} from "./resource_contract.js";
+} from "./runtime/resource_contract.js";
 import {
   parseOperationKind,
   parseOperationVersion,
@@ -17,7 +17,7 @@ import {
   type OperationProgressSnapshot,
   type RecentOperationProgress,
   type RecentOperationFailure,
-} from "./operation_progress.js";
+} from "./runtime/operation_progress.js";
 
 export const RESULT_SCHEMA_VERSION = 1 as const;
 
@@ -75,7 +75,7 @@ export interface CandidateTarget {
 
 export interface CandidateMigration {
   readonly version?: string;
-  readonly nativeIdentity?: DrizzleMigrationIdentity;
+  readonly nativeIdentity?: NativeMigrationIdentity;
   readonly name: string;
   readonly filename: string;
   readonly sha256: string;
@@ -92,7 +92,7 @@ export interface CandidatesData {
 }
 
 export interface BaselineData {
-  readonly formatVersion?: 1 | 2 | 3 | 4;
+  readonly formatVersion?: 1 | 2 | 3 | 4 | 5;
   readonly nativeMigrations?: NativeMigrationToolBinding;
   readonly generationId: string;
   readonly createdAt: string | null;
@@ -100,6 +100,7 @@ export interface BaselineData {
   readonly tableCount: number;
   readonly rowCount: number;
   readonly migrationCount: number;
+  readonly historicalFileChecksums?: "unavailable";
   readonly verification: string;
   readonly migrationHistorySha256?: string | null;
   readonly sourceSchemaSha256?: string | null;
@@ -111,11 +112,12 @@ export interface BaselineData {
     readonly generationId: string;
     readonly createdAt: string | null;
     readonly active: boolean;
-    readonly formatVersion: 1 | 2 | 3 | 4;
+    readonly formatVersion: 1 | 2 | 3 | 4 | 5;
     readonly nativeMigrations?: NativeMigrationToolBinding;
     readonly rowCount: number;
     readonly tableCount: number;
     readonly migrationCount: number;
+    readonly historicalFileChecksums?: "unavailable";
     readonly migrationCutoff: MigrationCutoff;
     readonly storageAssetCount: number;
   }[];
@@ -225,7 +227,7 @@ export interface ActivityData {
 
 export interface ResourceInventoryData {
   readonly catalog?:
-    import("./resource_contract.js").ResourceCatalogData | null;
+    import("./runtime/resource_contract.js").ResourceCatalogData | null;
   readonly schemaVersion: 1;
   readonly inspectedAt: string;
   readonly engine: {
@@ -267,8 +269,8 @@ export interface ResourceInventoryData {
     readonly cleanupEligibility:
       "running" | "preview-required" | "not-present" | "inspection-unavailable";
     readonly restartPolicies: readonly string[];
-    readonly provenance?: import("./resource_contract.js").EnvironmentProvenanceData;
-    readonly classification?: import("./resource_contract.js").EnvironmentClassificationData;
+    readonly provenance?: import("./runtime/resource_contract.js").EnvironmentProvenanceData;
+    readonly classification?: import("./runtime/resource_contract.js").EnvironmentClassificationData;
   }[];
   readonly stale: {
     readonly stoppedCount: number;

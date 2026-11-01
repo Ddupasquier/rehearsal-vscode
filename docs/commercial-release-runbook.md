@@ -26,8 +26,13 @@ Marketplace or paid-launch approval. Do not describe a planned tier as enforced 
    selected release route and its separately approved terms.
 2. Run `npm run check` and `npm run commercial:verify`. The latter checks bundled
    documents and metadata, not checkout, legal approval or entitlement behavior.
-3. Run `npm run test:lab -- /absolute/path/to/core.tgz` and complete applicable
-   real-consumer checks without changing that consumer's tracked files. Retain separate
+3. Run `npm run test:lab -- /absolute/private/fixture-manifest.json` against the
+   exact installed Core package in a fresh parent-owned Lab fixture. The existing
+   Lab `release-consumers` mode prepares and invokes this check in its two fresh
+   rounds when supplied the exact reviewed `editor_commit`; its upgrade round
+   retains separate coverage. The [adapter fixture contract](architecture.md#fresh-fixture-adapter-verification)
+   owns the input and trust boundary. Complete applicable real-consumer checks
+   without changing that consumer's tracked files. Retain separate
    native/accessibility, security and manual gates; do not replace them with a green build.
 4. Package once with `npm run package:vsix -- --out /absolute/path/to/rehearsal-VERSION.vsix`.
 5. Verify that exact file with `npm run verify:vsix -- /absolute/path/to/rehearsal-VERSION.vsix`.
@@ -65,3 +70,13 @@ existing packaging/installed-artifact checks and full audit when changing this
 pin. This does not certify real Microsoft authentication or grant publisher access.
 Remove the override when the maintained VSCE/Azure Identity range accepts
 a fixed version, after reviewing the resulting lockfile and running those checks.
+
+The November 1 tooling audit also found
+[qs comma-array serialization](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw)
+and [minimatch pattern amplification](https://github.com/advisories/GHSA-g3hv-75wg-m249).
+The lockfile updates qs to 6.17.1 within its parent's declared range. Minimatch
+10.2.6 remains a development-only finding: patched 11.0.1 is outside VSCE's range.
+Reviewed VSCE calls use default optimization level 1; the advisory requires at
+least 2. This bounds the assessed packaging path, not every future caller. Both
+packages are excluded from the VSIX. Retain the full audit and existing high-severity
+threshold; revisit minimatch when VSCE accepts a patched range.

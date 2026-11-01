@@ -67,11 +67,16 @@ default; installation requires an explicit option and never starts a database.
 
 ### Core compatibility and upgrades
 
-Extension **0.1.27** targets **Core 2.2.0**. Its opt-in PostgreSQL Drizzle path
-requires **Drizzle Kit 0.31.11, ORM 0.45.4 and pg 8.23.1**, with format 4 baselines
-and journal-order SQL review. Core 2.1.x and earlier do not supply this Drizzle
-capability. The native review scope is **PostgreSQL 17, Ubuntu 24.04 x64, Node.js 24
-and VS Code 1.143.0**; other SDK/host combinations remain unqualified.
+Extension **0.1.28** targets **Core 2.3.0**. Its opt-in PostgreSQL Knex path
+requires **Knex 3.3.0 and pg 8.23.1**, with format 5 baselines and exact reviewed
+`.cjs` inputs. Core 2.2.x and earlier do not supply this Knex capability. The editor
+opens code as text; Core owns isolated execution and recovery. A source version does
+not establish execution or native qualification; the
+[published release](https://github.com/Ddupasquier/rehearsal-vscode/releases) records its exact verified scope.
+
+Drizzle review retains the **Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1** pins and format 4
+baselines introduced with extension 0.1.27 / Core 2.2.0. Its native review scope is
+**PostgreSQL 17, Ubuntu 24.04 x64, Node.js 24 and VS Code 1.143.0**.
 
 Native Prisma review, introduced in extension **0.1.26 / Core 2.1.0**, requires
 **Prisma Migrate 7.10.1 / PostgreSQL 17** and uses format 3 baselines with exact
@@ -95,28 +100,28 @@ for safe setup and baseline inputs.
 
 ### Direct GitHub installation
 
-The reviewed VSIX is an alternative to Marketplace. For **0.1.27**, use the official
-[0.1.27 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.27)
-only when it publishes `rehearsal-db-0.1.27.vsix` and `SHA256SUMS`. A draft or source
+The reviewed VSIX is an alternative to Marketplace. For **0.1.28**, use the official
+[0.1.28 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.28)
+only when it publishes `rehearsal-db-0.1.28.vsix` and `SHA256SUMS`. A draft or source
 version does not prove availability. If either asset is absent, publication has not
 completed; do not substitute an engineering candidate's checksum. Marketplace may
 list a different version.
-The [previous 0.1.26 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.26)
-retains its original assets for rollback when published; it does not provide native Drizzle review.
+The [previous 0.1.27 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.27)
+retains its original assets for rollback when published; it does not provide native Knex review.
 
-1. Download `rehearsal-db-0.1.27.vsix` and `SHA256SUMS` from the same official release.
+1. Download `rehearsal-db-0.1.28.vsix` and `SHA256SUMS` from the same official release.
 2. Calculate the downloaded VSIX's SHA-256:
 
    **macOS**
 
    ```sh
-   shasum -a 256 /path/to/rehearsal-db-0.1.27.vsix
+   shasum -a 256 /path/to/rehearsal-db-0.1.28.vsix
    ```
 
    **Linux**
 
    ```sh
-   sha256sum /path/to/rehearsal-db-0.1.27.vsix
+   sha256sum /path/to/rehearsal-db-0.1.28.vsix
    ```
 
 3. Compare the result with `SHA256SUMS`. **Stop if they differ.**
@@ -126,7 +131,7 @@ retains its original assets for rollback when published; it does not provide nat
 If the `code` command is available, step 4 can instead use:
 
 ```sh
-code --install-extension /absolute/path/to/rehearsal-db-0.1.27.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.28.vsix --force
 ```
 
 [Back to navigation](#on-this-page)
@@ -262,6 +267,20 @@ input is not a proven SQL origin and no line or column is guessed. Rehearsal nev
 rewrites or retries the migration automatically. Follow the main
 [failure-and-fix tutorial](https://ddupasquier.github.io/rehearsal-db/tutorial/) to review
 a fresh candidate, observe a safe failure, correct it and verify the result.
+
+### Knex reviewed-code candidate
+
+The Starter 0.1.28 candidate can review Core's explicit Knex configuration and
+format 5 baseline. **Open exact migration input** opens the exact unchanged `.cjs` file as
+text; the editor does not load its SDK or execute JavaScript.
+
+Knex does not record historical file checksums. The editor verifies today's reviewed
+files; it cannot prove which bytes were applied previously. SQL Insights and impact
+analysis do not analyze JavaScript. Core owns execution, isolation and recovery; use
+its [configuration guide](https://github.com/Ddupasquier/rehearsal-db/blob/main/docs/configuration.md)
+for supported versions and limits. Check the
+[published release](https://github.com/Ddupasquier/rehearsal-vscode/releases) for exact
+packaged/native qualification; a source version alone does not establish it.
 
 ### Static Migration Insights
 
@@ -471,7 +490,7 @@ independent Lab's private `native-insights-fixture.json` from a passing
 `--insights-review` run. Use the exact reviewed VSIX and its SHA-256:
 
 ```bash
-npx --no-install tsx scripts/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
+npx --no-install tsx scripts/native/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
 ```
 
 Optionally set `REHEARSAL_NATIVE_INSIGHTS_CORE_ARTIFACT` to the exact core tarball
@@ -629,7 +648,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.27.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.28.vsix --force
 ```
 
 Read the bundled [license](../LICENSE), [privacy statement](../PRIVACY.md), and

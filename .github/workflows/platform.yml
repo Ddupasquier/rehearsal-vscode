@@ -30,12 +30,12 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm run verify:controller
-      - run: npm test -- tests/platform_runtime.test.ts tests/automatic_update_settings.test.ts tests/extension_identity.test.ts
+      - run: npm test -- tests/runtime/platform_runtime.test.ts tests/updates/automatic_update_settings.test.ts tests/updates/extension_identity.test.ts
       - name: Real POSIX process lifecycle tests
         if: runner.os != 'Windows'
-        run: npm test -- tests/process_adapter.test.ts
+        run: npm test -- tests/runtime/process_adapter.test.ts
       - name: Compiled adapter runtime and safe Windows refusal
-        run: node --import tsx scripts/verify-platform-runtime.ts
+        run: node --import tsx scripts/verification/verify-platform-runtime.ts
       - uses: actions/upload-artifact@v7
         if: always()
         with:
