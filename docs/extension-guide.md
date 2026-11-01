@@ -490,7 +490,7 @@ independent Lab's private `native-insights-fixture.json` from a passing
 `--insights-review` run. Use the exact reviewed VSIX and its SHA-256:
 
 ```bash
-npx --no-install tsx scripts/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
+npx --no-install tsx scripts/native/verify-native-migration-failure.ts /absolute/path/to/candidate.vsix FULL_SHA256 /absolute/path/to/native-insights-fixture.json
 ```
 
 Optionally set `REHEARSAL_NATIVE_INSIGHTS_CORE_ARTIFACT` to the exact core tarball
