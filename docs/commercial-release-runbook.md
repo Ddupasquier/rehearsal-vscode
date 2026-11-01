@@ -26,8 +26,13 @@ Marketplace or paid-launch approval. Do not describe a planned tier as enforced 
    selected release route and its separately approved terms.
 2. Run `npm run check` and `npm run commercial:verify`. The latter checks bundled
    documents and metadata, not checkout, legal approval or entitlement behavior.
-3. Run `npm run test:lab -- /absolute/path/to/core.tgz` and complete applicable
-   real-consumer checks without changing that consumer's tracked files. Retain separate
+3. Run `npm run test:lab -- /absolute/private/fixture-manifest.json` against the
+   exact installed Core package in a fresh parent-owned Lab fixture. The existing
+   Lab `release-consumers` mode prepares and invokes this check in its two fresh
+   rounds when supplied the exact reviewed `editor_commit`; its upgrade round
+   retains separate coverage. The [adapter fixture contract](architecture.md#fresh-fixture-adapter-verification)
+   owns the input and trust boundary. Complete applicable real-consumer checks
+   without changing that consumer's tracked files. Retain separate
    native/accessibility, security and manual gates; do not replace them with a green build.
 4. Package once with `npm run package:vsix -- --out /absolute/path/to/rehearsal-VERSION.vsix`.
 5. Verify that exact file with `npm run verify:vsix -- /absolute/path/to/rehearsal-VERSION.vsix`.

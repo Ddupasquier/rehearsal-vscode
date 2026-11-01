@@ -34,6 +34,23 @@ loads before replacing generated output. It pads rewritten import literals to pr
 subsequent source-map positions and rebases original source paths. Generated output is
 never edited manually or used as a second source owner.
 
+## Fresh fixture adapter verification
+
+`scripts/verification/verify-test-lab.ts` inspects an explicitly prepared, parent-owned
+Lab workspace. Its private manifest binds the workspace snapshot, PostgreSQL configuration,
+expected resource identity and allocated loopback application address to one exact Core
+archive. The reviewed Lab parent owns preparation, archive extraction, lifetime and cleanup;
+the verifier independently checks the archive hash and both installed package trees against
+that parent's bounded payload inventory. This is an explicit producer trust boundary,
+not an independent archive-extraction proof or a hostile-process sandbox.
+
+The read-only check retains the 10,003-row baseline, active and retained generations,
+activity, runtime, resources and discovery assertions, plus clean-room Library setup
+guidance. It validates confined canonical storage and baseline links, and neither installs
+dependencies nor prepares a runtime. Lab invokes it before PostgreSQL teardown in the two
+fresh shaped acceptance rounds. Packaged native UI, rendering/accessibility, installation
+and offline behavior have their own checks.
+
 ## Product identity
 
 | Decision      | Product-candidate contract                                                 |
