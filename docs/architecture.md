@@ -40,9 +40,14 @@ never edited manually or used as a second source owner.
 Lab workspace. Its private manifest binds the workspace snapshot, PostgreSQL configuration,
 expected resource identity and allocated loopback application address to one exact Core
 archive. The reviewed Lab parent owns preparation, archive extraction, lifetime and cleanup;
-the verifier independently checks the archive hash and both installed package trees against
-that parent's bounded payload inventory. This is an explicit producer trust boundary,
-not an independent archive-extraction proof or a hostile-process sandbox.
+the verifier independently checks the archive hash and every published Core file in both
+installations against that parent's bounded payload inventory. npm may install a separate
+compatible dependency beneath Core when an application's dependency version differs.
+Only a canonical, nonsymlink direct `node_modules` directory is separated from the Core
+payload; extra files elsewhere, changed payload bytes and redirected dependency roots
+still refuse. Dependency subtrees remain parent-managed and are outside this Core-payload
+proof. This is an explicit producer trust boundary, not an independent archive-extraction
+proof or a hostile-process sandbox.
 
 The read-only check retains the 10,003-row baseline, active and retained generations,
 activity, runtime, resources and discovery assertions, plus clean-room Library setup

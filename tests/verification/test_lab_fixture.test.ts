@@ -204,16 +204,70 @@ describe("prepared read-only Lab adapter fixture", () => {
       const path = resolve(root, "fixture.json");
       await writeFile(path, JSON.stringify(m), { mode: 0o600 });
       expect(await readLabAdapterFixture(path, tmpdir())).toEqual(m);
+      const packageDirectory = resolve(
+        m.libraryRoot,
+        "node_modules/@rehearsal-db/core",
+      );
+      const dependencies = resolve(packageDirectory, "node_modules");
+      await mkdir(resolve(dependencies, "pg"), { recursive: true });
+      await writeFile(
+        resolve(dependencies, "pg/package.json"),
+        '{"version":"8.23.1"}',
+      );
+      // Genuine npm nesting cannot invalidate identical published Core payloads.
+      expect(await readLabAdapterFixture(path, tmpdir())).toEqual(m);
+      const publishedDependency = {
+        ...m,
+        artifact: {
+          ...m.artifact,
+          files: [
+            ...m.artifact.files,
+            {
+              path: "node_modules/pg/package.json",
+              size: 20,
+              sha256: sha("dependency"),
+            },
+          ],
+        },
+      };
+      expect(() => parseLabAdapterFixture(publishedDependency)).toThrow();
+      await rm(dependencies, { recursive: true });
+      await writeFile(dependencies, "not-a-directory");
+      await expect(readLabAdapterFixture(path, tmpdir())).rejects.toThrow();
+      await rm(dependencies);
+      await symlink(m.postgresqlRoot, dependencies);
+      await expect(readLabAdapterFixture(path, tmpdir())).rejects.toThrow();
+      await rm(dependencies);
+      await writeFile(
+        resolve(packageDirectory, "unpublished-extra.js"),
+        "extra",
+      );
+      await expect(readLabAdapterFixture(path, tmpdir())).rejects.toThrow();
+      await rm(resolve(packageDirectory, "unpublished-extra.js"));
+      await rm(resolve(packageDirectory, "package.json"));
+      await expect(readLabAdapterFixture(path, tmpdir())).rejects.toThrow();
+      await writeFile(resolve(packageDirectory, "package.json"), "{}");
+
       const installed = resolve(
         m.libraryRoot,
         "node_modules/@rehearsal-db/core",
       );
       // Empty directories do not alter the file inventory, but must still consume the finite walk budget.
-      for (let i = 0; i < 4097; i++)
-        await mkdir(resolve(installed, "empty-" + i));
+      for (let first = 0; first < 4097; first += 32)
+        await Promise.all(
+          Array.from({ length: Math.min(32, 4097 - first) }, (_, offset) =>
+            mkdir(resolve(installed, "empty-" + (first + offset))),
+          ),
+        );
       await expect(readLabAdapterFixture(path, tmpdir())).rejects.toThrow();
-      for (let i = 0; i < 4097; i++)
-        await rm(resolve(installed, "empty-" + i), { recursive: true });
+      for (let first = 0; first < 4097; first += 32)
+        await Promise.all(
+          Array.from({ length: Math.min(32, 4097 - first) }, (_, offset) =>
+            rm(resolve(installed, "empty-" + (first + offset)), {
+              recursive: true,
+            }),
+          ),
+        );
       const deep = Array.from({ length: 34 }, () => "nested").join("/");
       await mkdir(resolve(installed, deep), { recursive: true });
       await expect(readLabAdapterFixture(path, tmpdir())).rejects.toThrow();

@@ -136,6 +136,11 @@ export function parseLabAdapterFixture(value: unknown): LabAdapterFixture {
     assert.ok(
       !(f.path as string).split("/").some((x) => x === "." || x === ".."),
     );
+    assert.notEqual(
+      (f.path as string).split("/")[0],
+      "node_modules",
+      "Dependency trees are parent-owned, never published Core payload.",
+    );
     assert.ok(!seen.has(f.path as string));
     seen.add(f.path as string);
     assert.equal(typeof f.sha256, "string");
@@ -251,6 +256,13 @@ export async function readLabAdapterFixture(
       for (const entry of await readdir(dir, { withFileTypes: true })) {
         assert.ok(++entries <= 4096);
         const file = resolve(dir, entry.name);
+        // npm may nest runtime dependencies here. They remain parent-owned,
+        // parent-managed dependencies, not bytes published in the Core tar.
+        if (dir === packageRoot && entry.name === "node_modules") {
+          assert.ok(entry.isDirectory() && !entry.isSymbolicLink());
+          await directory(file, packageRoot);
+          continue;
+        }
         if (entry.isDirectory()) await walk(file, depth + 1);
         else {
           assert.ok(entry.isFile() && !entry.isSymbolicLink());
