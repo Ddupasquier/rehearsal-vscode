@@ -2,18 +2,18 @@
 import assert from "node:assert/strict";
 import { resolve } from "node:path";
 import { Script } from "node:vm";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
 
 // Fixed build outputs only. Never resolve code from a consumer workspace.
 const { renderWorkspaceDocument } = require(
   resolve(__dirname, "../../dist/src/workspace_view.js"),
-) as typeof import("../../src/workspace/workspace_view.js");
+) as typeof import("../../src/workspace/dashboard/workspace_view.js");
 const { migrationReviewIdentity } = require(
   resolve(__dirname, "../../dist/src/workspace_view_state.js"),
-) as typeof import("../../src/workspace/workspace_view_state.js");
+) as typeof import("../../src/workspace/state/workspace_view_state.js");
 const { WORKSPACE_ACTION_IDS } = require(
   resolve(__dirname, "../../dist/src/action_catalog.js"),
-) as typeof import("../../src/workspace/action_catalog.js");
+) as typeof import("../../src/workspace/actions/action_catalog.js");
 const snapshot: ProjectSnapshot = {
   workspaceName: "Packaged controller check",
   workspaceRoot: "/never-displayed",

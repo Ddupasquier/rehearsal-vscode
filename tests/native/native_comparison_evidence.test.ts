@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { compareEnvironmentEvidence } from "../../src/runtime/environment_comparison.js";
+import { compareEnvironmentEvidence } from "../../src/runtime/reports/environment_comparison.js";
 import {
   buildVerificationReport,
   renderVerificationReportJson,
   renderVerificationReportMarkdown,
-} from "../../src/runtime/verification_report.js";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
+} from "../../src/runtime/reports/verification_report.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
 
 const { verifyComparisonExport } =
   require("../../scripts/native/native-comparison-evidence.cjs") as {

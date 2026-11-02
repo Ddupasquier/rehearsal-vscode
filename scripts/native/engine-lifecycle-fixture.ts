@@ -1,10 +1,10 @@
 /** Synthetic presentation fixtures only. Never inspect or control a real engine. */
-import { parseEngineLifecycleStatus } from "../../src/runtime/engine_lifecycle_contract.js";
+import { parseEngineLifecycleStatus } from "../../src/runtime/engines/engine_lifecycle_contract.js";
 import {
   engineShutdownUpdateFor,
   type EngineShutdownUiState,
-} from "../../src/runtime/engine_lifecycle_view.js";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
+} from "../../src/runtime/engines/engine_lifecycle_view.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
 
 export const ENGINE_PREVIEW_STATES = [
   "running",

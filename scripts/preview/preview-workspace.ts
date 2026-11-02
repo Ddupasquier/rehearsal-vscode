@@ -4,11 +4,11 @@ import {
   enginePreviewSnapshot,
   enginePreviewBridge,
 } from "../native/engine-lifecycle-fixture.js";
-import { renderUpdatePromptDocument } from "../../src/updates/update_prompt_view.js";
+import { renderUpdatePromptDocument } from "../../src/updates/prompts/update_prompt_view.js";
 import {
   renderReviewDocument,
   type ReviewContent,
-} from "../../src/review/action_review_view.js";
+} from "../../src/review/panels/action_review_view.js";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
@@ -17,32 +17,32 @@ import {
 } from "../native/native-insights-fixture.js";
 import { previewThemeOverrides as themeOverrides } from "./preview-themes.js";
 import type { ProjectDiscoveryData } from "../../src/contracts.js";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
 import {
   parseAuthenticationReview,
   parseBaselineScopeReview,
-} from "../../src/review/review_contract.js";
-import { parseMigrationReviewPlan } from "../../src/migrations/migration_review.js";
+} from "../../src/review/contracts/review_contract.js";
+import { parseMigrationReviewPlan } from "../../src/migrations/review/migration_review.js";
 import { parseConfigurationMetadata } from "../../src/configuration/configuration_contract.js";
 import {
   parseEnvironmentClassification,
   parseEnvironmentProvenance,
-} from "../../src/runtime/resource_contract.js";
+} from "../../src/runtime/resources/resource_contract.js";
 import {
   parseOperationProgressSnapshot,
   parseRecentOperationFailures,
   renderOperationProgress,
   openSandboxSessionState,
-} from "../../src/runtime/operation_progress.js";
+} from "../../src/runtime/operations/operation_progress.js";
 import {
   WORKSPACE_ACTION_IDS,
   type WorkspaceActionId,
-} from "../../src/workspace/action_catalog.js";
+} from "../../src/workspace/actions/action_catalog.js";
 import {
   renderWorkspaceDocument,
   WORKSPACE_PAGES,
   type WorkspacePage,
-} from "../../src/workspace/workspace_view.js";
+} from "../../src/workspace/dashboard/workspace_view.js";
 
 const repositoryRoot = resolve(__dirname, "../..");
 const host = "127.0.0.1";
