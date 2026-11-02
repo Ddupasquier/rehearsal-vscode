@@ -11,7 +11,7 @@ import {
 import {
   insightPlan,
   insightReport,
-} from "../migrations/migration_insights_fixture.js";
+} from "../migrations/insights/migration_insights_fixture.js";
 
 const fixture = (
   text = "\ufeff/* 😀 */ ALTER TABLE public.synthetic_probe ALTER COLUMN title SET NOT NULL;\r\n",

@@ -35,7 +35,7 @@ import {
 import {
   ownedProcessState,
   retireOwnedProcessGroup,
-} from "../../src/runtime/process_adapter.js";
+} from "../../src/runtime/transport/process_adapter.js";
 const { shouldRetainNativeEditor } =
   require("./native-editor-recovery.cjs") as {
     shouldRetainNativeEditor: (value: unknown) => boolean;

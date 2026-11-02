@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { parseConfigurationMetadata } from "../../src/configuration/configuration_contract.js";
-import { workspaceFormDraftIdentity } from "../../src/workspace/workspace_form_drafts.js";
+import { workspaceFormDraftIdentity } from "../../src/workspace/state/workspace_form_drafts.js";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,8 +16,8 @@ import {
   runVersion,
   runEngineShutdown,
   captureEnginePackageBinding,
-} from "../../src/runtime/process_adapter.js";
-import { parseEngineShutdownPreview } from "../../src/runtime/engine_lifecycle_contract.js";
+} from "../../src/runtime/transport/process_adapter.js";
+import { parseEngineShutdownPreview } from "../../src/runtime/engines/engine_lifecycle_contract.js";
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0))

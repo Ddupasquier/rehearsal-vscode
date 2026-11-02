@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { parseActivityData } from "../../src/contracts.js";
-import { renderOperationProgress } from "../../src/runtime/operation_progress.js";
+import { renderOperationProgress } from "../../src/runtime/operations/operation_progress.js";
 
 const record = (value: unknown): Record<string, unknown> => {
   assert.ok(

@@ -77,4 +77,5 @@ No update forces an editor reload or runs a migration.
 
 [Detailed guide](docs/extension-guide.md) ·
 [Privacy](PRIVACY.md) · [License](LICENSE) · [Support](SUPPORT.md) ·
-[Contributing](docs/extension-guide.md#contributing-and-local-development)
+[Contributing](docs/extension-guide.md#contributing-and-local-development) ·
+[Repository structure](docs/architecture.md#repository-layout)

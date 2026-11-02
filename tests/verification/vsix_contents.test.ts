@@ -12,6 +12,8 @@ const publicArchive = [
   "extension/package.json",
   "extension/dist/src/extension.js",
   "extension/dist/src/workspace_view.js",
+  "extension/dist/src/workspace_guidance.js",
+  "extension/dist/src/workspace_controller.js",
   "extension/readme.md",
   "extension/LICENSE.txt",
   "extension/PRIVACY.md",

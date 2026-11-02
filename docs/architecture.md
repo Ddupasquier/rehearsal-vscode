@@ -8,19 +8,55 @@ implicit sibling Lab checkout is selected by the suite development entry point.
 
 ## Repository layout
 
-| Parent                  | Responsibility                                                       |
-| ----------------------- | -------------------------------------------------------------------- |
-| `src/workspace/`        | Project discovery, tree, dashboard, actions and view state           |
-| `src/migrations/`       | Migration contracts, review, findings and source navigation          |
-| `src/configuration/`    | Literal configuration, forms and reviewed edits                      |
-| `src/runtime/`          | CLI transport, engines, resources, operation state and reports       |
-| `src/review/`           | Shared approval panels and stale-review protection                   |
-| `src/updates/`          | Release checks, installation identity, preferences and updates       |
-| `scripts/build/`        | Compatible flat runtime output                                       |
-| `scripts/native/`       | Native editor launchers, drivers and synthetic fixtures              |
-| `scripts/preview/`      | Loopback workspace and theme previews                                |
-| `scripts/verification/` | Package, controller, platform and Lab verification                   |
-| `tests/`                | Matching product domains, plus native, build and packaging contracts |
+Source folders identify the product area first, then the responsibility within it:
+
+| Product area         | Child folder  | Responsibility                                                            |
+| -------------------- | ------------- | ------------------------------------------------------------------------- |
+| `src/workspace/`     | `inspection/` | Project discovery, snapshot assembly and refresh scheduling               |
+|                      | `tree/`       | Native Projects tree model and provider                                   |
+|                      | `dashboard/`  | Dashboard lifecycle, rendering, live DOM updates and bundled documents    |
+|                      | `actions/`    | Reviewed action catalog and dispatch                                      |
+|                      | `state/`      | Local preferences, activity history, form drafts and view state           |
+| `src/runtime/`       | `transport/`  | CLI child transport, supported host runtime and loopback endpoints        |
+|                      | `operations/` | Active-operation monitoring, progress and completion                      |
+|                      | `engines/`    | Core-owned engine status and reviewed VM shutdown contracts and views     |
+|                      | `resources/`  | Resource inventory contracts, filters and pagination rendering            |
+|                      | `reports/`    | Environment comparisons, verification exports and baseline shape evidence |
+| `src/migrations/`    | `review/`     | Migration-plan validation, display filtering and review rows              |
+|                      | `source/`     | Exact-input file reading and reviewed source navigation                   |
+|                      | `insights/`   | Optional static finding contracts and presentation                        |
+|                      | `failures/`   | Recorded failure diagnostics and attempted-input provenance               |
+|                      | `native/`     | Qualified native migration identity and tool-binding contracts            |
+| `src/updates/`       | `advisory/`   | Optional release metadata checks and Core compatibility                   |
+|                      | `automatic/`  | Separate update opt-ins, scheduling and verified extension installation   |
+|                      | `identity/`   | Extension identity, legacy migration and project installation identity    |
+|                      | `prompts/`    | Update review panels, preferences and installed/newest presentation       |
+| `src/configuration/` | `editing/`    | Literal-source proposals and reviewed configuration edits                 |
+|                      | `forms/`      | Configuration controls and changed-value projection                       |
+| `src/review/`        | `contracts/`  | Shared scope/auth review and stale-stop validation                        |
+|                      | `panels/`     | Shared approval panel lifecycle and escaped review rendering              |
+
+`src/configuration/configuration_contract.ts` remains the configuration area's shared
+metadata and numeric-bounds contract. Tests mirror these child folders under `tests/`;
+fixtures and evidence checks live beside the responsibility they verify. Cross-domain
+CLI contracts stay in `tests/contracts.test.ts`. Native, build and package verification
+tests retain their separate parents.
+
+Within the dashboard, `workspace_view.ts` composes HTML, while `workspace_controller.ts`
+serializes its existing browser interaction and domain helpers. The pure
+`workspace/state/workspace_guidance.ts` selects status and journey presentation;
+it keeps current database state separate from recorded rehearsal and proof evidence.
+Existing domain views remain the owners of their specialized markup and scripts.
+
+| Automation parent       | Responsibility                                          |
+| ----------------------- | ------------------------------------------------------- |
+| `scripts/build/`        | Compatible flat runtime output                          |
+| `scripts/native/`       | Stable native launchers, drivers and synthetic fixtures |
+| `scripts/preview/`      | Loopback workspace and theme previews                   |
+| `scripts/verification/` | Package, controller, platform and Lab verification      |
+
+Script entry paths stay stable for the independent Lab and existing developer commands;
+source nesting does not create forwarding wrappers or another launcher owner.
 
 `src/extension.ts` remains the activation entry point; `src/contracts.ts` owns shared
 snapshot types. Tool configuration and public documents keep their conventional paths.
@@ -844,8 +880,9 @@ Drizzle/SDK/Lab execution remains unverified until separately observed.
 ### Knex reviewed-code candidate
 
 The isolated Knex candidate consumes public `knexMigrations: 1` and format 5
-without changing SQL, Prisma or Drizzle identities. `knex_migration_contract.ts`
-owns the pinned Knex 3.3.0 / pg 8.23.1/default-ledger binding, canonical bounded
+without changing SQL, Prisma or Drizzle identities.
+`src/migrations/native/knex_migration_contract.ts` owns the pinned Knex 3.3.0 /
+pg 8.23.1/default-ledger binding, canonical bounded
 code-file receipts and flat `.cjs` filename identities. The editor compares the
 public baseline history digest and exact reviewed-code prefix, including unchanged
 producer helper receipts and isolation policy; it does not equate appended whole

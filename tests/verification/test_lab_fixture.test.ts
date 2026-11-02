@@ -18,7 +18,7 @@ import {
   verifyPreparedLabAdapter,
   type LabAdapterFixture,
 } from "../../scripts/verification/verify-test-lab.js";
-import type { inspectProject } from "../../src/workspace/project_snapshot.js";
+import type { inspectProject } from "../../src/workspace/inspection/project_snapshot.js";
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 function manifest(root: string): LabAdapterFixture {
   return {

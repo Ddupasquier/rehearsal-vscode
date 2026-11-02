@@ -19,13 +19,13 @@ import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { assertArchiveContents } from "../verification/verify-private-vsix.js";
-import { storageEnvironment } from "../../src/runtime/platform_runtime.js";
+import { storageEnvironment } from "../../src/runtime/transport/platform_runtime.js";
 import {
   nativeStorageRoot,
   createNativeTemporaryDirectory,
 } from "./native-development-storage.js";
 import type { ActivityData } from "../../src/contracts.js";
-import type { MigrationFailureSource } from "../../src/migrations/migration_failure_source.js";
+import type { MigrationFailureSource } from "../../src/migrations/failures/migration_failure_source.js";
 import {
   nativeEngineLaunchMode,
   waitForNativeEngineResult,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { knexPlan } from "../migrations/knex_fixture.js";
+import { knexPlan } from "../migrations/native/knex_fixture.js";
 import { parseNativeEditorAcceptanceArguments } from "../../scripts/native/verify-native-prisma-editor.js";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";

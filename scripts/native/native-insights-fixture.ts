@@ -2,10 +2,10 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
-import { parseMigrationReviewPlan } from "../../src/migrations/migration_review.js";
-import { parseMigrationInsights } from "../../src/migrations/migration_insights.js";
-import { parseMigrationSourceInput } from "../../src/migrations/migration_source.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
+import { parseMigrationReviewPlan } from "../../src/migrations/review/migration_review.js";
+import { parseMigrationInsights } from "../../src/migrations/insights/migration_insights.js";
+import { parseMigrationSourceInput } from "../../src/migrations/source/migration_source.js";
 
 const fail = (): never => {
   throw new Error(

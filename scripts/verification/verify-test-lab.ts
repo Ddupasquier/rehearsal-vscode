@@ -4,12 +4,12 @@ import { constants } from "node:fs";
 import { createHash } from "node:crypto";
 import { lstat, open, readdir, readFile, realpath } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
-import { inspectProject } from "../../src/workspace/project_snapshot.js";
+import { inspectProject } from "../../src/workspace/inspection/project_snapshot.js";
 import { nativeStorageRoot } from "../native/native-development-storage.js";
 import {
   bootstrapProjectDiscovery,
   type WorkspaceEntryKind,
-} from "../../src/workspace/bootstrap_discovery.js";
+} from "../../src/workspace/inspection/bootstrap_discovery.js";
 
 export interface LabAdapterFixture {
   parentOwnership: {
