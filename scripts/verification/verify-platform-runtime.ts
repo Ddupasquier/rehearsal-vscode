@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 
 const { runVersion, runRehearsalJson } = require(
   resolve(__dirname, "../../dist/src/process_adapter.js"),
-) as typeof import("../../src/runtime/process_adapter.js");
+) as typeof import("../../src/runtime/transport/process_adapter.js");
 
 const main = async (): Promise<void> => {
   const temporary = await mkdtemp(

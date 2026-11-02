@@ -26,7 +26,7 @@ import {
 import { promisify } from "node:util";
 import { setTimeout as delay } from "node:timers/promises";
 import { assertArchiveContents } from "../verification/verify-private-vsix.js";
-import { storageEnvironment } from "../../src/runtime/platform_runtime.js";
+import { storageEnvironment } from "../../src/runtime/transport/platform_runtime.js";
 import {
   nativeStorageRoot,
   createNativeTemporaryDirectory,

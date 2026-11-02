@@ -9,8 +9,8 @@ import {
   parseBaselineInspectionData,
   parseBaselineScopeReview,
   parseReviewTargets,
-} from "../../src/review/review_contract.js";
-import { renderBaselineScopeReview } from "../../src/review/review_view.js";
+} from "../../src/review/contracts/review_contract.js";
+import { renderBaselineScopeReview } from "../../src/review/panels/review_view.js";
 import {
   readOperationActivityReport,
   verifyOperationActivityEvidence,

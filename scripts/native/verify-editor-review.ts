@@ -6,14 +6,14 @@ import { parseConfigurationMetadata } from "../../src/configuration/configuratio
 import {
   comparisonSubjects,
   compareEnvironmentEvidence,
-} from "../../src/runtime/environment_comparison.js";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
-import { parseBaselineInspectionData } from "../../src/review/review_contract.js";
+} from "../../src/runtime/reports/environment_comparison.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
+import { parseBaselineInspectionData } from "../../src/review/contracts/review_contract.js";
 import {
   buildVerificationReport,
   renderVerificationReportJson,
   renderVerificationReportMarkdown,
-} from "../../src/runtime/verification_report.js";
+} from "../../src/runtime/reports/verification_report.js";
 import {
   readOperationActivityReport,
   verifyOperationActivityEvidence,

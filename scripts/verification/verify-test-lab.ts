@@ -12,12 +12,12 @@ import {
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import { promisify } from "node:util";
-import { inspectProject } from "../../src/workspace/project_snapshot.js";
+import { inspectProject } from "../../src/workspace/inspection/project_snapshot.js";
 import { nativeStorageRoot } from "../native/native-development-storage.js";
 import {
   bootstrapProjectDiscovery,
   type WorkspaceEntryKind,
-} from "../../src/workspace/bootstrap_discovery.js";
+} from "../../src/workspace/inspection/bootstrap_discovery.js";
 
 const execFileAsync = promisify(execFile);
 const labRoot = () => {

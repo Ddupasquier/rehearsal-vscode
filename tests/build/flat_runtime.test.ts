@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import vm from "node:vm";
 import { SourceMap } from "node:module";
+import path from "node:path";
 import { planFlatRuntime } from "../../scripts/build/flat-runtime.js";
 
 const fixture = (): Map<string, string> => {
   const files = new Map<string, string>();
   for (const [name, content] of [
-    ["extension", 'exports.answer = require("./feature/value.js").answer;'],
-    ["feature/value", "exports.answer = 42;"],
+    [
+      "extension",
+      'exports.answer = require("./feature/nested/value.js").answer;',
+    ],
+    ["feature/nested/value", "exports.answer = 42;"],
   ]) {
     files.set(
       `${name}.js`,
@@ -21,7 +25,10 @@ const fixture = (): Map<string, string> => {
         file: `${name?.split("/").at(-1)}.js`,
         sourceRoot: "",
         sources: [
-          `${name?.includes("/") ? "../../../" : "../../"}src/${name}.ts`,
+          path.posix.relative(
+            path.posix.dirname(`dist/src/${name}.js`),
+            `src/${name}.ts`,
+          ),
         ],
         names: [],
         mappings: "AAAA",
@@ -32,7 +39,7 @@ const fixture = (): Map<string, string> => {
 };
 
 describe("compatible flat extension output", () => {
-  it("loads the moved module through the unchanged installed entry point and preserves later columns", async () => {
+  it("loads a twice-nested module through the unchanged installed entry point and preserves later columns", async () => {
     const input = fixture();
     const output = await planFlatRuntime(input);
     expect([...output.keys()].every((name) => !name.includes("/"))).toBe(true);
@@ -54,9 +61,9 @@ describe("compatible flat extension output", () => {
       before.slice(before.indexOf(").answer")),
     );
     const map = JSON.parse(output.get("value.js.map")!);
-    expect(map.sources).toEqual(["../../src/feature/value.ts"]);
+    expect(map.sources).toEqual(["../../src/feature/nested/value.ts"]);
     expect(new SourceMap(map).findEntry(0, 0)).toMatchObject({
-      originalSource: "../../src/feature/value.ts",
+      originalSource: "../../src/feature/nested/value.ts",
       originalLine: 0,
       originalColumn: 0,
     });
@@ -66,7 +73,7 @@ describe("compatible flat extension output", () => {
     const input = fixture();
     input.set(
       "extension.d.ts",
-      'export * from "./feature/value.js"; type Value = import("./feature/value.js").answer; import value = require("./feature/value.js");',
+      'export * from "./feature/nested/value.js"; type Value = import("./feature/nested/value.js").answer; import value = require("./feature/nested/value.js");',
     );
     const output = await planFlatRuntime(input);
     expect(output.get("extension.d.ts")).toMatch(
@@ -89,7 +96,7 @@ describe("compatible flat extension output", () => {
     ["file URL", 'require("file:///outside.js")'],
     [
       "shadowed require",
-      'function f(require) { return require("./feature/value.js"); }',
+      'function f(require) { return require("./feature/nested/value.js"); }',
     ],
     ["aliased require", "const load = require;"],
     ["module-relative filesystem access", "exports.path = __dirname;"],
@@ -111,9 +118,9 @@ describe("compatible flat extension output", () => {
     "refuses unexpected source map %s",
     async (key) => {
       const input = fixture();
-      const map = JSON.parse(input.get("feature/value.js.map")!);
+      const map = JSON.parse(input.get("feature/nested/value.js.map")!);
       map[key] = key === "sources" ? ["../../../../outside.ts"] : "unexpected";
-      input.set("feature/value.js.map", JSON.stringify(map));
+      input.set("feature/nested/value.js.map", JSON.stringify(map));
       await expect(planFlatRuntime(input)).rejects.toThrow();
     },
   );

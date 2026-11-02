@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { lstat, mkdir, mkdtemp, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
-import { storageEnvironment } from "../../src/runtime/platform_runtime.js";
+import { storageEnvironment } from "../../src/runtime/transport/platform_runtime.js";
 
 const within = (root: string, path: string) => {
   const part = relative(root, path);

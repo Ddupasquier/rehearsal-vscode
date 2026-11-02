@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { parseEngineShutdownPreview } from "../../src/runtime/engine_lifecycle_contract.js";
+import { parseEngineShutdownPreview } from "../../src/runtime/engines/engine_lifecycle_contract.js";
 import type { parseNativeEngineFixture } from "./engine-lifecycle-fixture.js";
 import { nativeConsumerFingerprint } from "./native-insights-consumer.js";
 

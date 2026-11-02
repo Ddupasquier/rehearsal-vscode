@@ -1,13 +1,13 @@
 import type {
   MigrationCutoff,
   DrizzleMigrationIdentity,
-} from "./migrations/native_migration_contract.js";
-import type { NativeMigrationToolBinding } from "./migrations/migration_review.js";
+} from "./migrations/native/native_migration_contract.js";
+import type { NativeMigrationToolBinding } from "./migrations/review/migration_review.js";
 import {
   parseEnvironmentClassification,
   parseEnvironmentProvenance,
   parseResourceCatalog,
-} from "./runtime/resource_contract.js";
+} from "./runtime/resources/resource_contract.js";
 import {
   parseOperationKind,
   parseOperationVersion,
@@ -17,7 +17,7 @@ import {
   type OperationProgressSnapshot,
   type RecentOperationProgress,
   type RecentOperationFailure,
-} from "./runtime/operation_progress.js";
+} from "./runtime/operations/operation_progress.js";
 
 export const RESULT_SCHEMA_VERSION = 1 as const;
 
@@ -225,7 +225,8 @@ export interface ActivityData {
 
 export interface ResourceInventoryData {
   readonly catalog?:
-    import("./runtime/resource_contract.js").ResourceCatalogData | null;
+    | import("./runtime/resources/resource_contract.js").ResourceCatalogData
+    | null;
   readonly schemaVersion: 1;
   readonly inspectedAt: string;
   readonly engine: {
@@ -267,8 +268,8 @@ export interface ResourceInventoryData {
     readonly cleanupEligibility:
       "running" | "preview-required" | "not-present" | "inspection-unavailable";
     readonly restartPolicies: readonly string[];
-    readonly provenance?: import("./runtime/resource_contract.js").EnvironmentProvenanceData;
-    readonly classification?: import("./runtime/resource_contract.js").EnvironmentClassificationData;
+    readonly provenance?: import("./runtime/resources/resource_contract.js").EnvironmentProvenanceData;
+    readonly classification?: import("./runtime/resources/resource_contract.js").EnvironmentClassificationData;
   }[];
   readonly stale: {
     readonly stoppedCount: number;

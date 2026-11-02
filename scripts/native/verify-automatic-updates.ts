@@ -14,7 +14,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { assertArchiveContents } from "../verification/verify-private-vsix.js";
-import { storageEnvironment } from "../../src/runtime/platform_runtime.js";
+import { storageEnvironment } from "../../src/runtime/transport/platform_runtime.js";
 import {
   nativeStorageRoot,
   createNativeTemporaryDirectory,

@@ -1,5 +1,5 @@
 /** Validate core-owned configuration metadata; proposals never permit executable code. */
-import { isLocalEndpoint } from "../runtime/local_endpoint.js";
+import { isLocalEndpoint } from "../runtime/transport/local_endpoint.js";
 export interface NamedWorkspaceProfile {
   readonly name: string;
   readonly targets: readonly string[];

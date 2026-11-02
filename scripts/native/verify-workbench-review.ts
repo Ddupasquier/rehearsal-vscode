@@ -3,23 +3,23 @@ import { parseConfigurationMetadata } from "../../src/configuration/configuratio
 import {
   configurationProposalChanges,
   parseConfigurationProposal,
-} from "../../src/configuration/configuration_editor.js";
-import { parseLocalEndpoint } from "../../src/runtime/local_endpoint.js";
+} from "../../src/configuration/editing/configuration_editor.js";
+import { parseLocalEndpoint } from "../../src/runtime/transport/local_endpoint.js";
 import {
   selectMigrationView,
   type MigrationFilters,
-} from "../../src/migrations/migration_filter.js";
+} from "../../src/migrations/review/migration_filter.js";
 import {
   assertMatchingMigrationCandidates,
   parseMigrationReviewPlan,
-} from "../../src/migrations/migration_review.js";
-import { migrationReviewMarkup } from "../../src/migrations/migration_view.js";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
-import { DEFAULT_WORKSPACE_PREFERENCES } from "../../src/workspace/workspace_preferences.js";
+} from "../../src/migrations/review/migration_review.js";
+import { migrationReviewMarkup } from "../../src/migrations/review/migration_view.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
+import { DEFAULT_WORKSPACE_PREFERENCES } from "../../src/workspace/state/workspace_preferences.js";
 import {
   migrationReviewIdentity,
   reconcileMigrationReview,
-} from "../../src/workspace/workspace_view_state.js";
+} from "../../src/workspace/state/workspace_view_state.js";
 import {
   readOperationActivityReport,
   verifyOperationActivityEvidence,

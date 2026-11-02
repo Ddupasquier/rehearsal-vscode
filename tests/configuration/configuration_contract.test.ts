@@ -8,8 +8,8 @@ import {
 import {
   coreConfigurationControls,
   namedProfileControls,
-} from "../../src/configuration/configuration_view.js";
-import type { ProjectSnapshot } from "../../src/workspace/project_snapshot.js";
+} from "../../src/configuration/forms/configuration_view.js";
+import type { ProjectSnapshot } from "../../src/workspace/inspection/project_snapshot.js";
 
 const metadata = () => ({
   schemaVersion: 1,
