@@ -1,15 +1,15 @@
 import * as vscode from "vscode";
-import { RehearsalTreeProvider } from "./tree_provider.js";
-import { RehearsalWorkspacePanels } from "./workspace_panel.js";
-import { RehearsalWorkspaceActions } from "./workspace_actions.js";
-import { AutomaticDashboardController } from "./automatic_dashboard.js";
-import { createUpdateAdvisory } from "./update_advisory_host.js";
-import { RehearsalReviewPanels } from "./review_panel.js";
-import { AutomaticUpdateScheduler } from "./automatic_update_scheduler.js";
-import { readAutomaticUpdateSettings } from "./automatic_update_settings.js";
-import { openBundledDocument } from "./bundled_documents.js";
-import { LEGACY_EXTENSION_ID } from "./extension_identity.js";
-import { createLegacyExtensionGuard } from "./extension_migration.js";
+import { RehearsalTreeProvider } from "./workspace/tree_provider.js";
+import { RehearsalWorkspacePanels } from "./workspace/workspace_panel.js";
+import { RehearsalWorkspaceActions } from "./workspace/workspace_actions.js";
+import { AutomaticDashboardController } from "./workspace/automatic_dashboard.js";
+import { createUpdateAdvisory } from "./updates/update_advisory_host.js";
+import { RehearsalReviewPanels } from "./review/review_panel.js";
+import { AutomaticUpdateScheduler } from "./updates/automatic_update_scheduler.js";
+import { readAutomaticUpdateSettings } from "./updates/automatic_update_settings.js";
+import { openBundledDocument } from "./workspace/bundled_documents.js";
+import { LEGACY_EXTENSION_ID } from "./updates/extension_identity.js";
+import { createLegacyExtensionGuard } from "./updates/extension_migration.js";
 
 const DOCUMENTATION_URL = "https://ddupasquier.github.io/rehearsal-db/";
 
