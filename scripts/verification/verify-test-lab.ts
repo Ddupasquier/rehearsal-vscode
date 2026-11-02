@@ -376,7 +376,10 @@ export async function verifyPreparedLabAdapter(
   }
   if (
     ready.packageLocation !==
-      resolve(postgresqlRoot, "node_modules/@rehearsal-db/core") ||
+      relative(
+        postgresqlRoot,
+        resolve(postgresqlRoot, "node_modules/@rehearsal-db/core"),
+      ) ||
     ready.candidates?.targets.length !== 1
   ) {
     throw new Error(

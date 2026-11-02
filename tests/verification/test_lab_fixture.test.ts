@@ -9,7 +9,7 @@ import {
   link,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import {
@@ -52,9 +52,9 @@ const snapshots = (m: LabAdapterFixture) => [
       rowCount: 10003,
       generations: [{ active: true }, { active: false }],
     },
-    packageLocation: resolve(
+    packageLocation: relative(
       m.postgresqlRoot,
-      "node_modules/@rehearsal-db/core",
+      resolve(m.postgresqlRoot, "node_modules/@rehearsal-db/core"),
     ),
     candidates: { targets: [{}], count: 0 },
     activity: { state: "idle" },
@@ -116,6 +116,14 @@ describe("prepared read-only Lab adapter fixture", () => {
     for (const change of [
       { version: "2.2.0" },
       { packageLocation: "/foreign/node_modules/@rehearsal-db/core" },
+      { packageLocation: "../foreign/node_modules/@rehearsal-db/core" },
+      { packageLocation: "foreign/node_modules/@rehearsal-db/core" },
+      {
+        packageLocation: resolve(
+          m.postgresqlRoot,
+          "node_modules/@rehearsal-db/core",
+        ),
+      },
       {
         baseline: {
           rowCount: 10002,

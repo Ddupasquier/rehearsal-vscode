@@ -46,8 +46,9 @@ compatible dependency beneath Core when an application's dependency version diff
 Only a canonical, nonsymlink direct `node_modules` directory is separated from the Core
 payload; extra files elsewhere, changed payload bytes and redirected dependency roots
 still refuse. Dependency subtrees remain parent-managed and are outside this Core-payload
-proof. This is an explicit producer trust boundary, not an independent archive-extraction
-proof or a hostile-process sandbox.
+proof. The adapter's workspace-relative package location must identify that same direct
+installation. This is an explicit producer trust boundary, not an independent
+archive-extraction proof or a hostile-process sandbox.
 
 The read-only check retains the 10,003-row baseline, active and retained generations,
 activity, runtime, resources and discovery assertions, plus clean-room Library setup
