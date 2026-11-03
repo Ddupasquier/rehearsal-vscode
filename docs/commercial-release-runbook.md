@@ -101,7 +101,7 @@ A preflight pressure refusal allocates no test fixture or report and launches no
 Code host; retry explicitly after pressure returns to normal. A later pressure refusal
 retains already allocated fixture/recovery state.
 
-The three sequential native hosts keep their evidence separate:
+By default, the three sequential native hosts keep their evidence separate:
 
 - The exact candidate activates from its installed payload. Real child-process
   reservations exercise recovery/refusal; real native warning buttons open Extensions
@@ -114,6 +114,13 @@ The three sequential native hosts keep their evidence separate:
 - Restarting only that disposable profile loads the exact official target and proves
   recovery of a deliberately abandoned dispatched reservation. This crash-state fixture
   does not claim that VS Code actually crashed during the preceding install.
+
+For a missing proof, `--lanes=candidate` runs only the candidate host;
+`--lanes=historical` runs the install and restart hosts in the same disposable profile.
+`--lanes=all` is the default. Reports count only the selected hosts actually completed;
+they do not import earlier passes. Retain separately verified evidence with the same
+artifact hashes and runtime pin for omitted lanes. A failed or missing required lane
+still blocks qualification.
 
 Reports and silent screenshots go under `test-results/automatic-updates-231.*`.
 After preflight, the verifier creates its report parent in a fresh checkout and
