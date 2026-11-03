@@ -20,6 +20,12 @@ bundled terms and checksums. This runbook grants no release or legal authority.
 Neither route changes the complete MIT CLI. Public GitHub distribution does not imply
 Marketplace or paid-launch approval. Do not describe a planned tier as enforced today.
 
+For public Markdown-only maintenance outside artifact qualification, use
+`npm run docs:check`. Existing CI jobs run that proof once on Node 24 without
+repackaging the extension. Runtime, configuration, dependencies, tooling, mixed or
+uncertain changes retain full checks; manual and release verification keep their
+existing coverage. Required check names and publication approvals remain unchanged.
+
 ## Exact-artifact verification and delivery
 
 1. Freeze one reviewed core artifact and one extension commit candidate. Record the
