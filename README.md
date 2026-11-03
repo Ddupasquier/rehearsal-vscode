@@ -94,6 +94,8 @@ future optional Pro features do not revoke existing Starter rights.
 The extension includes no telemetry. Release checks require consent; automatic
 extension and compatible CLI updates have separate opt-ins, both off by default.
 No update forces an editor reload or runs a migration.
+Use **Rehearsal: Check for Updates** for current guidance. When installation needs
+review, follow its Extensions or Settings action, then return to Rehearsal.
 
 [Detailed guide](docs/extension-guide.md) ·
 [Privacy](PRIVACY.md) · [License](LICENSE) · [Support](SUPPORT.md) ·
