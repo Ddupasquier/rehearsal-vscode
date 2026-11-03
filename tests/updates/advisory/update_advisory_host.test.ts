@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { join } from "node:path";
 import { updateAdvisoryStorageKey } from "../../../src/updates/advisory/update_advisory.js";
+import { ExtensionUpdateBlockedError } from "../../../src/updates/automatic/extension_update_reservation.js";
 const mocks = vi.hoisted(() => ({
   trusted: true,
   scheme: "file",
@@ -12,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   install: vi.fn(),
   activity: vi.fn(),
   savePreferences: vi.fn(),
+  warning: vi.fn(),
+  execute: vi.fn(),
 }));
 vi.mock("../../../src/updates/automatic/automatic_update_settings.js", () => ({
   readAutomaticUpdateSettings: () => ({ ...mocks.automatic }),
@@ -60,8 +64,9 @@ vi.mock("vscode", () => ({
   window: {
     showInformationMessage: mocks.message,
     withProgress: mocks.progress,
-    showWarningMessage: vi.fn(),
+    showWarningMessage: mocks.warning,
   },
+  commands: { executeCommand: mocks.execute },
   ProgressLocation: { Notification: 15 },
   env: { openExternal: mocks.external },
   Uri: { parse: (value: string) => value },
@@ -143,6 +148,8 @@ beforeEach(() => {
   mocks.automatic = { extension: false, cli: false };
   mocks.prompt.mockResolvedValue(undefined);
   mocks.install.mockResolvedValue(true);
+  mocks.warning.mockReset().mockResolvedValue(undefined);
+  mocks.execute.mockReset().mockResolvedValue(undefined);
   mocks.activity.mockResolvedValue({
     result: { data: { schemaVersion: 1, state: "idle", operation: null } },
   });
@@ -160,6 +167,70 @@ beforeEach(() => {
   );
 });
 describe("native update consent and review host", () => {
+  it.each([
+    "update-in-progress",
+    "lock-unverified",
+    "lock-changed",
+    "installation-unconfirmed",
+  ] as const)(
+    "surfaces %s once, keeps Core independent and permits an explicit retry",
+    async (reason) => {
+      const f = fixture(true);
+      mocks.automatic = { extension: true, cli: true };
+      mocks.install.mockRejectedValueOnce(
+        new ExtensionUpdateBlockedError(reason),
+      );
+      await f.controller.check(key);
+      expect(mocks.warning).toHaveBeenCalledOnce();
+      expect(mocks.warning).toHaveBeenCalledWith(
+        expect.any(String),
+        "Open Extensions",
+        "Update Settings",
+      );
+      expect(f.update).toHaveBeenCalledOnce();
+      await f.controller.resumeAutomatic(key);
+      await f.controller.resumeAutomatic(key);
+      expect(mocks.install).toHaveBeenCalledOnce();
+      expect(mocks.warning).toHaveBeenCalledOnce();
+      expect(mocks.automatic).toEqual({ extension: true, cli: true });
+      expect(mocks.savePreferences).not.toHaveBeenCalled();
+      await f.controller.check(key);
+      expect(mocks.install).toHaveBeenCalledTimes(2);
+      expect(mocks.warning).toHaveBeenCalledOnce();
+      f.controller.dispose();
+    },
+  );
+
+  it.each([
+    [
+      "Open Extensions",
+      "workbench.extensions.search",
+      "@id:rehearsal-db.rehearsal-db",
+    ],
+    [
+      "Update Settings",
+      "workbench.action.openSettings",
+      "rehearsal.automaticUpdates",
+    ],
+  ])(
+    "offers the native %s recovery action without changing consent",
+    async (choice, command, argument) => {
+      const f = fixture(true);
+      mocks.automatic.extension = true;
+      mocks.install.mockRejectedValueOnce(
+        new ExtensionUpdateBlockedError("lock-unverified"),
+      );
+      mocks.warning.mockResolvedValueOnce(choice);
+      await f.controller.check(key);
+      await vi.waitFor(() =>
+        expect(mocks.execute).toHaveBeenCalledWith(command, argument),
+      );
+      expect(mocks.savePreferences).not.toHaveBeenCalled();
+      expect(f.update).not.toHaveBeenCalled();
+      f.controller.dispose();
+    },
+  );
+
   it("keeps a safe CLI deferral queued until an explicit dispatch is observed", async () => {
     const f = fixture(true);
     mocks.automatic.cli = true;
@@ -254,8 +325,10 @@ describe("native update consent and review host", () => {
       "devDependencies",
       {
         automatic: true,
-        coordinationDirectory:
-          "/fixture/not-actual-storage/cli-update-coordination",
+        coordinationDirectory: join(
+          "/fixture/not-actual-storage",
+          "cli-update-coordination",
+        ),
       },
     );
     const guard = f.update.mock.calls[0]![3];

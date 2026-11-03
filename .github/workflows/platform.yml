@@ -43,7 +43,15 @@ jobs:
       - if: steps.scope.outputs.docs_only != 'true'
         run: npm run verify:controller
       - if: steps.scope.outputs.docs_only != 'true'
-        run: npm test -- tests/runtime/transport/platform_runtime.test.ts tests/updates/automatic/automatic_update_settings.test.ts tests/updates/identity/extension_identity.test.ts
+        run: >-
+          npm test --
+          tests/runtime/transport/platform_runtime.test.ts
+          tests/updates/automatic/automatic_update_settings.test.ts
+          tests/updates/identity/extension_identity.test.ts
+          tests/updates/automatic/extension_update_reservation.test.ts
+          tests/updates/automatic/extension_auto_update.test.ts
+          tests/updates/automatic/automatic_update_scheduler.test.ts
+          tests/updates/advisory/update_advisory_host.test.ts
       - name: Real POSIX process lifecycle tests
         if: steps.scope.outputs.docs_only != 'true' && runner.os != 'Windows'
         run: npm test -- tests/runtime/transport/process_adapter.test.ts

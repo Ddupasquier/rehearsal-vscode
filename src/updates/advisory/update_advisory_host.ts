@@ -19,6 +19,11 @@ import {
 } from "../automatic/automatic_update_settings.js";
 import { AutomaticExtensionInstaller } from "../automatic/extension_auto_update.js";
 import {
+  ExtensionUpdateBlockedError,
+  type ExtensionUpdateBlockedReason,
+} from "../automatic/extension_update_reservation.js";
+import { EXTENSION_ID } from "../identity/extension_identity.js";
+import {
   RehearsalUpdatePrompts,
   type UpdatePromptResult,
 } from "../prompts/update_prompt.js";
@@ -63,6 +68,9 @@ export function createUpdateAdvisory({
         storagePath,
         loadedVersion: version,
         preview,
+        ...(extensionUri?.scheme === "file"
+          ? { loadedExtensionPath: extensionUri.fsPath }
+          : {}),
       })
     : undefined;
   const settings = () =>
@@ -72,9 +80,49 @@ export function createUpdateAdvisory({
     version: string;
     identity: UpdateProjectIdentity;
     automatic: boolean;
+    blocked?: ExtensionUpdateBlockedReason;
   };
   const pending = new Map<string, Pending[]>();
   const running = new Map<string, Promise<void>>();
+  const reportedBlocks = new Set<string>();
+  const reportBlocked = (
+    key: string,
+    version: string,
+    reason: ExtensionUpdateBlockedReason,
+  ) => {
+    const identity = `${version}:${reason}`;
+    if (!allowed(key) || reportedBlocks.has(identity)) return;
+    reportedBlocks.add(identity);
+    const message =
+      reason === "update-in-progress"
+        ? "Another Rehearsal extension update owns the reservation. Finish it in Extensions, then run Check for Updates."
+        : reason === "installation-unconfirmed"
+          ? "VS Code's Rehearsal installation is unconfirmed. Review it in Extensions, restart when convenient, then run Check for Updates; recovery files were preserved."
+          : reason === "lock-changed"
+            ? "Rehearsal's update reservation changed. Review the installed extension and run Check for Updates; replacement files were preserved."
+            : "Automatic Rehearsal extension updates need recovery review. Review or update manually in Extensions; the unverified reservation was preserved.";
+    void Promise.resolve(
+      vscode.window.showWarningMessage(
+        message,
+        "Open Extensions",
+        "Update Settings",
+      ),
+    )
+      .then(async (choice) => {
+        if (!allowed(key)) return;
+        if (choice === "Open Extensions")
+          await vscode.commands.executeCommand(
+            "workbench.extensions.search",
+            `@id:${EXTENSION_ID}`,
+          );
+        else if (choice === "Update Settings")
+          await vscode.commands.executeCommand(
+            "workbench.action.openSettings",
+            "rehearsal.automaticUpdates",
+          );
+      })
+      .catch(() => undefined);
+  };
   const allowed = (key: string) =>
     !disposed &&
     vscode.workspace.isTrusted &&
@@ -147,6 +195,7 @@ export function createUpdateAdvisory({
           jobs.splice(jobs.indexOf(job), 1);
           continue;
         }
+        if (job.blocked) continue;
         if (!(await idle(key, job.kind === "extension")) || !permission())
           continue;
         try {
@@ -201,7 +250,12 @@ export function createUpdateAdvisory({
             if (!dispatched) continue;
           }
           jobs.splice(jobs.indexOf(job), 1);
-        } catch {
+        } catch (error) {
+          if (error instanceof ExtensionUpdateBlockedError) {
+            job.blocked = error.reason;
+            reportBlocked(key, job.version, error.reason);
+            continue;
+          }
           jobs.splice(jobs.indexOf(job), 1);
           if (allowed(key))
             void vscode.window.showWarningMessage(
@@ -486,7 +540,10 @@ export function createUpdateAdvisory({
       await controller.open(key);
       await resumeAutomatic(key);
     },
-    check: (key: string, manual = true) => controller.check(key, manual),
+    check: (key: string, manual = true) => {
+      if (manual) reportedBlocks.clear();
+      return controller.check(key, manual);
+    },
     configure: async (key: string) => {
       if (!prompts) return controller.configure(key);
       const result = await choose(key, { core: null, extension: null }, false, {
