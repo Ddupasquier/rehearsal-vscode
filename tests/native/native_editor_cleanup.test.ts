@@ -803,3 +803,150 @@ describe.skipIf(process.platform === "win32")(
     });
   },
 );
+
+describe("Linux unavailable executable evidence", () => {
+  const root: NativeProcessIdentity = {
+    pid: 100001,
+    ppid: process.pid,
+    pgid: 100001,
+    state: "S",
+    started: "Tue Nov 3 21:13:41 2026",
+    executable: "code",
+  };
+  const child: NativeProcessIdentity = { ...root, pid: 100002, ppid: root.pid };
+  function fixture() {
+    const rows = new Map([
+      [root.pid, root],
+      [child.pid, child],
+    ]);
+    const tracker = createNativeEditorTracker(
+      root.pid,
+      "/owned/code",
+      async () => new Map(rows),
+      "linux",
+    );
+    return { rows, tracker };
+  }
+  it.each(["live-parent", "missing-parent", "reparented"])(
+    "keeps a known opaque lifetime passive with %s until proven absent",
+    async (kind) => {
+      const f = fixture();
+      await f.tracker.observe();
+      const opaque = {
+        ...child,
+        executable: "-",
+        state: "R",
+        ...(kind === "reparented" ? { ppid: 1 } : {}),
+      };
+      if (kind !== "live-parent") f.rows.delete(root.pid);
+      f.rows.set(child.pid, opaque);
+      expect(await f.tracker.observe()).toMatchObject({
+        identityUncertain: false,
+        awaitingReap: [opaque],
+        unknown: [],
+        execTransitions: [],
+        uncertaintyHistory: [],
+      });
+      f.rows.delete(root.pid);
+      const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+      try {
+        expect(await f.tracker.cleanup()).toMatchObject({
+          identityUncertain: false,
+          fallbackUsed: false,
+          remaining: [],
+          unknown: [],
+          awaitingReap: [opaque],
+        });
+        expect(signal).not.toHaveBeenCalled();
+        // Readability returning does not restore ancestry or signal authority.
+        const readable = { ...child, ppid: 1 };
+        f.rows.set(child.pid, readable);
+        expect(await f.tracker.observe()).toMatchObject({
+          identityUncertain: false,
+          remaining: [],
+          awaitingReap: [readable],
+          execTransitions: [],
+        });
+        f.rows.clear();
+        expect(await f.tracker.observe()).toMatchObject({
+          identityUncertain: false,
+          remaining: [],
+          unknown: [],
+          awaitingReap: [],
+        });
+      } finally {
+        signal.mockRestore();
+      }
+    },
+  );
+  it.each(["birth", "group", "image"])(
+    "keeps actual %s contradiction sticky after an unreadable interval",
+    async (kind) => {
+      const f = fixture();
+      await f.tracker.observe();
+      f.rows.set(child.pid, { ...child, executable: "-" });
+      await f.tracker.observe();
+      f.rows.set(child.pid, {
+        ...child,
+        ...(kind === "birth"
+          ? { started: "different" }
+          : kind === "group"
+            ? { pgid: 100009 }
+            : { executable: "foreign" }),
+      });
+      expect(await f.tracker.observe()).toMatchObject({
+        identityUncertain: true,
+        awaitingReap: [],
+        unknown: [expect.objectContaining({ pid: child.pid })],
+      });
+      f.rows.clear();
+      expect(await f.tracker.observe()).toMatchObject({
+        identityUncertain: true,
+        remaining: [],
+        unknown: [],
+        awaitingReap: [],
+      });
+    },
+  );
+  it("never adopts a first-seen opaque child, even with its own group and a verified parent", async () => {
+    const f = fixture();
+    f.rows.delete(child.pid);
+    await f.tracker.observe();
+    const opaque = { ...child, executable: "-", pgid: child.pid };
+    f.rows.set(child.pid, opaque);
+    expect(await f.tracker.observe()).toMatchObject({
+      identityUncertain: true,
+      unknown: [opaque],
+      awaitingReap: [],
+      execTransitions: [],
+    });
+    f.rows.delete(root.pid);
+    const signal = vi.spyOn(process, "kill").mockImplementation(() => true);
+    try {
+      expect(await f.tracker.cleanup()).toMatchObject({
+        identityUncertain: true,
+        fallbackUsed: false,
+      });
+      expect(signal).not.toHaveBeenCalled();
+    } finally {
+      signal.mockRestore();
+    }
+  });
+  it.each([100001, 100003])(
+    "cannot use a known opaque parent to acquire a new descendant in group %s",
+    async (pgid) => {
+      const f = fixture();
+      await f.tracker.observe();
+      f.rows.set(child.pid, { ...child, executable: "-" });
+      const grandchild = { ...child, pid: 100003, ppid: child.pid, pgid };
+      f.rows.set(grandchild.pid, grandchild);
+      expect(await f.tracker.observe()).toMatchObject({
+        identityUncertain: true,
+        unknown: [grandchild],
+        remaining: [root],
+        awaitingReap: [expect.objectContaining({ pid: child.pid })],
+        execTransitions: [],
+      });
+    },
+  );
+});

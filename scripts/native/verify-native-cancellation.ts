@@ -210,6 +210,7 @@ export function createNativeEditorTracker(
   const captured: ProcessRows = new Map();
   // Reap-only identities never grant ancestry or signal authority.
   const waitOnly: ProcessRows = new Map();
+  const unreadableWait = new Set<number>();
   const awaitingReap = (row: NativeProcessIdentity | undefined) =>
     row?.state?.startsWith("Z") === true ||
     (platform === "darwin" && row?.state?.includes("E") === true);
@@ -251,6 +252,7 @@ export function createNativeEditorTracker(
       !waitOnly.has(left.pid) &&
       !awaitingReap(left) &&
       !awaitingReap(right) &&
+      !(platform === "linux" && right?.executable === "-") &&
       nativeProcesses.same(left, right) &&
       left.pgid === right?.pgid,
     );
@@ -282,12 +284,31 @@ export function createNativeEditorTracker(
         return result;
       }
     }
-    const current = new Map(
-      [...captured]
-        .filter(([, row]) => matches(row, rows.get(row.pid)))
-        .map(([key]) => [key, rows.get(key)!]),
-    );
+    const unverifiedImages = new Set<number>();
     try {
+      // A disappearing Linux executable link does not prove an exec. Retain only
+      // an already captured PID/birth/group as passive, even after its parent exits.
+      if (platform === "linux") {
+        for (const row of rows.values()) {
+          const previous = captured.get(row.pid);
+          if (
+            row.executable === "-" &&
+            previous &&
+            previous.started === row.started &&
+            previous.pgid === row.pgid &&
+            !waitOnly.has(row.pid)
+          ) {
+            assert.ok(captured.size + waitOnly.size < 256);
+            waitOnly.set(row.pid, previous);
+            unreadableWait.add(row.pid);
+          }
+        }
+      }
+      const current = new Map(
+        [...captured]
+          .filter(([, row]) => matches(row, rows.get(row.pid)))
+          .map(([key]) => [key, rows.get(key)!]),
+      );
       let changed = true;
       while (changed) {
         changed = false;
@@ -308,6 +329,11 @@ export function createNativeEditorTracker(
             (previous.started !== row.started || previous.pgid !== row.pgid)
           )
             continue;
+          // First-seen unavailable images establish neither ancestry nor ownership.
+          if (platform === "linux" && row.executable === "-") {
+            unverifiedImages.add(row.pid);
+            continue;
+          }
           if (!previous)
             assert.ok(
               captured.size + waitOnly.size < 256,
@@ -329,8 +355,15 @@ export function createNativeEditorTracker(
       }
       result.awaitingReap = [];
       for (const row of rows.values()) {
-        if (!awaitingReap(row)) continue;
         const previous = captured.get(row.pid) ?? waitOnly.get(row.pid);
+        const passiveUnreadable = unreadableWait.has(row.pid) && previous;
+        if (
+          passiveUnreadable &&
+          row.executable !== "-" &&
+          row.executable !== previous.executable
+        )
+          continue;
+        if (!awaitingReap(row) && !passiveUnreadable) continue;
         const proven = previous
           ? previous.started === row.started && previous.pgid === row.pgid
           : current.has(row.ppid);
@@ -353,15 +386,30 @@ export function createNativeEditorTracker(
     result.remaining = [...captured.values()].filter((row) =>
       matches(row, rows.get(row.pid)),
     );
+    // Passive Linux missing-image rows retain their captured lifetime and real
+    // image; only disappearance resolves them, never renewed signal authority.
     // Zombies and macOS E (trying to exit) rows require captured birth/group or
     // current verified ancestry. They remain wait-only after reparenting and
     // never grant signal/ancestry authority, even if ps changes their comm name.
     const reaping = new Set(result.awaitingReap.map((row) => row.pid));
+    const namesPassiveParent = (row: NativeProcessIdentity) => {
+      const observedParent = rows.get(row.ppid),
+        previousParent = waitOnly.get(row.ppid);
+      return (
+        unreadableWait.has(row.ppid) &&
+        observedParent &&
+        previousParent &&
+        observedParent.started === previousParent.started &&
+        observedParent.pgid === previousParent.pgid
+      );
+    };
     result.unknown = [...rows.values()].filter(
       (row) =>
         (captured.has(row.pid) ||
           waitOnly.has(row.pid) ||
-          groups.has(row.pgid)) &&
+          groups.has(row.pgid) ||
+          unverifiedImages.has(row.pid) ||
+          namesPassiveParent(row)) &&
         !reaping.has(row.pid) &&
         !matches(captured.get(row.pid), row),
     );
