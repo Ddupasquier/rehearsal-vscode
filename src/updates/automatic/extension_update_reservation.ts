@@ -196,13 +196,16 @@ export async function removeOwnedUpdateFile(
       !equal(updateFileIdentity(current), expected)
     )
       return false;
+    // Timestamps can remain stale during a same-size rewrite on any filesystem.
+    // The held descriptor must still contain the bytes this caller actually owns.
+    if (
+      !expectedSha256 ||
+      !/^[a-f0-9]{64}$/u.test(expectedSha256) ||
+      (await hashUpdateFile(file, expected.size)) !== expectedSha256
+    )
+      return false;
     let finalExpected = expected;
     if (windows) {
-      if (
-        !expectedSha256 ||
-        (await hashUpdateFile(file, expected.size)) !== expectedSha256
-      )
-        return false;
       if (
         !equal(
           updateFileIdentity(await file.stat({ bigint: true })),
@@ -226,7 +229,17 @@ export async function removeOwnedUpdateFile(
     if (
       !regular(final) ||
       !equal(updateFileIdentity(after), finalExpected) ||
-      !equal(updateFileIdentity(final), finalExpected)
+      !equal(updateFileIdentity(final), finalExpected) ||
+      (await hashUpdateFile(file, expected.size)) !== expectedSha256
+    )
+      return false;
+    // Hashing awaited I/O: recheck the pathname after it, not only the held file.
+    const lastHeld = await file.stat({ bigint: true });
+    const lastPath = await lstat(path, { bigint: true });
+    if (
+      !regular(lastPath) ||
+      !equal(updateFileIdentity(lastHeld), finalExpected) ||
+      !equal(updateFileIdentity(lastPath), finalExpected)
     )
       return false;
     await unlink(path);
@@ -448,7 +461,14 @@ export async function acquireExtensionUpdateReservation({
       )
         throw new ExtensionUpdateBlockedError("lock-changed");
       if (!permissionCurrent()) return undefined;
-      if (!(await removeOwnedUpdateFile(path, previous.identity)))
+      if (
+        !(await removeOwnedUpdateFile(
+          path,
+          previous.identity,
+          platform === "win32",
+          createHash("sha256").update(previous.bytes).digest("hex"),
+        ))
+      )
         throw new ExtensionUpdateBlockedError("lock-changed");
       continue;
     }
@@ -516,7 +536,13 @@ export async function acquireExtensionUpdateReservation({
         release: async () => {
           const owned = await owns();
           await close();
-          if (owned) await removeOwnedUpdateFile(path, identity);
+          if (owned)
+            await removeOwnedUpdateFile(
+              path,
+              identity,
+              platform === "win32",
+              createHash("sha256").update(bytes).digest("hex"),
+            );
         },
       };
     } catch (error) {
