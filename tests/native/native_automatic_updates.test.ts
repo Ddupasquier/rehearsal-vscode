@@ -69,13 +69,67 @@ async function fakeWorkbenchUi(
   snapshots: CdpTarget[][],
   abortAt?: number,
   responseMilliseconds = 0,
+  interaction?: { wrongDestination?: boolean; ignoreFront?: boolean },
 ) {
   let now = 0,
     queries = 0,
     closed = false;
   const controller = new AbortController();
-  const requests: { method: string; params: { targetId?: string } }[] = [];
+  const requests: { method: string; params: Record<string, unknown> }[] = [];
   const diagnostics: Record<string, unknown>[] = [];
+  const screenshots: string[] = [];
+  const phases = [
+    "blocked-extensions",
+    "returned-extensions",
+    "blocked-settings",
+    "returned-settings",
+    "done",
+  ];
+  let phaseIndex = 0,
+    foreground = false,
+    warning = true,
+    entered = false,
+    pairs = 0,
+    destination = "";
+  const captures = new Map<number, number>();
+  const button = {
+    disabled: false,
+    get textContent() {
+      return phaseIndex === 0 ? "Open Extensions" : "Update Settings";
+    },
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    focus: () => {
+      document.activeElement = button;
+    },
+  };
+  const document: {
+    activeElement: unknown;
+    hasFocus: () => boolean;
+    querySelectorAll: (selector: string) => unknown[];
+  } = {
+    activeElement: undefined,
+    hasFocus: () => foreground,
+    querySelectorAll: (selector) =>
+      selector === ".notification-list-item" &&
+      warning &&
+      [0, 2].includes(phaseIndex)
+        ? [
+            {
+              textContent: "unverified reservation was preserved",
+              getBoundingClientRect: () => ({ width: 100, height: 100 }),
+              querySelectorAll: () => [button],
+            },
+          ]
+        : selector === "input,textarea" && destination
+          ? [
+              {
+                value: destination,
+                getBoundingClientRect: () => ({ width: 100, height: 20 }),
+              },
+            ]
+          : [],
+  };
   let timerId = 0;
   const timers = new Map<number, { end: number; run: () => void }>();
   class Socket {
@@ -98,7 +152,7 @@ async function fakeWorkbenchUi(
     send(input: string) {
       const request = JSON.parse(input);
       requests.push(request);
-      const result =
+      let result: Record<string, unknown> =
         request.method === "Target.getTargets"
           ? {
               targetInfos: snapshots[Math.min(queries++, snapshots.length - 1)],
@@ -106,6 +160,58 @@ async function fakeWorkbenchUi(
           : request.method === "Target.attachToTarget"
             ? { sessionId: "owned-session" }
             : { result: { value: false } };
+      if (interaction) {
+        if (request.method === "Page.bringToFront")
+          foreground = !interaction.ignoreFront;
+        if (request.method === "Runtime.evaluate")
+          result = {
+            result: {
+              value: runInNewContext(request.params.expression, { document }),
+            },
+          };
+        if (request.method === "Page.captureScreenshot") {
+          result = {
+            data: Buffer.from("synthetic screenshot").toString("base64"),
+          };
+          const count = (captures.get(phaseIndex) ?? 0) + 1;
+          captures.set(phaseIndex, count);
+          if (count === 1)
+            document.activeElement = {
+              notification: "metadata arrived during capture",
+            };
+        }
+        if (request.method === "Input.dispatchKeyEvent") {
+          const key = request.params;
+          if (key.type === "keyDown")
+            entered =
+              foreground &&
+              document.activeElement === button &&
+              key.key === "Enter" &&
+              key.code === "Enter" &&
+              key.windowsVirtualKeyCode === 13 &&
+              key.modifiers === 0 &&
+              key.text === "\r" &&
+              key.unmodifiedText === "\r";
+          else if (key.type === "keyUp" && entered) {
+            expect(key).toEqual({
+              type: "keyUp",
+              key: "Enter",
+              code: "Enter",
+              windowsVirtualKeyCode: 13,
+              modifiers: 0,
+            });
+            pairs++;
+            warning = false;
+            destination =
+              phaseIndex === 0
+                ? "@id:rehearsal-db.rehearsal-db"
+                : "rehearsal.automaticUpdates";
+            if (interaction.wrongDestination)
+              destination += " PRIVATE_INPUT_VALUE";
+            entered = false;
+          }
+        }
+      }
       queueMicrotask(() => {
         const end = now + responseMilliseconds;
         const due = [...timers.entries()].sort(
@@ -152,17 +258,39 @@ async function fakeWorkbenchUi(
               path.endsWith("DevToolsActivePort")
                 ? "12345\n/devtools/browser/owned-123\n"
                 : JSON.stringify({
-                    phase: "done",
-                    nonce: "11111111-1111-1111-1111-111111111111",
+                    phase: interaction ? phases[phaseIndex] : "done",
+                    nonce: `11111111-1111-1111-1111-${String(phaseIndex).padStart(12, "0")}`,
                   }),
             writeFile: async (
               path: string,
-              bytes: string,
+              bytes: string | Uint8Array,
               options: unknown,
             ) => {
-              expect(path).toBe("/owned/evidence/workbench-readiness.json");
-              expect(options).toEqual({ mode: 0o600, flag: "wx" });
-              diagnostics.push(JSON.parse(bytes));
+              if (path.endsWith(".png")) {
+                expect(path.startsWith("/owned/evidence/")).toBe(true);
+                screenshots.push(path);
+              } else if (path === "/owned/root/ack.json.new") {
+                expect(JSON.parse(String(bytes)).phase).toBe(
+                  phases[phaseIndex],
+                );
+              } else {
+                expect(
+                  path === "/owned/evidence/workbench-readiness.json" ||
+                    path === "/owned/evidence/blocked-extensions-failed.json",
+                ).toBe(true);
+                expect(options).toEqual({ mode: 0o600, flag: "wx" });
+                diagnostics.push(JSON.parse(String(bytes)));
+              }
+            },
+            rename: async (from: string, to: string) => {
+              expect([from, to]).toEqual([
+                "/owned/root/ack.json.new",
+                "/owned/root/ack.json",
+              ]);
+              phaseIndex++;
+              warning = true;
+              destination = "";
+              document.activeElement = undefined;
             },
           }
         : name === "node:timers/promises"
@@ -181,10 +309,12 @@ async function fakeWorkbenchUi(
         root: "/owned/root",
         evidence: "/owned/evidence",
         signal: controller.signal,
-        interactive: false,
+        interactive: !!interaction,
       }),
     requests,
     diagnostics,
+    screenshots,
+    pairs: () => pairs,
     elapsed: () => now,
     closed: () => closed,
     pending: () => timers.size,
@@ -292,6 +422,86 @@ describe("owned workbench CDP readiness", () => {
     ).toBe(false);
     expect(fixture.pending()).toBe(0);
     expect(fixture.closed()).toBe(true);
+  });
+});
+
+describe("trusted native updater keyboard actions", () => {
+  const page = {
+    targetId: "owned-page",
+    type: "page",
+    url: "vscode-file://vscode-app/owned/Code/resources/app/out/vs/code/electron-browser/workbench/workbench.html",
+  };
+  it("fronts the owned page and dispatches complete Enter pairs after rechecking focus stolen by a notification", async () => {
+    const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {});
+    const observations = await fixture.run();
+    expect(observations.map((row) => (row as { phase: string }).phase)).toEqual(
+      [
+        "blocked-extensions",
+        "returned-extensions",
+        "blocked-settings",
+        "returned-settings",
+      ],
+    );
+    expect(fixture.pairs()).toBe(2);
+    expect(
+      fixture.requests.filter((row) => row.method === "Page.bringToFront"),
+    ).toHaveLength(3);
+    expect(
+      fixture.requests.filter((row) => row.method === "Input.dispatchKeyEvent"),
+    ).toHaveLength(4);
+    expect(fixture.diagnostics).toEqual([]);
+    expect(fixture.pending()).toBe(0);
+  });
+  it("keeps exact destination proof strict and retains failure screenshot plus fixed state without input text", async () => {
+    const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
+      wrongDestination: true,
+    });
+    await expect(fixture.run()).rejects.toThrow(
+      "Owned update UI observation incomplete",
+    );
+    expect(fixture.pairs()).toBe(1);
+    expect(fixture.elapsed()).toBe(30000);
+    expect(fixture.diagnostics).toEqual([
+      {
+        status: "failed",
+        phase: "blocked-extensions",
+        keyboardPairDispatched: true,
+        pageFocused: true,
+        warningVisible: false,
+        actionFocused: false,
+        visibleInputs: 1,
+        matchingInputs: 0,
+      },
+    ]);
+    expect(JSON.stringify(fixture.diagnostics)).not.toContain(
+      "PRIVATE_INPUT_VALUE",
+    );
+    expect(fixture.screenshots).toContain(
+      "/owned/evidence/blocked-extensions-failed.png",
+    );
+    expect(fixture.pending()).toBe(0);
+  });
+  it("does not send keyboard input when the owned page cannot obtain focus", async () => {
+    const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
+      ignoreFront: true,
+    });
+    await expect(fixture.run()).rejects.toThrow(
+      "Owned update UI observation incomplete",
+    );
+    expect(fixture.elapsed()).toBe(30000);
+    expect(
+      fixture.requests.some((row) => row.method === "Input.dispatchKeyEvent"),
+    ).toBe(false);
+    expect(fixture.diagnostics[0]).toMatchObject({
+      keyboardPairDispatched: false,
+      pageFocused: false,
+      warningVisible: true,
+      actionFocused: true,
+    });
+    expect(fixture.screenshots).toContain(
+      "/owned/evidence/blocked-extensions-failed.png",
+    );
+    expect(fixture.pending()).toBe(0);
   });
 });
 
@@ -714,7 +924,8 @@ describe("owned workbench UI refusal", () => {
       const document: {
         activeElement?: unknown;
         querySelectorAll?: () => unknown[];
-      } = {};
+        hasFocus: () => boolean;
+      } = { hasFocus: () => true };
       const button = (visible: boolean) => ({
         disabled: false,
         textContent: label,

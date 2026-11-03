@@ -13,7 +13,7 @@ const phases = Object.freeze({
 });
 exports.notificationButtonProbe = (label) => {
   assert.ok(["Open Extensions", "Update Settings"].includes(label));
-  return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect();return rect.width>0&&rect.height>0;};const items=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));const buttons=items.flatMap(item=>[...item.querySelectorAll('button,[role=button],.monaco-button')]).filter(node=>visible(node)&&!node.disabled&&(node.getAttribute('aria-label')||node.textContent).trim()===${JSON.stringify(label)});if(buttons.length!==1)return false;buttons[0].focus();return document.activeElement===buttons[0];})()`;
+  return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect();return rect.width>0&&rect.height>0;};const items=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));const buttons=items.flatMap(item=>[...item.querySelectorAll('button,[role=button],.monaco-button')]).filter(node=>visible(node)&&!node.disabled&&(node.getAttribute('aria-label')||node.textContent).trim()===${JSON.stringify(label)});if(buttons.length!==1)return false;buttons[0].focus();return document.hasFocus()&&document.activeElement===buttons[0];})()`;
 };
 exports.parseOwnedDevtoolsPort = (value) => {
   assert.ok(typeof value === "string" && value.length < 256);
@@ -178,15 +178,33 @@ exports.driveUpdateUi = async ({
       targetId: page.targetId,
       flatten: true,
     });
-    const evaluate = async (expression) => {
+    const evaluate = async (expression, end) => {
       const result = await send(
         "Runtime.evaluate",
         { expression, returnByValue: true },
         sessionId,
+        end,
       );
       assert.ok(!result.exceptionDetails);
       return result.result.value;
     };
+    // Match the maintained Chromium keyboard drivers: Enter carries carriage-return text.
+    const enter = async () => {
+      for (const type of ["keyDown", "keyUp"])
+        await send(
+          "Input.dispatchKeyEvent",
+          {
+            type,
+            key: "Enter",
+            code: "Enter",
+            windowsVirtualKeyCode: 13,
+            modifiers: 0,
+            ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
+          },
+          sessionId,
+        );
+    };
+    await send("Page.bringToFront", {}, sessionId);
     const observations = [],
       handled = new Set();
     while (true) {
@@ -195,26 +213,7 @@ exports.driveUpdateUi = async ({
           `(()=>{const dialogs=[...document.querySelectorAll('[role=dialog],[role=alertdialog]')].filter(node=>node.textContent.includes('Allow optional Rehearsal update checks?'));const buttons=dialogs.flatMap(node=>[...node.querySelectorAll('button,[role=button]')]).filter(node=>(node.getAttribute('aria-label')||node.textContent).trim()==="Don't Ask Again"&&node.getBoundingClientRect().width>0);if(buttons.length!==1)return false;buttons[0].focus();return document.activeElement===buttons[0];})()`,
         );
         if (consent) {
-          await send(
-            "Input.dispatchKeyEvent",
-            {
-              type: "keyDown",
-              key: "Enter",
-              code: "Enter",
-              windowsVirtualKeyCode: 13,
-            },
-            sessionId,
-          );
-          await send(
-            "Input.dispatchKeyEvent",
-            {
-              type: "keyUp",
-              key: "Enter",
-              code: "Enter",
-              windowsVirtualKeyCode: 13,
-            },
-            sessionId,
-          );
+          await enter();
         }
         let value;
         try {
@@ -246,50 +245,108 @@ exports.driveUpdateUi = async ({
       assert.ok(Object.hasOwn(phases, phase.phase));
       const button = phases[phase.phase];
       if (button) {
-        await wait(() => evaluate(exports.notificationButtonProbe(button)));
-        const warning = await send(
-          "Page.captureScreenshot",
-          { format: "png" },
-          sessionId,
-        );
-        const warningBytes = Buffer.from(warning.data, "base64");
-        assert.ok(
-          warningBytes.length > 0 && warningBytes.length < 16 * 1024 * 1024,
-        );
-        await fs.writeFile(
-          path.join(evidence, `${phase.phase}-warning.png`),
-          warningBytes,
-          { mode: 0o600 },
-        );
-        await send(
-          "Input.dispatchKeyEvent",
-          {
-            type: "keyDown",
-            key: "Enter",
-            code: "Enter",
-            windowsVirtualKeyCode: 13,
-          },
-          sessionId,
-        );
-        await send(
-          "Input.dispatchKeyEvent",
-          {
-            type: "keyUp",
-            key: "Enter",
-            code: "Enter",
-            windowsVirtualKeyCode: 13,
-          },
-          sessionId,
-        );
-        const expected =
-          button === "Open Extensions"
-            ? "@id:rehearsal-db.rehearsal-db"
-            : "rehearsal.automaticUpdates";
-        await wait(() =>
-          evaluate(
-            `(()=>[...document.querySelectorAll('input,textarea')].some(node=>node.value===${JSON.stringify(expected)}&&node.getBoundingClientRect().width>0))()`,
-          ),
-        );
+        let dispatched = false;
+        try {
+          await send("Page.bringToFront", {}, sessionId);
+          await wait((end) =>
+            evaluate(exports.notificationButtonProbe(button), end),
+          );
+          const warning = await send(
+            "Page.captureScreenshot",
+            { format: "png" },
+            sessionId,
+          );
+          const warningBytes = Buffer.from(warning.data, "base64");
+          assert.ok(
+            warningBytes.length > 0 && warningBytes.length < 16 * 1024 * 1024,
+          );
+          await fs.writeFile(
+            path.join(evidence, `${phase.phase}-warning.png`),
+            warningBytes,
+            { mode: 0o600 },
+          );
+          // A notification arriving during the screenshot must not receive our Enter.
+          assert.equal(
+            await evaluate(exports.notificationButtonProbe(button)),
+            true,
+          );
+          await enter();
+          dispatched = true;
+          const expected =
+            button === "Open Extensions"
+              ? "@id:rehearsal-db.rehearsal-db"
+              : "rehearsal.automaticUpdates";
+          await wait((end) =>
+            evaluate(
+              `(()=>[...document.querySelectorAll('input,textarea')].some(node=>node.value===${JSON.stringify(expected)}&&node.getBoundingClientRect().width>0))()`,
+              end,
+            ),
+          );
+        } catch (error) {
+          const end = Date.now() + 2000,
+            failures = [error];
+          try {
+            const expected =
+              button === "Open Extensions"
+                ? "@id:rehearsal-db.rehearsal-db"
+                : "rehearsal.automaticUpdates";
+            const state = await evaluate(
+              `(()=>{const visible=node=>node.getBoundingClientRect().width>0;const inputs=[...document.querySelectorAll('input,textarea')].filter(visible);const warnings=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));return {pageFocused:document.hasFocus(),warningVisible:warnings.length>0,actionFocused:warnings.some(node=>[...node.querySelectorAll('button,[role=button],.monaco-button')].some(button=>button===document.activeElement&&(button.getAttribute('aria-label')||button.textContent).trim()===${JSON.stringify(button)})),visibleInputs:Math.min(inputs.length,256),matchingInputs:Math.min(inputs.filter(node=>node.value===${JSON.stringify(expected)}).length,256)};})()`,
+              end,
+            );
+            assert.ok(
+              state &&
+                typeof state.pageFocused === "boolean" &&
+                typeof state.warningVisible === "boolean" &&
+                typeof state.actionFocused === "boolean",
+            );
+            assert.ok(
+              [state.visibleInputs, state.matchingInputs].every(
+                (value) =>
+                  Number.isSafeInteger(value) && value >= 0 && value <= 256,
+              ),
+            );
+            await fs.writeFile(
+              path.join(evidence, `${phase.phase}-failed.json`),
+              JSON.stringify({
+                status: "failed",
+                phase: phase.phase,
+                keyboardPairDispatched: dispatched,
+                pageFocused: state.pageFocused,
+                warningVisible: state.warningVisible,
+                actionFocused: state.actionFocused,
+                visibleInputs: state.visibleInputs,
+                matchingInputs: state.matchingInputs,
+              }) + "\n",
+              { mode: 0o600, flag: "wx" },
+            );
+          } catch (diagnostic) {
+            failures.push(diagnostic);
+          }
+          try {
+            const capture = await send(
+              "Page.captureScreenshot",
+              { format: "png" },
+              sessionId,
+              end,
+            );
+            const bytes = Buffer.from(capture.data, "base64");
+            assert.ok(bytes.length > 0 && bytes.length < 16 * 1024 * 1024);
+            await fs.writeFile(
+              path.join(evidence, `${phase.phase}-failed.png`),
+              bytes,
+              { mode: 0o600, flag: "wx" },
+            );
+          } catch (diagnostic) {
+            failures.push(diagnostic);
+          }
+          if (failures.length > 1)
+            throw new AggregateError(
+              failures,
+              "Owned update UI action failed; bounded diagnostic capture was incomplete.",
+            );
+          throw error;
+        }
       }
       const capture = await send(
         "Page.captureScreenshot",
