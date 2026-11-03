@@ -941,12 +941,124 @@ describe("Linux unavailable executable evidence", () => {
       const grandchild = { ...child, pid: 100003, ppid: child.pid, pgid };
       f.rows.set(grandchild.pid, grandchild);
       expect(await f.tracker.observe()).toMatchObject({
-        identityUncertain: true,
-        unknown: [grandchild],
+        identityUncertain: pgid !== root.pgid,
+        unknown: pgid === root.pgid ? [] : [grandchild],
         remaining: [root],
-        awaitingReap: [expect.objectContaining({ pid: child.pid })],
+        awaitingReap:
+          pgid === root.pgid
+            ? [expect.objectContaining({ pid: child.pid }), grandchild]
+            : [expect.objectContaining({ pid: child.pid })],
         execTransitions: [],
       });
     },
   );
+});
+
+describe("Linux passive first-observation membership", () => {
+  const root: NativeProcessIdentity = {
+    pid: 110001,
+    ppid: process.pid,
+    pgid: 110001,
+    state: "S",
+    started: "Tue Nov 3 21:32:08 2026",
+    executable: "code",
+  };
+  const first = { ...root, pid: 110002, ppid: root.pid, executable: "-" };
+  const second = { ...root, pid: 110003, ppid: first.pid };
+  const third = { ...root, pid: 110004, ppid: second.pid, executable: "-" };
+  function fixture(reverse = false) {
+    const rows = new Map([[root.pid, root]]);
+    const tracker = createNativeEditorTracker(
+      root.pid,
+      "/owned/code",
+      async () => new Map(rows),
+      "linux",
+    );
+    const chain = reverse ? [third, second, first] : [first, second, third];
+    return { rows, tracker, chain };
+  }
+  it.each([false, true])(
+    "tracks a same-snapshot opaque chain passively independent of row order (%s)",
+    async (reverse) => {
+      const f = fixture(reverse);
+      await f.tracker.observe();
+      for (const row of f.chain) f.rows.set(row.pid, row);
+      const observed = await f.tracker.observe();
+      expect(observed).toMatchObject({
+        identityUncertain: false,
+        remaining: [root],
+        unknown: [],
+        execTransitions: [],
+      });
+      expect(observed.awaitingReap).toHaveLength(3);
+      expect(observed.awaitingReap).toEqual(expect.arrayContaining(f.chain));
+      const signal = vi.spyOn(process, "kill").mockImplementation((pid) => {
+        expect(pid).toBe(root.pid);
+        f.rows.delete(root.pid);
+        return true;
+      });
+      try {
+        const stillLive = await f.tracker.cleanup();
+        expect(stillLive.awaitingReap).toHaveLength(3);
+        expect(stillLive.unknown).toEqual([]);
+        expect(signal.mock.calls.every(([pid]) => pid === root.pid)).toBe(true);
+        f.rows.set(first.pid, { ...first, ppid: 1, executable: "code" });
+        expect((await f.tracker.observe()).remaining).toEqual([]);
+        expect((await f.tracker.observe()).awaitingReap).toHaveLength(3);
+        f.rows.clear();
+        expect(await f.tracker.observe()).toMatchObject({
+          identityUncertain: false,
+          remaining: [],
+          unknown: [],
+          awaitingReap: [],
+        });
+      } finally {
+        signal.mockRestore();
+      }
+    },
+  );
+  it.each(["birth", "group", "image"])(
+    "preserves actual %s replacement contradictions in passive chains",
+    async (kind) => {
+      const f = fixture();
+      await f.tracker.observe();
+      for (const row of f.chain) f.rows.set(row.pid, row);
+      await f.tracker.observe();
+      f.rows.set(second.pid, {
+        ...second,
+        ...(kind === "birth"
+          ? { started: "replacement" }
+          : kind === "group"
+            ? { pgid: 110009 }
+            : { executable: "foreign" }),
+      });
+      expect((await f.tracker.observe()).identityUncertain).toBe(true);
+      f.rows.clear();
+      expect((await f.tracker.observe()).identityUncertain).toBe(true);
+    },
+  );
+  it.each([
+    "foreign-parent",
+    "absent-parent",
+    "own-group",
+    "nonpositive-group",
+  ])("refuses unlinked opaque membership: %s", async (kind) => {
+    const f = fixture();
+    await f.tracker.observe();
+    f.rows.set(first.pid, {
+      ...first,
+      ...(kind === "foreign-parent"
+        ? { ppid: process.pid }
+        : kind === "absent-parent"
+          ? { ppid: 110090 }
+          : kind === "own-group"
+            ? { pgid: first.pid }
+            : { pgid: 0 }),
+    });
+    expect(await f.tracker.observe()).toMatchObject({
+      identityUncertain: true,
+      awaitingReap: [],
+      execTransitions: [],
+    });
+  });
 });

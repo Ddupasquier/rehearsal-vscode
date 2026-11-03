@@ -208,9 +208,11 @@ export function createNativeEditorTracker(
 ) {
   assert.ok(Number.isSafeInteger(pid) && pid > 0);
   const captured: ProcessRows = new Map();
-  // Reap-only identities never grant ancestry or signal authority.
+  // Wait-only identities never grant signal authority; passive links track extinction only.
   const waitOnly: ProcessRows = new Map();
   const unreadableWait = new Set<number>();
+  // Real image observations only detect contradictions; they never grant authority.
+  const passiveImages = new Map<number, string>();
   const awaitingReap = (row: NativeProcessIdentity | undefined) =>
     row?.state?.startsWith("Z") === true ||
     (platform === "darwin" && row?.state?.includes("E") === true);
@@ -293,6 +295,7 @@ export function createNativeEditorTracker(
           const previous = captured.get(row.pid);
           if (
             row.executable === "-" &&
+            !awaitingReap(row) &&
             previous &&
             previous.started === row.started &&
             previous.pgid === row.pgid &&
@@ -313,6 +316,46 @@ export function createNativeEditorTracker(
       while (changed) {
         changed = false;
         for (const row of rows.values()) {
+          const observedParent = rows.get(row.ppid),
+            parentProof = waitOnly.get(row.ppid),
+            expectedImage =
+              passiveImages.get(row.ppid) ??
+              (parentProof?.executable !== "-"
+                ? parentProof?.executable
+                : undefined);
+          const passiveParent =
+            unreadableWait.has(row.ppid) &&
+            observedParent &&
+            parentProof &&
+            observedParent.started === parentProof.started &&
+            observedParent.pgid === parentProof.pgid &&
+            (observedParent.executable === "-" ||
+              expectedImage === undefined ||
+              observedParent.executable === expectedImage);
+          const anchor =
+            current.get(row.ppid) ??
+            (passiveParent ? observedParent : undefined);
+          // Observation-only membership may extend through a missing-image chain,
+          // but never enters captured/current or supplies signalling authority.
+          if (
+            platform === "linux" &&
+            !awaitingReap(row) &&
+            row.pid !== pid &&
+            !captured.has(row.pid) &&
+            !waitOnly.has(row.pid) &&
+            anchor &&
+            row.pgid > 0 &&
+            row.pgid === anchor.pgid &&
+            (row.executable === "-" || passiveParent)
+          ) {
+            assert.ok(captured.size + waitOnly.size < 256);
+            waitOnly.set(row.pid, row);
+            unreadableWait.add(row.pid);
+            if (row.executable !== "-")
+              passiveImages.set(row.pid, row.executable);
+            changed = true;
+            continue;
+          }
           // The root never changes identity. Descendant exec requires live ancestry,
           // the same birth time and group, not merely a reused numeric PID/group.
           if (
@@ -357,12 +400,14 @@ export function createNativeEditorTracker(
       for (const row of rows.values()) {
         const previous = captured.get(row.pid) ?? waitOnly.get(row.pid);
         const passiveUnreadable = unreadableWait.has(row.pid) && previous;
-        if (
-          passiveUnreadable &&
-          row.executable !== "-" &&
-          row.executable !== previous.executable
-        )
-          continue;
+        if (passiveUnreadable && row.executable !== "-") {
+          const expectedImage =
+            passiveImages.get(row.pid) ??
+            (previous.executable !== "-" ? previous.executable : undefined);
+          if (expectedImage !== undefined && row.executable !== expectedImage)
+            continue;
+          passiveImages.set(row.pid, row.executable);
+        }
         if (!awaitingReap(row) && !passiveUnreadable) continue;
         const proven = previous
           ? previous.started === row.started && previous.pgid === row.pgid
