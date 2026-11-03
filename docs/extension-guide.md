@@ -530,6 +530,12 @@ The maintained check also initializes the compiled webview controller in an isol
 DOM double. This catches packaging/serialization errors; it is not visual or
 screen-reader acceptance.
 
+For public Markdown-only edits, use `npm run docs:check`. CI runs that documentation
+proof once on Node 24. See the [release runbook's scope guidance](commercial-release-runbook.md#choose-the-release-route).
+Changes to runtime code, dependencies, configuration, tooling,
+mixed files or uncertain comparisons retain full checks. Manual and release checks
+keep their existing coverage; reuse still-valid evidence for unchanged source.
+
 Press `F5` and choose **Run Rehearsal Extension**. The development host opens Rehearsal
 Test Lab and its dashboard opens automatically after the trusted single-folder project is
 inspected. Reopen it at any time with the dashboard button in the Projects view title or
