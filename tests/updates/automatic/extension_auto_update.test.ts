@@ -8,6 +8,8 @@ import {
   rename,
   rm,
   stat,
+  lstat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -16,9 +18,15 @@ import type {
   VerifiedExtensionUpdate,
   ExtensionUpdateRuntime,
 } from "../../../src/updates/automatic/extension_update_artifact.js";
+import {
+  acquireExtensionUpdateReservation,
+  readLoadedExtensionState,
+  type UpdateProcessState,
+} from "../../../src/updates/automatic/extension_update_reservation.js";
 
 const editor = vi.hoisted(() => ({
   registeredVersion: "0.1.17" as unknown,
+  registeredPath: undefined as string | undefined,
   legacyInstalled: false,
   execute: vi.fn(),
   info: vi.fn(),
@@ -47,6 +55,10 @@ vi.mock("vscode", () => ({
 import { AutomaticExtensionInstaller } from "../../../src/updates/automatic/extension_auto_update.js";
 
 const version = "0.1.99";
+const expectReadOnly = (mode: number) => {
+  expect(mode & 0o222).toBe(0);
+  if (process.platform !== "win32") expect(mode & 0o777).toBe(0o400);
+};
 const bytes = Buffer.from(
   "Synthetic already-verified VSIX bytes; no archive is executed or installed.",
 );
@@ -73,6 +85,17 @@ const fixture = async () => {
   const root = await mkdtemp(join(base, "extension-auto-unit-"));
   directories.push(root);
   const storagePath = join(root, "storage");
+  const loadedPath = join(root, "loaded-extension");
+  await mkdir(loadedPath);
+  await writeFile(
+    join(loadedPath, "package.json"),
+    JSON.stringify({
+      publisher: "rehearsal-db",
+      name: "rehearsal-db",
+      version: "0.1.17",
+    }),
+  );
+  editor.registeredPath = loadedPath;
   const download = vi.fn(
     async (
       _version: string,
@@ -80,12 +103,17 @@ const fixture = async () => {
       _runtime: ExtensionUpdateRuntime,
     ): Promise<VerifiedExtensionUpdate> => verified(),
   );
-  const create = (platform?: NodeJS.Platform) => {
+  const create = (
+    platform?: NodeJS.Platform,
+    processState?: (pid: number) => UpdateProcessState,
+  ) => {
     const owner = new AutomaticExtensionInstaller({
       storagePath,
       loadedVersion: "0.1.17",
       preview: false,
       download,
+      loadedExtensionPath: loadedPath,
+      ...(processState ? { processState } : {}),
       ...(platform ? { platform } : {}),
     });
     owners.push(owner);
@@ -94,6 +122,7 @@ const fixture = async () => {
   return {
     root,
     storagePath,
+    loadedPath,
     download,
     create,
     entries: async () => await readdir(storagePath).catch(() => [] as string[]),
@@ -122,17 +151,21 @@ const deferredDownload = (download: ReturnType<typeof vi.fn>) => {
 
 beforeEach(() => {
   editor.registeredVersion = "0.1.17";
+  editor.registeredPath = undefined;
   editor.legacyInstalled = false;
-  editor.lookup
-    .mockReset()
-    .mockImplementation((id: string) =>
-      id === "rehearsal-db.rehearsal" && editor.legacyInstalled
-        ? { packageJSON: { version: "0.1.18" } }
-        : id !== "rehearsal-db.rehearsal-db" ||
-            editor.registeredVersion === undefined
-          ? undefined
-          : { packageJSON: { version: editor.registeredVersion } },
-    );
+  editor.lookup.mockReset().mockImplementation((id: string) =>
+    id === "rehearsal-db.rehearsal" && editor.legacyInstalled
+      ? { packageJSON: { version: "0.1.18" } }
+      : id !== "rehearsal-db.rehearsal-db" ||
+          editor.registeredVersion === undefined
+        ? undefined
+        : {
+            packageJSON: { version: editor.registeredVersion },
+            ...(editor.registeredPath
+              ? { extensionUri: editor.uri(editor.registeredPath) }
+              : {}),
+          },
+  );
   editor.execute.mockReset().mockResolvedValue(undefined);
   editor.info.mockReset();
   editor.warning.mockReset();
@@ -145,12 +178,147 @@ afterEach(async () => {
 });
 
 describe("automatic extension installation boundary", () => {
+  it("resumes a provably abandoned preparing reservation through the actual installer", async () => {
+    const f = await fixture();
+    await mkdir(f.storagePath);
+    const lease = await acquireExtensionUpdateReservation({
+      storagePath: f.storagePath,
+      version,
+      installation: () =>
+        readLoadedExtensionState(
+          f.loadedPath,
+          "0.1.17",
+          f.loadedPath,
+          "0.1.17",
+        ),
+      ready: async () => true,
+    });
+    await lease!.close();
+    expect(
+      await track(
+        f
+          .create(undefined, () => "stopped")
+          .install(
+            version,
+            () => true,
+            async () => true,
+          ),
+      ),
+    ).toBe(true);
+    expect(f.download).toHaveBeenCalledOnce();
+    expect(editor.execute).toHaveBeenCalledOnce();
+    expect(await f.entries()).toEqual([]);
+  });
+
+  it("reports an unverified abandoned reservation instead of silently deferring", async () => {
+    const f = await fixture();
+    await mkdir(f.storagePath, { recursive: true });
+    const path = join(f.storagePath, "extension-update.lock");
+    const original = JSON.stringify({
+      pid: 123456789,
+      token: "legacy-token",
+      version,
+    });
+    await writeFile(path, original, { mode: 0o600 });
+    await expect(
+      track(
+        f.create().install(
+          version,
+          () => true,
+          async () => true,
+        ),
+      ),
+    ).rejects.toMatchObject({ reason: "lock-unverified" });
+    expect(await readFile(path, "utf8")).toBe(original);
+    expect(f.download).not.toHaveBeenCalled();
+    expect(editor.execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["darwin", "win32"] as const)(
+    "preserves a replaced temporary VSIX during %s cleanup",
+    async (platform) => {
+      const f = await fixture();
+      let replaced = "";
+      let replacementMode = 0;
+      editor.execute.mockImplementationOnce(async (_command, uri) => {
+        replaced = uri.fsPath;
+        await rename(replaced, join(f.root, "retained-original.vsix"));
+        await writeFile(replaced, "foreign replacement", {
+          mode: 0o600,
+          flag: "wx",
+        });
+        replacementMode = (await stat(replaced)).mode;
+      });
+      expect(
+        await track(
+          f.create(platform).install(
+            version,
+            () => true,
+            async () => true,
+          ),
+        ),
+      ).toBe(true);
+      expect(await readFile(replaced, "utf8")).toBe("foreign replacement");
+      expect((await stat(replaced)).mode).toBe(replacementMode);
+    },
+  );
+
+  it.each(["darwin", "win32"] as const)(
+    "preserves same-inode modified temporary bytes during %s cleanup",
+    async (platform) => {
+      const f = await fixture();
+      let changed = "";
+      editor.execute.mockImplementationOnce(async (_command, uri) => {
+        changed = uri.fsPath;
+        await chmod(changed, 0o600);
+        await writeFile(changed, "changed in place");
+      });
+      expect(
+        await track(
+          f.create(platform).install(
+            version,
+            () => true,
+            async () => true,
+          ),
+        ),
+      ).toBe(true);
+      expect(await readFile(changed, "utf8")).toBe("changed in place");
+    },
+  );
+
+  it.each(["darwin", "win32"] as const)(
+    "preserves a temporary symlink and its foreign target during %s cleanup",
+    async (platform) => {
+      const f = await fixture();
+      const foreign = join(f.root, "foreign.vsix");
+      await writeFile(foreign, "foreign bytes", { mode: 0o400 });
+      let changed = "";
+      editor.execute.mockImplementationOnce(async (_command, uri) => {
+        changed = uri.fsPath;
+        await rename(changed, join(f.root, "retained-original.vsix"));
+        await symlink(foreign, changed);
+      });
+      expect(
+        await track(
+          f.create(platform).install(
+            version,
+            () => true,
+            async () => true,
+          ),
+        ),
+      ).toBe(true);
+      expect((await lstat(changed)).isSymbolicLink()).toBe(true);
+      expect(await readFile(foreign, "utf8")).toBe("foreign bytes");
+      expectReadOnly((await stat(foreign)).mode);
+    },
+  );
+
   it("cleans its exact owned read-only file through the Windows cleanup branch", async () => {
     const f = await fixture();
     let installedPath: string | undefined;
     editor.execute.mockImplementationOnce(async (_command, uri) => {
       installedPath = uri.fsPath;
-      expect((await stat(uri.fsPath)).mode & 0o777).toBe(0o400);
+      expectReadOnly((await stat(uri.fsPath)).mode);
     });
     expect(
       await track(
@@ -175,7 +343,7 @@ describe("automatic extension installation boundary", () => {
         installedPath = uri.fsPath;
         expect(dirname(dirname(uri.fsPath))).toBe(f.storagePath);
         expect(await readFile(uri.fsPath)).toEqual(bytes);
-        expect((await stat(uri.fsPath)).mode & 0o777).toBe(0o400);
+        expectReadOnly((await stat(uri.fsPath)).mode);
       },
     );
     const result = await track(
@@ -413,7 +581,16 @@ describe("automatic extension installation boundary", () => {
     expect(
       "error" in outcome || ("value" in outcome && outcome.value === false),
     ).toBe(true);
-    expect(await f.entries()).toEqual([]);
+    const recovery = (await f.entries()).find((entry) =>
+      entry.startsWith("verified-update-"),
+    );
+    expect(recovery).toBeDefined();
+    expect(
+      await readFile(
+        join(f.storagePath, recovery!, `rehearsal-db-${version}.vsix`),
+        "utf8",
+      ),
+    ).toBe("Modified local bytes");
   });
   it("coalesces duplicate parallel attempts into one download and one installer call", async () => {
     const f = await fixture();
@@ -462,7 +639,7 @@ describe("automatic extension installation boundary", () => {
           async () => true,
         ),
       ),
-    ).resolves.toBe(false);
+    ).rejects.toMatchObject({ reason: "update-in-progress" });
     expect(await readFile(path, "utf8")).toBe(lock);
     expect(f.download).toHaveBeenCalledOnce();
     download.release();
@@ -540,7 +717,7 @@ describe("automatic extension installation boundary", () => {
     expect(editor.execute).not.toHaveBeenCalled();
     expect(await f.entries()).toEqual([]);
   });
-  it("cleans temporary bytes and the lock when VS Code's installer command is unavailable", async () => {
+  it("preserves installation recovery when a dispatched VS Code command rejects", async () => {
     const f = await fixture();
     editor.execute.mockRejectedValueOnce(
       new Error("Installer command unavailable"),
@@ -553,8 +730,17 @@ describe("automatic extension installation boundary", () => {
           async () => true,
         ),
       ),
-    ).rejects.toThrow("Installer command unavailable");
-    expect(await f.entries()).toEqual([]);
+    ).rejects.toMatchObject({ reason: "installation-unconfirmed" });
+    const entries = await f.entries();
+    expect(entries).toContain("extension-update.lock");
+    expect(entries.some((entry) => entry.startsWith("verified-update-"))).toBe(
+      true,
+    );
+    expect(
+      JSON.parse(
+        await readFile(join(f.storagePath, "extension-update.lock"), "utf8"),
+      ).phase,
+    ).toBe("installer-dispatched");
     expect(editor.info).not.toHaveBeenCalled();
   });
 });

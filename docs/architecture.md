@@ -214,6 +214,19 @@ The core's independent Windows WSL workflow owns real Linux-filesystem PostgreSQ
   manual VSIX installation or separately opted-in verified automatic installation. Core
   npm-package automatic updates have an independent user choice.
 
+`updates/automatic/extension_update_reservation.ts` owns the bounded local update lock.
+Its versioned record binds canonical storage, local owner, nonce, file creation identity
+and a durable pre-install/installer-dispatched phase. Recovery requires a dead owner
+plus an unchanged actively loaded installation before dispatch, or an actively loaded
+target proving installation completed. A newer registered descriptor alone is insufficient.
+Legacy, foreign, malformed and replaced reservations remain preserved with typed native
+guidance. Installer rejection after dispatch retains recovery rather than inferring no
+installation occurred. Verified temporary VSIX cleanup checks the recorded creation/change
+identity on every platform; modified files, symlinks and replacements remain untouched.
+POSIX reservation reads require owner-only mode and the current UID. Windows binds the
+host/account/platform and storage context; its reported mode bits do not establish ACL
+ownership. Leaf/held-file identity checks remain active without assuming POSIX open flags.
+
 ## Runtime boundary
 
 ### Visible VM shutdown

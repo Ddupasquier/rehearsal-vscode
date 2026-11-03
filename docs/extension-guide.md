@@ -234,6 +234,12 @@ Compatible does not mean newest; breaking CLI upgrades, local/candidate builds a
 unverified provenance require manual review. Offline or failed verification preserves the
 existing installation and provides recovery guidance rather than claiming success.
 
+In the development candidate, blocked extension updates offer **Open Extensions** and
+**Update Settings**. Review or finish the installation, restart when convenient, then
+choose **Check for Updates**. Live, unverified or replaced reservations stay preserved;
+age or a missing process alone never authorizes removal. Unknown installer outcomes
+retain their recovery files. The separate Core update preference remains unchanged.
+
 The dashboard's top-right **Extension** badge always shows the loaded extension
 version, separately from **Core**. A confirmed update shows installed → newest;
 select the badge to check or review updates. Offline or unchecked availability is
