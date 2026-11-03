@@ -17,6 +17,7 @@ const scenarios = Object.freeze({
   "presentation-review": () => require("./native-workbench-review-test.cjs"),
   "configuration-guidance": () => require("./native-workbench-review-test.cjs"),
   "comparison-export": () => require("./native-comparison-export-test.cjs"),
+  "automatic-updates": () => require("./native-automatic-update-test.cjs"),
 });
 let started = false;
 
@@ -148,9 +149,10 @@ async function finalizeEditor(config, result) {
 }
 exports.finalizeEditor = finalizeEditor;
 
-exports.activate = () => {
+exports.activate = (context) => {
   if (started) return;
   started = true;
+  exports.context = context;
   // No --extensionTestsPath: VS Code deliberately suppresses real dialogs there.
   void (async () => {
     let config,

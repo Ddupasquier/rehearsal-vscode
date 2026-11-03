@@ -72,6 +72,60 @@ existing coverage. Required check names and publication approvals remain unchang
 Never rebuild after approval and present new bytes under an old checksum. Never put
 signing keys, payment secrets, customer details or license records in Git.
 
+## Native extension update recovery
+
+The existing opt-in updater verifier takes an exact private candidate, an older reviewed
+canonical public VSIX, the reviewed official target VSIX, and an existing Code runtime.
+Supply absolute canonical artifact paths inside approved development storage and all
+four SHA-256 values. On this machine, run it through the suite launcher:
+
+```sh
+../run editor node --import tsx scripts/native/verify-automatic-updates.ts \
+  --candidate=/absolute/candidate.vsix --candidate-sha=CANDIDATE_SHA256 \
+  --previous=/absolute/previous.vsix --previous-sha=PREVIOUS_SHA256 \
+  --target=/absolute/official-target.vsix --target-sha=TARGET_SHA256 \
+  --code=/absolute/Code/bin/code --electron=/absolute/Code/code \
+  --electron-sha=ELECTRON_SHA256 --code-version=EXACT_CODE_VERSION
+```
+
+Use the actual paired application paths on macOS: `Contents/Resources/app/bin/code`
+and the bundle's `CFBundleExecutable` under `Contents/MacOS/` (for example, `Code`).
+This command installs only into generated private Code directories; it does not
+download/install Code, target the normal editor profile,
+install a CLI package or start a database. The historical installer lane downloads its
+target through the unchanged official verified downloader. macOS retains its normal
+memory-pressure guard. Linux requires an existing working display and sandbox setup;
+native Windows remains outside this verifier's scope.
+
+A preflight pressure refusal allocates no test fixture or report and launches no native
+Code host; retry explicitly after pressure returns to normal. A later pressure refusal
+retains already allocated fixture/recovery state.
+
+The three sequential native hosts keep their evidence separate:
+
+- The exact candidate activates from its installed payload. Real child-process
+  reservations exercise recovery/refusal; real native warning buttons open Extensions
+  and Settings and return to Rehearsal. Synthetic future metadata is used only for the
+  blocked warning, before artifact download.
+- Candidate installer modules run against the actual older installed version/path and
+  install the official newer target. The installed extension's own automatic options
+  stay off to prevent a competing updater. Explicit fixture permission exercises the
+  installer component, not the complete saved-opt-in/startup flow.
+- Restarting only that disposable profile loads the exact official target and proves
+  recovery of a deliberately abandoned dispatched reservation. This crash-state fixture
+  does not claim that VS Code actually crashed during the preceding install.
+
+Reports and silent screenshots go under `test-results/automatic-updates-231.*`.
+Every installed payload file must match its selected frozen VSIX, allowing only Code's
+manifest installation metadata. Clean owned processes may be retired after validated
+finalization; fixtures are removed only after the complete verifier succeeds. Dirty,
+missing or unconfirmed finalization retains the host and profile, and failed fixture
+state remains available for recovery.
+A private candidate sharing a public version has a distinct checksum and is never a
+replacement public artifact. This verifier does not establish a complete candidate
+activation upgrade, native accessibility, CLI automatic updates or database behavior.
+Qualification and publication still follow the existing exact-artifact release steps.
+
 ## Maintained packaging dependency
 
 VSCE 4.0.0 currently resolves Azure Identity's affected MSAL Node 6.x range.
