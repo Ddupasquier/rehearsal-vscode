@@ -113,13 +113,15 @@ export function parseAutomaticUpdateAcceptanceArguments(
     const match = /^--([a-z-]+)=(.+)$/u.exec(value);
     assert.ok(
       match &&
-        (names as readonly string[]).includes(match[1]!) &&
+        ((names as readonly string[]).includes(match[1]!) ||
+          match[1] === "lanes") &&
         !args.has(match[1]!),
       "Supply each exact updater acceptance input once.",
     );
     args.set(match[1]!, match[2]!);
   }
-  assert.equal(args.size, names.length);
+  assert.equal(args.size, names.length + (args.has("lanes") ? 1 : 0));
+  automaticUpdateLaneModes(args.get("lanes"));
   for (const name of ["candidate", "previous", "target", "code", "electron"])
     assert.ok(isAbsolute(args.get(name)!));
   for (const name of [
@@ -131,6 +133,30 @@ export function parseAutomaticUpdateAcceptanceArguments(
     assert.match(args.get(name)!, /^[a-f0-9]{64}$/u);
   assert.match(args.get("code-version")!, /^\d+\.\d+\.\d+$/u);
   return args;
+}
+export function automaticUpdateLaneModes(value: unknown = "all") {
+  assert.ok(
+    value === "all" || value === "candidate" || value === "historical",
+    "Unknown native updater lane selection.",
+  );
+  return value === "candidate"
+    ? (["candidate"] as const)
+    : value === "historical"
+      ? (["historical-install", "historical-recovery"] as const)
+      : (["candidate", "historical-install", "historical-recovery"] as const);
+}
+export async function runAutomaticUpdateLanes(
+  value: unknown,
+  lane: (
+    mode: "candidate" | "historical-install" | "historical-recovery",
+  ) => Promise<unknown>,
+) {
+  const completed: string[] = [];
+  for (const mode of automaticUpdateLaneModes(value)) {
+    await lane(mode);
+    completed.push(mode);
+  }
+  return completed;
 }
 export function assertAutomaticUpdateVersions(
   candidate: string,
@@ -578,6 +604,8 @@ export async function runAutomaticUpdateAcceptance(
     targetSha256: get("target-sha"),
     codeVersion,
     electronSha256: get("electron-sha"),
+    lanePlan: args.get("lanes") ?? "all",
+    selectedModes: automaticUpdateLaneModes(args.get("lanes")),
     lanes: [],
     limitations: [
       "No complete candidate-activation upgrade is claimed.",
@@ -921,9 +949,15 @@ export async function runAutomaticUpdateAcceptance(
         }
       }
     };
-    await lane("candidate");
-    await lane("historical-install");
-    await lane("historical-recovery");
+    const completedModes = await runAutomaticUpdateLanes(
+      args.get("lanes"),
+      lane,
+    );
+    assert.deepEqual(
+      completedModes,
+      automaticUpdateLaneModes(args.get("lanes")),
+    );
+    report.completedModes = completedModes;
     for (const owned of namespaces.values()) {
       const current = await lstat(owned.directory, { bigint: true });
       assert.ok(
@@ -937,10 +971,12 @@ export async function runAutomaticUpdateAcceptance(
     }
     report.status = "passed";
     report.lanes = lanes;
+    report.completedLaneCount = lanes.length;
     complete = true;
   } catch (error) {
     report.status = "failed";
     report.lanes = lanes;
+    report.completedLaneCount = lanes.length;
     report.failureCode =
       (error as NodeJS.ErrnoException).code === "ERR_ASSERTION"
         ? "ASSERTION_FAILED"

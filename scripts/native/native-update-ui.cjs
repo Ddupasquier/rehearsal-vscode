@@ -35,6 +35,15 @@ exports.nativeDestinationProbe = (destination) => {
 exports.settingsModalProbe = (focus = false) => {
   return `(()=>{const visible=node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};const modals=[...document.querySelectorAll('.monaco-modal-editor-block')].filter(visible);if(!modals.length)return {kind:'tab',focused:false};if(modals.length!==1)return {kind:'invalid',focused:false};const settings=[...modals[0].querySelectorAll('.settings-editor')].filter(visible);const close=[...modals[0].querySelectorAll('.modal-editor-header .modal-editor-action-container .action-label.codicon-close')].filter(node=>visible(node)&&['Close Modal Editor','Close Modal Editor (Escape)'].includes(node.getAttribute('aria-label'))&&node.getAttribute('aria-disabled')!=='true');if(settings.length!==1||close.length!==1)return {kind:'invalid',focused:false};${focus ? "close[0].focus();" : ""}return {kind:'modal',focused:document.hasFocus()&&document.activeElement===close[0]};})()`;
 };
+exports.updatePhaseDeadline = (phase, now = Date.now()) => {
+  assert.ok(Object.hasOwn(phases, phase.phase));
+  assert.ok(
+    Number.isSafeInteger(phase.deadline) &&
+      phase.deadline > now &&
+      phase.deadline <= now + 30000,
+  );
+  return phase.deadline - 2000;
+};
 exports.parseOwnedDevtoolsPort = (value) => {
   assert.ok(typeof value === "string" && value.length < 256);
   const [port, endpoint, ...extra] = value.trim().split("\n");
@@ -50,8 +59,8 @@ exports.driveUpdateUi = async ({
   signal,
   interactive,
 }) => {
-  const wait = async (check, milliseconds = 30000) => {
-    const end = Date.now() + milliseconds;
+  const wait = async (check, milliseconds = 30000, absoluteEnd) => {
+    const end = absoluteEnd ?? Date.now() + milliseconds;
     do {
       signal.throwIfAborted();
       const value = await check(end);
@@ -121,6 +130,28 @@ exports.driveUpdateUi = async ({
         }),
       );
     });
+  let currentPhase = "starting",
+    currentStage = "workbench-readiness",
+    consentActionCount = 0;
+  let destinationShape = null,
+    workEnd;
+  const progress = async (status = "running", code = null) => {
+    const record = {
+      schemaVersion: 1,
+      status,
+      phase: currentPhase,
+      stage: currentStage,
+      consentActionCount,
+      signalAborted: signal.aborted,
+      code,
+      ...(destinationShape ? { destination: destinationShape } : {}),
+    };
+    const file = path.join(evidence, "ui-progress.json");
+    await fs.writeFile(file + ".new", JSON.stringify(record) + "\n", {
+      mode: 0o600,
+    });
+    await fs.rename(file + ".new", file);
+  };
   try {
     await wait(() => socket.readyState === WebSocket.OPEN);
     let shape = {
@@ -228,14 +259,20 @@ exports.driveUpdateUi = async ({
     await send("Page.bringToFront", {}, sessionId);
     const observations = [],
       handled = new Set();
-    while (true) {
-      const phase = await wait(async () => {
-        const consent = await evaluate(
+    const dismissConsent = async (end) => {
+      if (
+        await evaluate(
           `(()=>{const dialogs=[...document.querySelectorAll('[role=dialog],[role=alertdialog]')].filter(node=>node.textContent.includes('Allow optional Rehearsal update checks?'));const buttons=dialogs.flatMap(node=>[...node.querySelectorAll('button,[role=button]')]).filter(node=>(node.getAttribute('aria-label')||node.textContent).trim()==="Don't Ask Again"&&node.getBoundingClientRect().width>0);if(buttons.length!==1)return false;buttons[0].focus();return document.activeElement===buttons[0];})()`,
-        );
-        if (consent) {
-          await enter();
-        }
+          end,
+        )
+      ) {
+        await enter(end);
+        consentActionCount++;
+        await progress();
+      }
+    };
+    while (true) {
+      const phase = await wait(async (end) => {
         let value;
         try {
           value = JSON.parse(
@@ -245,7 +282,10 @@ exports.driveUpdateUi = async ({
           if (error.code === "ENOENT") return null;
           throw error;
         }
-        return value.phase !== "starting" && !handled.has(value.nonce) && value;
+        if (value.phase !== "starting" && !handled.has(value.nonce))
+          return value;
+        await dismissConsent(end);
+        return null;
       }, 180000);
       assert.match(phase.nonce, /^[a-f0-9-]{36}$/u);
       if (phase.phase === "done") {
@@ -260,23 +300,41 @@ exports.driveUpdateUi = async ({
               ]
             : [],
         );
+        currentPhase = "done";
+        currentStage = "complete";
+        await progress("passed");
         return observations;
       }
       assert.equal(interactive, true);
       assert.ok(Object.hasOwn(phases, phase.phase));
+      currentPhase = phase.phase;
+      currentStage = "phase-validation";
+      destinationShape = null;
+      await progress();
+      workEnd = exports.updatePhaseDeadline(phase);
       const button = phases[phase.phase];
-      let destinationEnd;
+      let destinationEnd = workEnd;
       if (button) {
         let dispatched = false;
         try {
-          await send("Page.bringToFront", {}, sessionId);
-          await wait((end) =>
-            evaluate(exports.notificationButtonProbe(button), end),
+          currentStage = "notification-button";
+          await progress();
+          await send("Page.bringToFront", {}, sessionId, workEnd);
+          await wait(
+            async (end) => {
+              await dismissConsent(end);
+              return evaluate(exports.notificationButtonProbe(button), end);
+            },
+            30000,
+            workEnd,
           );
+          currentStage = "warning-screenshot";
+          await progress();
           const warning = await send(
             "Page.captureScreenshot",
             { format: "png" },
             sessionId,
+            workEnd,
           );
           const warningBytes = Buffer.from(warning.data, "base64");
           assert.ok(
@@ -289,21 +347,31 @@ exports.driveUpdateUi = async ({
           );
           // A notification arriving during the screenshot must not receive our Enter.
           assert.equal(
-            await evaluate(exports.notificationButtonProbe(button)),
+            await evaluate(exports.notificationButtonProbe(button), workEnd),
             true,
           );
-          await enter();
+          currentStage = "notification-action";
+          await progress();
+          await enter(workEnd);
           dispatched = true;
           const destination =
             button === "Open Extensions" ? "extensions" : "settings";
-          destinationEnd = Date.now() + 30000;
+          currentStage = "destination";
+          await progress();
           await wait(
-            async (end) =>
-              (await evaluate(exports.nativeDestinationProbe(destination), end))
-                .matched === true,
+            async (end) => {
+              await dismissConsent(end);
+              destinationShape = await evaluate(
+                exports.nativeDestinationProbe(destination),
+                end,
+              );
+              return destinationShape.matched === true;
+            },
+            30000,
+            workEnd,
           );
         } catch (error) {
-          const end = Date.now() + 2000,
+          const end = phase.deadline,
             failures = [error];
           try {
             const expected =
@@ -391,10 +459,13 @@ exports.driveUpdateUi = async ({
           throw error;
         }
       }
+      currentStage = "phase-screenshot";
+      await progress();
       const capture = await send(
         "Page.captureScreenshot",
         { format: "png" },
         sessionId,
+        workEnd,
       );
       const bytes = Buffer.from(capture.data, "base64");
       assert.ok(bytes.length > 0 && bytes.length < 16 * 1024 * 1024);
@@ -402,6 +473,8 @@ exports.driveUpdateUi = async ({
         mode: 0o600,
       });
       if (phase.phase === "blocked-settings") {
+        currentStage = "settings-close";
+        await progress();
         const modal = await evaluate(
           exports.settingsModalProbe(),
           destinationEnd,
@@ -430,6 +503,9 @@ exports.driveUpdateUi = async ({
         keyboardAction: button,
         screenshotSha256: createHash("sha256").update(bytes).digest("hex"),
       });
+      currentStage = "acknowledgement";
+      await progress();
+      assert.ok(Date.now() < workEnd);
       await fs.writeFile(
         path.join(root, "ack.json.new"),
         JSON.stringify({ phase: phase.phase, nonce: phase.nonce }),
@@ -441,6 +517,24 @@ exports.driveUpdateUi = async ({
       );
       handled.add(phase.nonce);
     }
+  } catch (error) {
+    const code =
+      error?.code === "ERR_ASSERTION"
+        ? "assertion"
+        : workEnd !== undefined && Date.now() >= workEnd
+          ? "phase-deadline"
+          : signal.aborted
+            ? "aborted"
+            : "unclassified";
+    try {
+      await progress("failed", code);
+    } catch (journal) {
+      throw new AggregateError(
+        [error, journal],
+        "Owned update UI failed; its closed progress journal could not be retained.",
+      );
+    }
+    throw error;
   } finally {
     signal.removeEventListener("abort", cancel);
     cancel();

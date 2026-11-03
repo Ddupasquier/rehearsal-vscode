@@ -26,6 +26,8 @@ import {
   automaticUpdateFailureMessage,
   AutomaticUpdatePreflightMemoryPressureError,
   parseAutomaticUpdateAcceptanceArguments,
+  automaticUpdateLaneModes,
+  runAutomaticUpdateLanes,
 } from "../../scripts/native/verify-automatic-updates.js";
 import {
   acquireExtensionUpdateReservation,
@@ -38,6 +40,7 @@ const ui = nativeRequire("../../scripts/native/native-update-ui.cjs") as {
   notificationButtonProbe(label: string): string;
   nativeDestinationProbe(destination: "extensions" | "settings"): string;
   parseOwnedDevtoolsPort(value: unknown): string;
+  updatePhaseDeadline(phase: unknown, now?: number): number;
 };
 const fixtureEnvironment = nativeRequire(
   "../../scripts/native/native-update-reservation-worker.cjs",
@@ -123,6 +126,8 @@ async function fakeWorkbenchUi(
   interaction?: {
     wrongDestination?: boolean;
     ignoreFront?: boolean;
+    phaseBudget?: number;
+    consentDuringAction?: boolean;
     settingsModal?: "valid" | "missing" | "ambiguous" | "foreign" | "failed";
   },
 ) {
@@ -133,6 +138,8 @@ async function fakeWorkbenchUi(
   const requests: { method: string; params: Record<string, unknown> }[] = [];
   const diagnostics: Record<string, unknown>[] = [];
   const screenshots: string[] = [];
+  const progressRecords: Record<string, unknown>[] = [];
+  const phaseDeadlines = new Map<number, number>();
   const phases = [
     "blocked-extensions",
     "returned-extensions",
@@ -147,7 +154,18 @@ async function fakeWorkbenchUi(
     pairs = 0,
     destination = "";
   let modalOpen = false,
-    modalCloses = 0;
+    modalCloses = 0,
+    consentOpen = false,
+    consentOffered = false,
+    consentCloses = 0;
+  const consentButton = {
+    textContent: "Don't Ask Again",
+    getAttribute: () => null,
+    getBoundingClientRect: () => ({ width: 100, height: 20 }),
+    focus: () => {
+      document.activeElement = consentButton;
+    },
+  };
   const modalClose = {
     getBoundingClientRect: () => ({ width: 20, height: 20 }),
     getAttribute: (name: string) =>
@@ -192,37 +210,44 @@ async function fakeWorkbenchUi(
     activeElement: undefined,
     hasFocus: () => foreground,
     querySelectorAll: (selector) =>
-      selector === ".monaco-modal-editor-block"
-        ? modalOpen
-          ? [modal]
-          : []
-        : selector === ".notification-list-item" &&
-            warning &&
-            [0, 2].includes(phaseIndex)
-          ? [
-              {
-                textContent: "unverified reservation was preserved",
-                getBoundingClientRect: () => ({ width: 100, height: 100 }),
-                querySelectorAll: () => [button],
-              },
-            ]
-          : ((selector === ".extensions-viewlet" && phaseIndex === 0) ||
-                (selector === ".settings-editor" && phaseIndex === 2)) &&
-              destination
+      selector === "[role=dialog],[role=alertdialog]" && consentOpen
+        ? [
+            {
+              textContent: "Allow optional Rehearsal update checks?",
+              querySelectorAll: () => [consentButton],
+            },
+          ]
+        : selector === ".monaco-modal-editor-block"
+          ? modalOpen
+            ? [modal]
+            : []
+          : selector === ".notification-list-item" &&
+              warning &&
+              [0, 2].includes(phaseIndex)
             ? [
-                renderedSearchPanel(
-                  phaseIndex === 0 ? "extensions" : "settings",
-                  destination,
-                ),
+                {
+                  textContent: "unverified reservation was preserved",
+                  getBoundingClientRect: () => ({ width: 100, height: 100 }),
+                  querySelectorAll: () => [button],
+                },
               ]
-            : selector === "input,textarea" && destination
+            : ((selector === ".extensions-viewlet" && phaseIndex === 0) ||
+                  (selector === ".settings-editor" && phaseIndex === 2)) &&
+                destination
               ? [
-                  {
-                    value: "",
-                    getBoundingClientRect: () => ({ width: 100, height: 20 }),
-                  },
+                  renderedSearchPanel(
+                    phaseIndex === 0 ? "extensions" : "settings",
+                    destination,
+                  ),
                 ]
-              : [],
+              : selector === "input,textarea" && destination
+                ? [
+                    {
+                      value: "",
+                      getBoundingClientRect: () => ({ width: 100, height: 20 }),
+                    },
+                  ]
+                : [],
   };
   let timerId = 0;
   const timers = new Map<number, { end: number; run: () => void }>();
@@ -279,7 +304,15 @@ async function fakeWorkbenchUi(
         }
         if (request.method === "Input.dispatchKeyEvent") {
           const key = request.params;
-          if (document.activeElement === modalClose) {
+          if (document.activeElement === consentButton) {
+            if (key.type === "keyDown")
+              entered = foreground && key.key === "Enter";
+            else if (key.type === "keyUp" && entered) {
+              consentCloses++;
+              consentOpen = false;
+              entered = false;
+            }
+          } else if (document.activeElement === modalClose) {
             if (key.type === "keyDown")
               entered = key.key === "Enter" && foreground;
             else if (key.type === "keyUp" && entered) {
@@ -363,16 +396,35 @@ async function fakeWorkbenchUi(
             readFile: async (path: string) =>
               path.endsWith("DevToolsActivePort")
                 ? "12345\n/devtools/browser/owned-123\n"
-                : JSON.stringify({
-                    phase: interaction ? phases[phaseIndex] : "done",
-                    nonce: `11111111-1111-1111-1111-${String(phaseIndex).padStart(12, "0")}`,
-                  }),
+                : (() => {
+                    if (!phaseDeadlines.has(phaseIndex))
+                      phaseDeadlines.set(
+                        phaseIndex,
+                        now + (interaction?.phaseBudget ?? 30000),
+                      );
+                    return JSON.stringify({
+                      phase: interaction ? phases[phaseIndex] : "done",
+                      nonce: `11111111-1111-1111-1111-${String(phaseIndex).padStart(12, "0")}`,
+                      deadline: phaseDeadlines.get(phaseIndex),
+                    });
+                  })(),
             writeFile: async (
               path: string,
               bytes: string | Uint8Array,
               options: unknown,
             ) => {
-              if (path.endsWith(".png")) {
+              if (path === "/owned/evidence/ui-progress.json.new") {
+                const record = JSON.parse(String(bytes));
+                progressRecords.push(record);
+                if (
+                  interaction?.consentDuringAction &&
+                  !consentOffered &&
+                  record.stage === "notification-button"
+                ) {
+                  consentOpen = true;
+                  consentOffered = true;
+                }
+              } else if (path.endsWith(".png")) {
                 expect(path.startsWith("/owned/evidence/")).toBe(true);
                 screenshots.push(path);
               } else if (path === "/owned/root/ack.json.new") {
@@ -389,6 +441,10 @@ async function fakeWorkbenchUi(
               }
             },
             rename: async (from: string, to: string) => {
+              if (from === "/owned/evidence/ui-progress.json.new") {
+                expect(to).toBe("/owned/evidence/ui-progress.json");
+                return;
+              }
               expect([from, to]).toEqual([
                 "/owned/root/ack.json.new",
                 "/owned/root/ack.json",
@@ -421,8 +477,10 @@ async function fakeWorkbenchUi(
     requests,
     diagnostics,
     screenshots,
+    progressRecords,
     pairs: () => pairs,
     modalCloses: () => modalCloses,
+    consentCloses: () => consentCloses,
     elapsed: () => now,
     closed: () => closed,
     pending: () => timers.size,
@@ -637,6 +695,25 @@ describe("trusted native updater keyboard actions", () => {
     ).toHaveLength(4);
     expect(fixture.diagnostics).toEqual([]);
     expect(fixture.pending()).toBe(0);
+    expect(fixture.progressRecords.at(-1)).toMatchObject({
+      status: "passed",
+      phase: "done",
+      stage: "complete",
+    });
+  });
+  it("handles the existing real consent action during an action wait under the same deadline", async () => {
+    const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
+      consentDuringAction: true,
+    });
+    await expect(fixture.run()).resolves.toHaveLength(4);
+    expect(fixture.consentCloses()).toBe(1);
+    expect(fixture.pairs()).toBe(2);
+    expect(fixture.progressRecords.at(-1)).toMatchObject({
+      status: "passed",
+      phase: "done",
+      stage: "complete",
+      consentActionCount: 1,
+    });
   });
   it("closes only the observed Settings modal through a focused native Enter before acknowledging return", async () => {
     const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
@@ -662,7 +739,7 @@ describe("trusted native updater keyboard actions", () => {
         ),
       ).toBe(false);
       expect(fixture.pending()).toBe(0);
-      if (kind === "failed") expect(fixture.elapsed()).toBe(30000);
+      if (kind === "failed") expect(fixture.elapsed()).toBe(28000);
     },
   );
   it("keeps exact destination proof strict and retains failure screenshot plus fixed state without input text", async () => {
@@ -673,7 +750,7 @@ describe("trusted native updater keyboard actions", () => {
       "Owned update UI observation incomplete",
     );
     expect(fixture.pairs()).toBe(1);
-    expect(fixture.elapsed()).toBe(30000);
+    expect(fixture.elapsed()).toBe(28000);
     expect(fixture.diagnostics).toEqual([
       {
         status: "failed",
@@ -706,7 +783,7 @@ describe("trusted native updater keyboard actions", () => {
     await expect(fixture.run()).rejects.toThrow(
       "Owned update UI observation incomplete",
     );
-    expect(fixture.elapsed()).toBe(30000);
+    expect(fixture.elapsed()).toBe(28000);
     expect(
       fixture.requests.some((row) => row.method === "Input.dispatchKeyEvent"),
     ).toBe(false);
@@ -1359,4 +1436,193 @@ describe("production-written native crash-state fixtures", () => {
     },
     25000,
   );
+});
+
+describe("native updater shared phase protocol and selected lanes", () => {
+  it("validates one original deadline and reserves two seconds for closed diagnostics", () => {
+    expect(
+      ui.updatePhaseDeadline(
+        { phase: "blocked-settings", deadline: 30100 },
+        100,
+      ),
+    ).toBe(28100);
+    for (const phase of [
+      { phase: "foreign", deadline: 30100 },
+      { phase: "blocked-settings", deadline: 100 },
+      { phase: "blocked-settings", deadline: 30101 },
+    ])
+      expect(() => ui.updatePhaseDeadline(phase, 100)).toThrow();
+  });
+  it("retains a closed current-stage journal before the original acknowledgement deadline", async () => {
+    const page = {
+      targetId: "owned-page",
+      type: "page",
+      url: "vscode-file://vscode-app/owned/Code/resources/app/out/vs/code/electron-browser/workbench/workbench.html",
+    };
+    const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
+      wrongDestination: true,
+    });
+    await expect(fixture.run()).rejects.toThrow();
+    expect(fixture.elapsed()).toBe(28000);
+    expect(fixture.progressRecords.at(-1)).toMatchObject({
+      status: "failed",
+      phase: "blocked-extensions",
+      stage: "destination",
+      code: "phase-deadline",
+      consentActionCount: 0,
+    });
+    expect(JSON.stringify(fixture.progressRecords)).not.toContain(
+      "PRIVATE_INPUT_VALUE",
+    );
+  });
+  it("preserves all3 lanes by default and runs only actual candidate or ordered historical lanes when selected", async () => {
+    for (const [plan, modes] of [
+      [undefined, ["candidate", "historical-install", "historical-recovery"]],
+      ["candidate", ["candidate"]],
+      ["historical", ["historical-install", "historical-recovery"]],
+    ] as const) {
+      const calls: string[] = [];
+      expect(
+        await runAutomaticUpdateLanes(plan, async (mode) => {
+          calls.push(mode);
+        }),
+      ).toEqual(modes);
+      expect(calls).toEqual(modes);
+    }
+    expect(() => automaticUpdateLaneModes("PRIVATE")).toThrow();
+    expect(
+      parseAutomaticUpdateAcceptanceArguments([
+        ...exactArguments(),
+        "--lanes=historical",
+      ]).get("lanes"),
+    ).toBe("historical");
+    expect(() =>
+      parseAutomaticUpdateAcceptanceArguments([
+        ...exactArguments(),
+        "--lanes=unknown",
+      ]),
+    ).toThrow();
+  });
+  it("does not run or synthesize a later historical restart after installation failure", async () => {
+    const calls: string[] = [];
+    const original = Error("PRIVATE");
+    await expect(
+      runAutomaticUpdateLanes("historical", async (mode) => {
+        calls.push(mode);
+        throw original;
+      }),
+    ).rejects.toBe(original);
+    expect(calls).toEqual(["historical-install"]);
+  });
+  it("the actual publisher writes one deadline and never renews it or accepts a late acknowledgement", async () => {
+    type PublishedPhase = { phase: string; nonce: string; deadline: number };
+    const api: {
+      publishUpdatePhase?: (input: {
+        phase: string;
+        root: string;
+        now: () => number;
+        write: (path: string, value: PublishedPhase) => Promise<void>;
+        read: () => Promise<{ bytes: Buffer }>;
+        pause: (milliseconds: number) => Promise<void>;
+      }) => Promise<void>;
+    } = {};
+    const source = await readFile(
+      resolve(
+        __dirname,
+        "../../scripts/native/native-automatic-update-test.cjs",
+      ),
+      "utf8",
+    );
+    runInNewContext(source, {
+      exports: api,
+      require: (name: string) =>
+        name === "vscode"
+          ? {}
+          : name === "./native-editor-driver.cjs"
+            ? {}
+            : name === "./native-editor-reads.cjs"
+              ? {}
+              : nativeRequire(name),
+      Buffer,
+    });
+    let now = 100,
+      record: PublishedPhase = { phase: "", nonce: "", deadline: 0 },
+      writes = 0;
+    await expect(
+      api.publishUpdatePhase!({
+        phase: "blocked-extensions",
+        root: "/owned",
+        now: () => now,
+        write: async (_path: string, value: PublishedPhase) => {
+          record = value;
+          writes++;
+        },
+        read: async () => {
+          now = record.deadline;
+          return {
+            bytes: Buffer.from(
+              JSON.stringify({ phase: record.phase, nonce: record.nonce }),
+            ),
+          };
+        },
+        pause: async (ms: number) => {
+          now += ms;
+        },
+      }),
+    ).rejects.toMatchObject({ code: "NATIVE_UPDATE_PHASE_TIMEOUT" });
+    expect(writes).toBe(1);
+    expect(record.deadline).toBe(30100);
+    expect(now).toBe(30100);
+    now = 100;
+    await api.publishUpdatePhase!({
+      phase: "returned-settings",
+      root: "/owned",
+      now: () => now,
+      write: async (_path: string, value: PublishedPhase) => {
+        record = value;
+      },
+      read: async () => ({
+        bytes: Buffer.from(
+          JSON.stringify({ phase: record.phase, nonce: record.nonce }),
+        ),
+      }),
+      pause: async () => {
+        throw Error("No delay required");
+      },
+    });
+  });
+});
+
+it("native driver retains only the reviewed scenario basename and coordinates", async () => {
+  const api: { diagnostic?: (error: unknown) => unknown } = {};
+  runInNewContext(
+    await readFile(
+      resolve(__dirname, "../../scripts/native/native-editor-driver.cjs"),
+      "utf8",
+    ),
+    {
+      exports: api,
+      require: (name: string) =>
+        name === "vscode"
+          ? {}
+          : name === "./native-editor-recovery.cjs"
+            ? nativeRequire("../../scripts/native/native-editor-recovery.cjs")
+            : nativeRequire(name),
+      Buffer,
+    },
+  );
+  expect(
+    api.diagnostic!({
+      stack:
+        "Error PRIVATE /private/owner/native-automatic-update-test.cjs:123:4\n /other.cjs:2:3",
+    }),
+  ).toEqual({
+    code: "UNCLASSIFIED_ERROR",
+    location: "native-automatic-update-test.cjs:123:4",
+  });
+  expect(
+    JSON.stringify(
+      api.diagnostic!({ stack: "PRIVATE /private/foreign.cjs:123:4" }),
+    ),
+  ).not.toContain("PRIVATE");
 });

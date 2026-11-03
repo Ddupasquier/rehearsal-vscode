@@ -28,6 +28,43 @@ async function missing(file) {
     throw error;
   }
 }
+const updatePhases = new Set([
+  "blocked-extensions",
+  "returned-extensions",
+  "blocked-settings",
+  "returned-settings",
+  "done",
+]);
+exports.publishUpdatePhase = async ({
+  phase,
+  root,
+  write = writeJson,
+  read = readRegular,
+  now = Date.now,
+  pause = delay,
+}) => {
+  assert.ok(updatePhases.has(phase));
+  const nonce = randomUUID(),
+    deadline = now() + 30000;
+  await write(path.join(root, "phase.json"), { phase, nonce, deadline });
+  if (phase === "done") return;
+  while (now() < deadline) {
+    try {
+      const ack = JSON.parse(
+        (await read(path.join(root, "ack.json"), 1024)).bytes.toString("utf8"),
+      );
+      if (now() < deadline && ack.phase === phase && ack.nonce === nonce)
+        return;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    const remaining = deadline - now();
+    if (remaining > 0) await pause(Math.min(100, remaining));
+  }
+  const error = Error("Owned native update phase acknowledgement incomplete.");
+  error.code = "NATIVE_UPDATE_PHASE_TIMEOUT";
+  throw error;
+};
 exports.run = async () => {
   const config = await readConfiguration();
   assert.equal(config.scenario, "automatic-updates");
@@ -70,6 +107,7 @@ exports.run = async () => {
   };
   const result = {
     status: "running",
+    failurePhase: `${config.mode}-setup`,
     mode: config.mode,
     checks: [],
     candidateSha256: config.candidateSha256,
@@ -167,24 +205,25 @@ exports.run = async () => {
     assert.equal(api.updateProcessState(receipt.pid), "stopped");
     return receipt;
   };
-  const publish = async (phase) => {
-    const nonce = randomUUID();
-    await writeJson(path.join(config.root, "phase.json"), { phase, nonce });
-    if (phase === "done") return;
-    await wait(async () => {
-      try {
-        const ack = JSON.parse(
-          (
-            await readRegular(path.join(config.root, "ack.json"), 1024)
-          ).bytes.toString("utf8"),
-        );
-        return ack.phase === phase && ack.nonce === nonce;
-      } catch (error) {
-        if (error.code === "ENOENT") return false;
-        throw error;
-      }
-    });
+  const publish = (phase) =>
+    exports.publishUpdatePhase({ phase, root: config.root });
+  const failureStages = new Set([
+    "historical-install",
+    "historical-recovery",
+    ...["extensions", "settings"].flatMap((destination) => [
+      `advisory-check-${destination}`,
+      `phase-ack-blocked-${destination}`,
+      `advisory-resume-${destination}`,
+      `workspace-return-${destination}`,
+      `phase-ack-returned-${destination}`,
+    ]),
+  ]);
+  const stage = async (phase) => {
+    assert.ok(failureStages.has(phase));
+    result.failurePhase = phase;
+    await save();
   };
+
   try {
     await save();
     assert.deepEqual(readAutomaticUpdateSettings(), {
@@ -296,7 +335,9 @@ exports.run = async () => {
                 ]
               : null,
         });
+        await stage(`advisory-check-${destination}`);
         await advisory.check(folder.uri.toString());
+        await stage(`phase-ack-blocked-${destination}`);
         await publish(`blocked-${destination}`);
         assert.equal(
           sha((await readRegular(lockPath, 16384)).bytes),
@@ -306,9 +347,11 @@ exports.run = async () => {
           extension: true,
           cli: false,
         });
+        await stage(`advisory-resume-${destination}`);
         await advisory.resumeAutomatic(folder.uri.toString());
         advisory.dispose();
         advisory = undefined;
+        await stage(`workspace-return-${destination}`);
         await vscode.commands.executeCommand(
           "rehearsal.openWorkspace",
           folder.uri.toString(),
@@ -320,6 +363,7 @@ exports.run = async () => {
             /Rehearsal/u.test(tab.label)
           );
         });
+        await stage(`phase-ack-returned-${destination}`);
         await publish(`returned-${destination}`);
       }
       result.checks.push(
@@ -333,6 +377,7 @@ exports.run = async () => {
         loadedExtensionPath: extension.extensionPath,
         preview: true,
       });
+      await stage("historical-install");
       installationStarted = true;
       assert.equal(
         await installer.install(
@@ -364,6 +409,7 @@ exports.run = async () => {
         "deliberate exited dispatched fixture retained while old version remains loaded; actual installer completion does not claim target activation",
       );
     } else {
+      await stage("historical-recovery");
       assert.equal(config.loadedVersion, config.targetVersion);
       await release(await acquire(config.targetVersion));
       result.checks.push(
@@ -374,8 +420,17 @@ exports.run = async () => {
     assert.deepEqual(await fs.readdir(config.workspace), []);
     await publish("done");
     result.status = "passed";
+    delete result.failurePhase;
   } catch (error) {
     result.status = "failed";
+    try {
+      const settings = readAutomaticUpdateSettings();
+      result.expectedOptinsMatch =
+        settings.extension === (config.mode === "candidate") &&
+        settings.cli === false;
+    } catch {
+      result.expectedOptinsMatch = null;
+    }
     if (installationStarted && !installationAccepted)
       result.recoveryRequired = true;
     result.failureCode =
