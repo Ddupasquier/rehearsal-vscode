@@ -223,6 +223,9 @@ Legacy, foreign, malformed and replaced reservations remain preserved with typed
 guidance. Installer rejection after dispatch retains recovery rather than inferring no
 installation occurred. Verified temporary VSIX cleanup checks the recorded creation/change
 identity on every platform; modified files, symlinks and replacements remain untouched.
+Cleanup also checks the held file content against its recorded SHA-256 on every
+platform, including lock records; timestamp equality alone cannot authorize removal
+after a rapid same-size rewrite. Missing content proof preserves the file.
 POSIX reservation reads require owner-only mode and the current UID. Windows binds the
 host/account/platform and storage context; its reported mode bits do not establish ACL
 ownership. Leaf/held-file identity checks remain active without assuming POSIX open flags.
