@@ -1,0 +1,542 @@
+/** Owned workbench CDP only: real focus/Enter actions, never product handlers. */
+const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
+const fs = require("node:fs/promises");
+const path = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
+
+const phases = Object.freeze({
+  "blocked-extensions": "Open Extensions",
+  "blocked-settings": "Update Settings",
+  "returned-extensions": null,
+  "returned-settings": null,
+});
+exports.notificationButtonProbe = (label) => {
+  assert.ok(["Open Extensions", "Update Settings"].includes(label));
+  return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect();return rect.width>0&&rect.height>0;};const items=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));const buttons=items.flatMap(item=>[...item.querySelectorAll('button,[role=button],.monaco-button')]).filter(node=>visible(node)&&!node.disabled&&(node.getAttribute('aria-label')||node.textContent).trim()===${JSON.stringify(label)});if(buttons.length!==1)return false;buttons[0].focus();return document.hasFocus()&&document.activeElement===buttons[0];})()`;
+};
+// Pinned Code 1.143.0: both native searches use SuggestEnabledInput/CodeEditorWidget.
+// Its rendered view-line carries the full query; the input proxy need not do so.
+exports.nativeDestinationProbe = (destination) => {
+  assert.ok(["extensions", "settings"].includes(destination));
+  const panel =
+    destination === "extensions" ? ".extensions-viewlet" : ".settings-editor";
+  const search =
+    destination === "extensions"
+      ? ".extensions-search-container .monaco-editor"
+      : ".settings-header .search-container .monaco-editor";
+  const query =
+    destination === "extensions"
+      ? "@id:rehearsal-db.rehearsal-db"
+      : "rehearsal.automaticUpdates";
+  return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect(),style=getComputedStyle(node);return rect.width>0&&rect.height>0&&rect.right>0&&rect.bottom>0&&rect.left<innerWidth&&rect.top<innerHeight&&style.display!=='none'&&style.visibility!=='hidden';};const panels=[...document.querySelectorAll(${JSON.stringify(panel)})].filter(visible);const controls=panels.flatMap(node=>[...node.querySelectorAll(${JSON.stringify(search)})]).filter(visible);const lines=controls.flatMap(node=>[...node.querySelectorAll('.view-lines .view-line')]).filter(visible);const matches=lines.filter(node=>node.textContent===${JSON.stringify(query)}).length;return {matched:panels.length===1&&controls.length===1&&lines.length===1&&matches===1,panels:Math.min(panels.length,256),controls:Math.min(controls.length,256),lines:Math.min(lines.length,256),matchingQueries:Math.min(matches,256)};})()`;
+};
+// Pinned Code 1.143 modal editor title action; only dismiss the observed Settings owner.
+exports.settingsModalProbe = (focus = false) => {
+  return `(()=>{const visible=node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};const modals=[...document.querySelectorAll('.monaco-modal-editor-block')].filter(visible);if(!modals.length)return {kind:'tab',focused:false};if(modals.length!==1)return {kind:'invalid',focused:false};const settings=[...modals[0].querySelectorAll('.settings-editor')].filter(visible);const close=[...modals[0].querySelectorAll('.modal-editor-header .modal-editor-action-container .action-label.codicon-close')].filter(node=>visible(node)&&['Close Modal Editor','Close Modal Editor (Escape)'].includes(node.getAttribute('aria-label'))&&node.getAttribute('aria-disabled')!=='true');if(settings.length!==1||close.length!==1)return {kind:'invalid',focused:false};${focus ? "close[0].focus();" : ""}return {kind:'modal',focused:document.hasFocus()&&document.activeElement===close[0]};})()`;
+};
+exports.updatePhaseDeadline = (phase, now = Date.now()) => {
+  assert.ok(Object.hasOwn(phases, phase.phase));
+  assert.ok(
+    Number.isSafeInteger(phase.deadline) &&
+      phase.deadline > now &&
+      phase.deadline <= now + 30000,
+  );
+  return phase.deadline - 2000;
+};
+exports.parseOwnedDevtoolsPort = (value) => {
+  assert.ok(typeof value === "string" && value.length < 256);
+  const [port, endpoint, ...extra] = value.trim().split("\n");
+  assert.ok(extra.length === 0 && /^\d{1,5}$/u.test(port));
+  assert.ok(Number(port) > 0 && Number(port) < 65536);
+  assert.match(endpoint, /^\/devtools\/browser\/[A-Za-z0-9-]+$/u);
+  return `ws://127.0.0.1:${port}${endpoint}`;
+};
+exports.driveUpdateUi = async ({
+  profile,
+  root,
+  evidence,
+  signal,
+  interactive,
+}) => {
+  const wait = async (check, milliseconds = 30000, absoluteEnd) => {
+    const end = absoluteEnd ?? Date.now() + milliseconds;
+    do {
+      signal.throwIfAborted();
+      const value = await check(end);
+      if (value) return value;
+      const remaining = end - Date.now();
+      if (remaining <= 0) break;
+      await delay(Math.min(100, remaining), undefined, { signal });
+    } while (Date.now() < end);
+    throw Error("Owned update UI observation incomplete.");
+  };
+  const address = exports.parseOwnedDevtoolsPort(
+    await wait(() =>
+      fs
+        .readFile(path.join(profile, "DevToolsActivePort"), "utf8")
+        .catch((error) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        }),
+    ),
+  );
+  const socket = new WebSocket(address);
+  let next = 0;
+  const pending = new Map();
+  const cancel = () => {
+    for (const request of pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(Error("Owned update CDP closed."));
+    }
+    pending.clear();
+    socket.close();
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  socket.addEventListener("message", (event) => {
+    const message = JSON.parse(String(event.data));
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    clearTimeout(request.timer);
+    if (message.error) request.reject(Error("Owned update CDP refused."));
+    else request.resolve(message.result);
+  });
+  const send = (method, params = {}, sessionId, end = Date.now() + 15000) =>
+    new Promise((resolve, reject) => {
+      if (
+        signal.aborted ||
+        socket.readyState !== WebSocket.OPEN ||
+        end <= Date.now()
+      ) {
+        reject(Error("Owned update CDP unavailable."));
+        return;
+      }
+      const id = ++next;
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(Error("Owned update CDP response incomplete."));
+        },
+        Math.min(15000, end - Date.now()),
+      );
+      pending.set(id, { resolve, reject, timer });
+      socket.send(
+        JSON.stringify({
+          id,
+          method,
+          params,
+          ...(sessionId ? { sessionId } : {}),
+        }),
+      );
+    });
+  let currentPhase = "starting",
+    currentStage = "workbench-readiness",
+    consentActionCount = 0;
+  let destinationShape = null,
+    workEnd;
+  const progress = async (status = "running", code = null) => {
+    const record = {
+      schemaVersion: 1,
+      status,
+      phase: currentPhase,
+      stage: currentStage,
+      consentActionCount,
+      signalAborted: signal.aborted,
+      code,
+      ...(destinationShape ? { destination: destinationShape } : {}),
+    };
+    const file = path.join(evidence, "ui-progress.json");
+    await fs.writeFile(file + ".new", JSON.stringify(record) + "\n", {
+      mode: 0o600,
+    });
+    await fs.rename(file + ".new", file);
+  };
+  try {
+    await wait(() => socket.readyState === WebSocket.OPEN);
+    let shape = {
+      targets: 0,
+      pages: 0,
+      nativePages: 0,
+      workbenches: 0,
+      foreignWorkbenches: 0,
+    };
+    let page;
+    try {
+      page = await wait(async (end) => {
+        const targets = await send("Target.getTargets", {}, undefined, end);
+        assert.ok(
+          Array.isArray(targets.targetInfos) &&
+            targets.targetInfos.length <= 256,
+        );
+        const pages = targets.targetInfos.filter(
+          (item) => item?.type === "page",
+        );
+        assert.ok(
+          pages.every(
+            (item) => typeof item.url === "string" && item.url.length <= 8192,
+          ),
+        );
+        const workbenches = pages.filter((item) =>
+          item.url.includes("workbench"),
+        );
+        const native = (url) => /^vscode-file:\/\/vscode-app\//u.test(url);
+        const foreign = workbenches.filter(
+          (item) =>
+            !native(item.url) ||
+            !new URL(item.url).pathname.endsWith(
+              "/out/vs/code/electron-browser/workbench/workbench.html",
+            ),
+        );
+        shape = {
+          targets: targets.targetInfos.length,
+          pages: pages.length,
+          nativePages: pages.filter((item) => native(item.url)).length,
+          workbenches: workbenches.length,
+          foreignWorkbenches: foreign.length,
+        };
+        assert.equal(
+          foreign.length,
+          0,
+          "An unverified workbench target was refused.",
+        );
+        assert.ok(
+          workbenches.length <= 1,
+          "Exactly one owned workbench is required.",
+        );
+        return workbenches[0] ?? null;
+      });
+    } catch (error) {
+      try {
+        await fs.writeFile(
+          path.join(evidence, "workbench-readiness.json"),
+          JSON.stringify({
+            status: "failed",
+            scope: "owned-workbench-readiness",
+            ...shape,
+          }) + "\n",
+          { mode: 0o600, flag: "wx" },
+        );
+      } catch (diagnostic) {
+        throw new AggregateError(
+          [error, diagnostic],
+          "Owned workbench readiness failed; its bounded diagnostic could not be retained.",
+        );
+      }
+      throw error;
+    }
+    const { sessionId } = await send("Target.attachToTarget", {
+      targetId: page.targetId,
+      flatten: true,
+    });
+    const evaluate = async (expression, end) => {
+      const result = await send(
+        "Runtime.evaluate",
+        { expression, returnByValue: true },
+        sessionId,
+        end,
+      );
+      assert.ok(!result.exceptionDetails);
+      return result.result.value;
+    };
+    // Match the maintained Chromium keyboard drivers: Enter carries carriage-return text.
+    const enter = async (end) => {
+      for (const type of ["keyDown", "keyUp"])
+        await send(
+          "Input.dispatchKeyEvent",
+          {
+            type,
+            key: "Enter",
+            code: "Enter",
+            windowsVirtualKeyCode: 13,
+            modifiers: 0,
+            ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
+          },
+          sessionId,
+          end,
+        );
+    };
+    await send("Page.bringToFront", {}, sessionId);
+    const observations = [],
+      handled = new Set();
+    const dismissConsent = async (end) => {
+      if (
+        await evaluate(
+          `(()=>{const dialogs=[...document.querySelectorAll('[role=dialog],[role=alertdialog]')].filter(node=>node.textContent.includes('Allow optional Rehearsal update checks?'));const buttons=dialogs.flatMap(node=>[...node.querySelectorAll('button,[role=button]')]).filter(node=>(node.getAttribute('aria-label')||node.textContent).trim()==="Don't Ask Again"&&node.getBoundingClientRect().width>0);if(buttons.length!==1)return false;buttons[0].focus();return document.activeElement===buttons[0];})()`,
+          end,
+        )
+      ) {
+        await enter(end);
+        consentActionCount++;
+        await progress();
+      }
+    };
+    while (true) {
+      const phase = await wait(async (end) => {
+        let value;
+        try {
+          value = JSON.parse(
+            await fs.readFile(path.join(root, "phase.json"), "utf8"),
+          );
+        } catch (error) {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        }
+        if (value.phase !== "starting" && !handled.has(value.nonce))
+          return value;
+        await dismissConsent(end);
+        return null;
+      }, 180000);
+      assert.match(phase.nonce, /^[a-f0-9-]{36}$/u);
+      if (phase.phase === "done") {
+        assert.deepEqual(
+          observations.map((item) => item.phase),
+          interactive
+            ? [
+                "blocked-extensions",
+                "returned-extensions",
+                "blocked-settings",
+                "returned-settings",
+              ]
+            : [],
+        );
+        currentPhase = "done";
+        currentStage = "complete";
+        await progress("passed");
+        return observations;
+      }
+      assert.equal(interactive, true);
+      assert.ok(Object.hasOwn(phases, phase.phase));
+      currentPhase = phase.phase;
+      currentStage = "phase-validation";
+      destinationShape = null;
+      await progress();
+      workEnd = exports.updatePhaseDeadline(phase);
+      const button = phases[phase.phase];
+      let destinationEnd = workEnd;
+      if (button) {
+        let dispatched = false;
+        try {
+          currentStage = "notification-button";
+          await progress();
+          await send("Page.bringToFront", {}, sessionId, workEnd);
+          await wait(
+            async (end) => {
+              await dismissConsent(end);
+              return evaluate(exports.notificationButtonProbe(button), end);
+            },
+            30000,
+            workEnd,
+          );
+          currentStage = "warning-screenshot";
+          await progress();
+          const warning = await send(
+            "Page.captureScreenshot",
+            { format: "png" },
+            sessionId,
+            workEnd,
+          );
+          const warningBytes = Buffer.from(warning.data, "base64");
+          assert.ok(
+            warningBytes.length > 0 && warningBytes.length < 16 * 1024 * 1024,
+          );
+          await fs.writeFile(
+            path.join(evidence, `${phase.phase}-warning.png`),
+            warningBytes,
+            { mode: 0o600 },
+          );
+          // A notification arriving during the screenshot must not receive our Enter.
+          assert.equal(
+            await evaluate(exports.notificationButtonProbe(button), workEnd),
+            true,
+          );
+          currentStage = "notification-action";
+          await progress();
+          await enter(workEnd);
+          dispatched = true;
+          const destination =
+            button === "Open Extensions" ? "extensions" : "settings";
+          currentStage = "destination";
+          await progress();
+          await wait(
+            async (end) => {
+              await dismissConsent(end);
+              destinationShape = await evaluate(
+                exports.nativeDestinationProbe(destination),
+                end,
+              );
+              return destinationShape.matched === true;
+            },
+            30000,
+            workEnd,
+          );
+        } catch (error) {
+          const end = phase.deadline,
+            failures = [error];
+          try {
+            const expected =
+              button === "Open Extensions"
+                ? "@id:rehearsal-db.rehearsal-db"
+                : "rehearsal.automaticUpdates";
+            const destination = await evaluate(
+              exports.nativeDestinationProbe(
+                button === "Open Extensions" ? "extensions" : "settings",
+              ),
+              end,
+            );
+            assert.ok(
+              typeof destination.matched === "boolean" &&
+                [
+                  destination.panels,
+                  destination.controls,
+                  destination.lines,
+                  destination.matchingQueries,
+                ].every(
+                  (value) =>
+                    Number.isSafeInteger(value) && value >= 0 && value <= 256,
+                ),
+            );
+            const state = await evaluate(
+              `(()=>{const visible=node=>node.getBoundingClientRect().width>0;const inputs=[...document.querySelectorAll('input,textarea')].filter(visible);const warnings=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));return {pageFocused:document.hasFocus(),warningVisible:warnings.length>0,actionFocused:warnings.some(node=>[...node.querySelectorAll('button,[role=button],.monaco-button')].some(button=>button===document.activeElement&&(button.getAttribute('aria-label')||button.textContent).trim()===${JSON.stringify(button)})),visibleInputs:Math.min(inputs.length,256),matchingInputs:Math.min(inputs.filter(node=>node.value===${JSON.stringify(expected)}).length,256)};})()`,
+              end,
+            );
+            assert.ok(
+              state &&
+                typeof state.pageFocused === "boolean" &&
+                typeof state.warningVisible === "boolean" &&
+                typeof state.actionFocused === "boolean",
+            );
+            assert.ok(
+              [state.visibleInputs, state.matchingInputs].every(
+                (value) =>
+                  Number.isSafeInteger(value) && value >= 0 && value <= 256,
+              ),
+            );
+            await fs.writeFile(
+              path.join(evidence, `${phase.phase}-failed.json`),
+              JSON.stringify({
+                status: "failed",
+                phase: phase.phase,
+                keyboardPairDispatched: dispatched,
+                pageFocused: state.pageFocused,
+                warningVisible: state.warningVisible,
+                actionFocused: state.actionFocused,
+                visibleInputs: state.visibleInputs,
+                matchingInputs: state.matchingInputs,
+                nativeDestinationMatched: destination.matched,
+                nativePanels: destination.panels,
+                nativeSearchControls: destination.controls,
+                nativeQueryLines: destination.lines,
+                matchingNativeQueries: destination.matchingQueries,
+              }) + "\n",
+              { mode: 0o600, flag: "wx" },
+            );
+          } catch (diagnostic) {
+            failures.push(diagnostic);
+          }
+          try {
+            const capture = await send(
+              "Page.captureScreenshot",
+              { format: "png" },
+              sessionId,
+              end,
+            );
+            const bytes = Buffer.from(capture.data, "base64");
+            assert.ok(bytes.length > 0 && bytes.length < 16 * 1024 * 1024);
+            await fs.writeFile(
+              path.join(evidence, `${phase.phase}-failed.png`),
+              bytes,
+              { mode: 0o600, flag: "wx" },
+            );
+          } catch (diagnostic) {
+            failures.push(diagnostic);
+          }
+          if (failures.length > 1)
+            throw new AggregateError(
+              failures,
+              "Owned update UI action failed; bounded diagnostic capture was incomplete.",
+            );
+          throw error;
+        }
+      }
+      currentStage = "phase-screenshot";
+      await progress();
+      const capture = await send(
+        "Page.captureScreenshot",
+        { format: "png" },
+        sessionId,
+        workEnd,
+      );
+      const bytes = Buffer.from(capture.data, "base64");
+      assert.ok(bytes.length > 0 && bytes.length < 16 * 1024 * 1024);
+      await fs.writeFile(path.join(evidence, `${phase.phase}.png`), bytes, {
+        mode: 0o600,
+      });
+      if (phase.phase === "blocked-settings") {
+        currentStage = "settings-close";
+        await progress();
+        const modal = await evaluate(
+          exports.settingsModalProbe(),
+          destinationEnd,
+        );
+        assert.ok(modal.kind === "tab" || modal.kind === "modal");
+        if (modal.kind === "modal") {
+          const focused = await evaluate(
+            exports.settingsModalProbe(true),
+            destinationEnd,
+          );
+          assert.equal(focused.kind, "modal");
+          assert.equal(focused.focused, true);
+          await enter(destinationEnd);
+          await wait(
+            (end) =>
+              evaluate(
+                `(()=>{const visible=node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};return [...document.querySelectorAll('.monaco-modal-editor-block')].filter(visible).length===0;})()`,
+                end,
+              ),
+            Math.max(0, destinationEnd - Date.now()),
+          );
+        }
+      }
+      observations.push({
+        phase: phase.phase,
+        keyboardAction: button,
+        screenshotSha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+      currentStage = "acknowledgement";
+      await progress();
+      assert.ok(Date.now() < workEnd);
+      await fs.writeFile(
+        path.join(root, "ack.json.new"),
+        JSON.stringify({ phase: phase.phase, nonce: phase.nonce }),
+        { mode: 0o600 },
+      );
+      await fs.rename(
+        path.join(root, "ack.json.new"),
+        path.join(root, "ack.json"),
+      );
+      handled.add(phase.nonce);
+    }
+  } catch (error) {
+    const code =
+      error?.code === "ERR_ASSERTION"
+        ? "assertion"
+        : workEnd !== undefined && Date.now() >= workEnd
+          ? "phase-deadline"
+          : signal.aborted
+            ? "aborted"
+            : "unclassified";
+    try {
+      await progress("failed", code);
+    } catch (journal) {
+      throw new AggregateError(
+        [error, journal],
+        "Owned update UI failed; its closed progress journal could not be retained.",
+      );
+    }
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    cancel();
+  }
+};

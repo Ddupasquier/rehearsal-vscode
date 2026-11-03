@@ -542,6 +542,12 @@ Changes to runtime code, dependencies, configuration, tooling,
 mixed files or uncertain comparisons retain full checks. Manual and release checks
 keep their existing coverage; reuse still-valid evidence for unchanged source.
 
+`npm run test:lab -- /absolute/path/to/core.tgz` prepares disposable copies of
+the selected Lab fixtures. When Lab already owns a fresh candidate workspace, pass
+its absolute prepared-fixture `.json` manifest instead: the verifier checks those
+installed inputs before and after read-only inspection, without copying, installing
+or retiring the parent's fixtures. Lab retains runtime and cleanup ownership.
+
 Press `F5` and choose **Run Rehearsal Extension**. The development host opens Rehearsal
 Test Lab and its dashboard opens automatically after the trusted single-folder project is
 inspected. Reopen it at any time with the dashboard button in the Projects view title or

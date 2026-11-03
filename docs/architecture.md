@@ -327,6 +327,26 @@ and revocable user consent precede dispatch. No force reload is requested; the l
 version badge remains truthful while VS Code may require a later restart. Interrupted,
 unknown lock ownership fails closed instead of being stolen.
 
+The opt-in `scripts/native/verify-automatic-updates.ts` verifier uses an existing,
+explicitly identified macOS/Linux Code installation and three digest-bound VSIX inputs.
+It installs the private candidate into a disposable profile for activation, reservation
+recovery and genuine native warning/action/return observations. Synthetic higher-version
+metadata is confined to a reservation refusal before download. A separate historical
+component lane runs candidate updater modules against the actual older installed
+extension, with the installed extension's own automatic options off, and uses the default
+official artifact downloader and real VS Code installer. A final owned-profile restart
+checks recovery against the actually loaded official target. These are distinct claims;
+they do not prove a same-version candidate can automatically upgrade itself.
+Reservations come from the production API in real child processes that exit, not edited
+PIDs or invented file identities. Missing/dirty/unknown editor finalization retains the
+profile and host. Host/worker environments admit only identity, locale, PATH and validated
+external cache/temporary storage; the Linux host additionally receives required display/
+session fields and its owned IPC namespace. Credentials, npm auth, preload options and
+unrelated engine/Rehearsal selectors are not inherited. Historical CLI-update evidence is
+separate; this extension-only verifier does not install a Core package or start a database.
+See the exact invocation and limits
+in the [release runbook](commercial-release-runbook.md#native-extension-update-recovery).
+
 The CLI opt-in retains registry/npm provenance, exact manifest/lock identity, dependency
 group and compatibility-series checks. It skips repeated install approval only while the
 separate user opt-in remains current, adds --ignore-scripts/--no-audit/--no-fund, and refuses

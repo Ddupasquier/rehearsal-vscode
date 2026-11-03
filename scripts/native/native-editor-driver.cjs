@@ -17,6 +17,7 @@ const scenarios = Object.freeze({
   "presentation-review": () => require("./native-workbench-review-test.cjs"),
   "configuration-guidance": () => require("./native-workbench-review-test.cjs"),
   "comparison-export": () => require("./native-comparison-export-test.cjs"),
+  "automatic-updates": () => require("./native-automatic-update-test.cjs"),
 });
 let started = false;
 
@@ -31,11 +32,12 @@ function diagnostic(error) {
   const location =
     typeof error?.stack === "string"
       ? error.stack.match(
-          /native-(?:editor-driver|cancellation-test|workbench-review-test|comparison-export-test)\.cjs:\d{1,7}:\d{1,5}/u,
+          /native-(?:editor-driver|cancellation-test|workbench-review-test|comparison-export-test|automatic-update-test)\.cjs:\d{1,7}:\d{1,5}/u,
         )?.[0]
       : undefined;
   return { code, location: location ?? "native-editor-driver" };
 }
+exports.diagnostic = diagnostic;
 // Failure-only projection: never serialize exception messages, paths or values.
 function consumerDiagnostic(error) {
   const code =
@@ -148,9 +150,10 @@ async function finalizeEditor(config, result) {
 }
 exports.finalizeEditor = finalizeEditor;
 
-exports.activate = () => {
+exports.activate = (context) => {
   if (started) return;
   started = true;
+  exports.context = context;
   // No --extensionTestsPath: VS Code deliberately suppresses real dialogs there.
   void (async () => {
     let config,

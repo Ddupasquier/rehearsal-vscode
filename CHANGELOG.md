@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.1.28 — Update recovery
+
+- Explain blocked automatic extension updates and open the relevant native Extensions
+  or Settings view, with a path back to Rehearsal.
+- Recover abandoned reservations only with current ownership and loaded-installation
+  proof; preserve live, malformed, changed and uncertain installation state.
+- Preserve rewritten or replaced temporary VSIX and lock files using both content
+  hashes and file identity, including rapid same-size changes on Windows.
+- Keep Core and extension update consent separate, verify official artifact origin,
+  and retain recovery after uncertain installer outcomes.
+
 - Make shipped Starter capabilities easier to discover in the README, with links
   to the complete released-capability catalog and separate public roadmap.
 - Require README and documentation updates with every release, and verify the

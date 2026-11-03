@@ -1,25 +1,25 @@
-/** Native VS Code integration runner. Run only through verify-automatic-updates.ts. */
+/** Installed native recovery and historical installer component acceptance. */
 const assert = require("node:assert/strict");
-const { createHash } = require("node:crypto");
+const { spawn } = require("node:child_process");
+const { createHash, randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
 const vscode = require("vscode");
-
-let extensionContext;
-exports.activate = (context) => {
-  extensionContext = context;
-  return { context };
-};
-
-const pause = (milliseconds) =>
-  new Promise((resolve) => setTimeout(resolve, milliseconds));
-const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
-const within = (root, target) => {
-  const relative = path.relative(root, target);
-  assert.ok(relative && !relative.startsWith(`..${path.sep}`));
-  assert.ok(relative !== ".." && !path.isAbsolute(relative));
-};
-const absent = async (file) => {
+const { readConfiguration } = require("./native-editor-driver.cjs");
+const { readRegular, writeJson } = require("./native-editor-reads.cjs");
+const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const id = "rehearsal-db.rehearsal-db";
+async function wait(check, milliseconds = 30000) {
+  const end = Date.now() + milliseconds;
+  do {
+    const value = await check();
+    if (value) return value;
+    await delay(100);
+  } while (Date.now() < end);
+  throw Error("Owned native update observation incomplete.");
+}
+async function missing(file) {
   try {
     await fs.lstat(file);
     return false;
@@ -27,431 +27,441 @@ const absent = async (file) => {
     if (error.code === "ENOENT") return true;
     throw error;
   }
-};
-const waitFor = async (check, milliseconds, label) => {
-  const deadline = Date.now() + milliseconds;
-  do {
-    const result = await check();
-    if (result) return result;
-    await pause(100);
-  } while (Date.now() < deadline);
-  throw new Error(`Timed out waiting for ${label}; completion is unverified.`);
-};
-const bounded = async (action, milliseconds, label) => {
-  let timer;
-  try {
-    return await Promise.race([
-      action(),
-      new Promise((_, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`${label} exceeded its bounded deadline.`)),
-          milliseconds,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
+}
+const updatePhases = new Set([
+  "blocked-extensions",
+  "returned-extensions",
+  "blocked-settings",
+  "returned-settings",
+  "done",
+]);
+exports.publishUpdatePhase = async ({
+  phase,
+  root,
+  write = writeJson,
+  read = readRegular,
+  now = Date.now,
+  pause = delay,
+}) => {
+  assert.ok(updatePhases.has(phase));
+  const nonce = randomUUID(),
+    deadline = now() + 30000;
+  await write(path.join(root, "phase.json"), { phase, nonce, deadline });
+  if (phase === "done") return;
+  while (now() < deadline) {
+    try {
+      const ack = JSON.parse(
+        (await read(path.join(root, "ack.json"), 1024)).bytes.toString("utf8"),
+      );
+      if (now() < deadline && ack.phase === phase && ack.nonce === nonce)
+        return;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    const remaining = deadline - now();
+    if (remaining > 0) await pause(Math.min(100, remaining));
   }
+  const error = Error("Owned native update phase acknowledgement incomplete.");
+  error.code = "NATIVE_UPDATE_PHASE_TIMEOUT";
+  throw error;
 };
-
 exports.run = async () => {
-  const configPath = process.env.REHEARSAL_AUTO_VERIFY_CONFIG;
-  assert.ok(configPath, "An isolated verification configuration is required.");
-  const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-  const required = [
-    "root",
-    "runtimeRoot",
-    "emptyRoot",
-    "projectRoot",
-    "resultPath",
-    "storagePath",
-  ];
-  for (const name of required)
-    assert.ok(
-      typeof config[name] === "string" && path.isAbsolute(config[name]),
-    );
-  assert.notEqual(config.root, path.parse(config.root).root);
-  assert.equal(await fs.realpath(config.root), config.root);
-  for (const name of required.filter((name) => name !== "root"))
-    within(config.root, config[name]);
-  assert.equal(config.extensionBefore, "0.1.11");
-  assert.equal(config.extensionTarget, "0.1.12");
-  assert.equal(config.cliBefore, "0.1.0-rc.8");
-  assert.equal(config.cliTarget, "0.1.0-rc.9");
-  assert.equal(vscode.workspace.isTrusted, true);
-  const folders = vscode.workspace.workspaceFolders ?? [];
-  assert.equal(
-    folders.length,
-    2,
-    "Only the two disposable folders may be open.",
-  );
-  const folderFor = (root) => folders.find(({ uri }) => uri.fsPath === root);
-  const consumer = folderFor(config.projectRoot);
-  const empty = folderFor(config.emptyRoot);
-  assert.ok(consumer && empty && consumer.uri.scheme === "file");
-  assert.equal(await fs.realpath(config.projectRoot), config.projectRoot);
-  assert.deepEqual(await fs.readdir(config.emptyRoot), []);
+  const config = await readConfiguration();
+  assert.equal(config.scenario, "automatic-updates");
   assert.ok(
-    (await fs.readdir(config.projectRoot)).every(
-      (name) =>
-        !name.startsWith(".env") && !name.startsWith("rehearsal.config"),
+    ["candidate", "historical-install", "historical-recovery"].includes(
+      config.mode,
     ),
-    "The disposable package consumer must not have database configuration.",
   );
-  const installedExtension = vscode.extensions.getExtension(
-    "rehearsal-db.rehearsal",
-  );
-  assert.equal(installedExtension?.packageJSON.version, config.extensionBefore);
-  const companion = await vscode.extensions
-    .getExtension("rehearsal-verification.automatic-updates")
-    ?.activate();
-  extensionContext = companion?.context ?? extensionContext;
+  const extension = vscode.extensions.getExtension(id);
   assert.ok(
-    extensionContext,
-    "The isolated companion extension did not activate.",
+    extension && !vscode.extensions.getExtension("rehearsal-db.rehearsal"),
   );
-  const runtime = (name) =>
-    require(path.join(config.runtimeRoot, "dist", "src", name));
-  const { runVersion, runRehearsalJson } = runtime("process_adapter.js");
-  const { parseActivityData } = runtime("contracts.js");
-  const { readUpdateProjectIdentity } = runtime("update_identity.js");
-  const { createUpdateAdvisory } = runtime("update_advisory_host.js");
-  const { RehearsalWorkspaceActions } = runtime("workspace_actions.js");
-  const { fetchUpdateMetadata, parseCoreUpdate } =
-    runtime("update_advisory.js");
-  const { readAutomaticUpdateSettings, saveAutomaticUpdateSettings } = runtime(
-    "automatic_update_settings.js",
+  assert.equal(
+    await fs.realpath(extension.extensionPath),
+    config.installedPath,
   );
-  const key = consumer.uri.toString();
-  const emptyKey = empty.uri.toString();
+  assert.equal(extension.packageJSON.version, config.loadedVersion);
+  assert.equal(vscode.workspace.isTrusted, true);
+  assert.equal(vscode.workspace.workspaceFolders?.length, 1);
+  const folder = vscode.workspace.workspaceFolders[0];
+  assert.equal(folder.uri.fsPath, config.workspace);
+  assert.deepEqual(await fs.readdir(config.workspace), []);
+  await extension.activate();
+  const load = (name) =>
+    require(path.join(config.runtimeRoot, "dist/src", `${name}.js`));
+  const api = load("extension_update_reservation");
+  const { AutomaticExtensionInstaller } = load("extension_auto_update");
+  const { createUpdateAdvisory } = load("update_advisory_host");
+  const { readAutomaticUpdateSettings, saveAutomaticUpdateSettings } = load(
+    "automatic_update_settings",
+  );
+  const installedState = () => {
+    const current = vscode.extensions.getExtension(id);
+    return api.readLoadedExtensionState(
+      extension.extensionPath,
+      config.loadedVersion,
+      current?.extensionUri.fsPath,
+      current?.packageJSON.version,
+    );
+  };
   const result = {
     status: "running",
-    startedAt: new Date().toISOString(),
+    failurePhase: `${config.mode}-setup`,
+    mode: config.mode,
+    checks: [],
+    candidateSha256: config.candidateSha256,
+    loadedVersion: config.loadedVersion,
     vscodeVersion: vscode.version,
     nodeVersion: process.versions.node,
-    runtimeRoot: config.runtimeRoot,
-    checks: [],
     limitations: [
-      "Exact candidate updater modules execute in a companion native extension host, not the candidate's complete activation path.",
-      "Official historical releases exercise compatible upgrades without publishing a new release or changing the owner's installation.",
-      "Native extension installation acceptance is checked separately against the installed disk bytes by the parent runner.",
-      "No database configuration, migrations, runtime lifecycle, or hosted database operation is exercised.",
+      "Candidate full activation and historical installer component evidence are separate.",
+      "Synthetic future release metadata is used only for a blocked candidate warning before any artifact download.",
+      "Crash-state reservations are deliberately created by an exited test-owned process through the production API; this does not recreate a real VS Code crash.",
+      "No database, CLI update, owner profile, full candidate-activation upgrade or assistive-technology behavior is exercised.",
     ],
   };
-  const saveResult = () =>
-    fs.writeFile(config.resultPath, `${JSON.stringify(result, null, 2)}\n`);
-  const output = vscode.window.createOutputChannel(
-    "Rehearsal automatic update verification",
-    { log: true },
-  );
-  let actions;
-  let advisory;
-  let listener;
-  let terminal;
-  let ended;
-  const commandEvents = [];
-  let snapshot;
-  const inspectConsumer = async () => {
-    const version = await runVersion(config.projectRoot, { timeoutMs: 15000 });
-    const execution = await runRehearsalJson({
-      workspaceRoot: config.projectRoot,
-      command: ["activity"],
-      expectedCommand: "activity",
-      timeoutMs: 15000,
-    });
-    const activity = parseActivityData(execution.result.data);
-    assert.equal(activity.state, "idle");
-    snapshot = {
-      workspaceName: consumer.name,
-      workspaceRoot: config.projectRoot,
-      availability: "not_ready",
-      version: version.version,
-      activity,
-    };
+  const lockPath = path.join(config.storagePath, "extension-update.lock");
+  let liveWorker, installer, advisory;
+  let installationStarted = false,
+    installationAccepted = false;
+  const pendingWorkers = new Set();
+  let terminals = 0;
+  const terminalListener = vscode.window.onDidOpenTerminal(() => terminals++);
+  const save = () => writeJson(config.resultPath, result);
+  const release = async (reservation) => {
+    assert.ok(reservation && (await reservation.owns()));
+    await reservation.release();
+    assert.ok(await missing(lockPath));
   };
-  const missing = {
-    workspaceName: empty.name,
-    workspaceRoot: config.emptyRoot,
-    availability: "package_missing",
-  };
-  const projects = {
-    snapshotFor: (workspaceKey) =>
-      workspaceKey === key
-        ? snapshot
-        : workspaceKey === emptyKey
-          ? missing
-          : undefined,
-    refreshWorkspace: async (workspaceKey) => {
-      if (workspaceKey === key) await inspectConsumer();
-    },
-    publishOperationActivity: () => {},
-  };
-  const manifestPath = path.join(config.projectRoot, "package.json");
-  const canary =
-    config.scriptCanaryPath ??
-    path.join(config.projectRoot, "INSTALL_SCRIPT_RAN");
-  within(config.projectRoot, canary);
-  try {
-    await saveResult();
-    await inspectConsumer();
-    assert.equal(snapshot.version, config.cliBefore);
-    const before = await readUpdateProjectIdentity(
-      config.projectRoot,
-      config.cliBefore,
-    );
-    assert.equal(before.origin, "registry");
-    assert.equal(before.dependencyGroup, "devDependencies");
-    assert.ok(await absent(canary));
-    actions = new RehearsalWorkspaceActions(
-      projects,
-      output,
-      extensionContext.workspaceState,
-    );
-
-    // The genuinely empty folder prevents unrelated newer core metadata from
-    // opening a manual compatibility review during this extension-only phase.
-    await saveAutomaticUpdateSettings({ extension: true, cli: false });
-    assert.deepEqual(readAutomaticUpdateSettings(), {
-      extension: true,
-      cli: false,
-    });
-    const releases = [];
-    advisory = createUpdateAdvisory({
-      projects,
-      actions,
-      state: extensionContext.workspaceState,
-      version: installedExtension.packageJSON.version,
-      preview: true,
-      extensionUri: vscode.Uri.file(config.runtimeRoot),
+  const acquire = (version, ready = async () => true) =>
+    api.acquireExtensionUpdateReservation({
       storagePath: config.storagePath,
-      onExtensionRelease: (_, evidence) => releases.push(evidence),
+      version,
+      installation: installedState,
+      ready,
     });
-    await bounded(
-      () => advisory.check(emptyKey),
-      60000,
-      "live automatic extension installation",
-    );
-    assert.ok(
-      releases.some(
-        (release) =>
-          release.status === "checked" &&
-          release.latestVersion === config.extensionTarget,
-      ),
-    );
-    assert.ok(
-      await absent(path.join(config.storagePath, "extension-update.lock")),
-    );
-    result.checks.push({
-      name: "live-extension-automatic-queue",
-      status: "completed",
-      from: config.extensionBefore,
-      to: config.extensionTarget,
-      metadata:
-        "Default live official GitHub metadata and artifact downloader; no injected network, activity or installer response.",
-      diskVerification: "required-by-parent",
+  const worker = async (phase, targetVersion) => {
+    const input = path.join(config.root, "reservation-worker.json");
+    await writeJson(input, {
+      root: config.fixtureRoot,
+      runtimeRoot: config.runtimeRoot,
+      storagePath: config.storagePath,
+      loadedPath: extension.extensionPath,
+      loadedVersion: config.loadedVersion,
+      targetVersion,
+      phase,
     });
-    advisory.dispose();
-    advisory = undefined;
-    await saveResult();
+    const workerEnvironment =
+      require("./native-update-reservation-worker.cjs").nativeUpdateEnvironment(
+        process.env,
+        load("platform_runtime").storageEnvironment(process.env),
+        process.platform,
+      );
+    const child = spawn(
+      process.execPath,
+      [path.join(__dirname, "native-update-reservation-worker.cjs"), input],
+      {
+        env: { ...workerEnvironment, ELECTRON_RUN_AS_NODE: "1" },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    pendingWorkers.add(child);
+    let stdout = "",
+      exited = false,
+      code,
+      fault;
+    child.on("error", (error) => {
+      fault = error;
+    });
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+      if (stdout.length > 1024)
+        fault = Error("Worker output exceeded its bound.");
+    });
+    child.stderr.resume();
+    const closed = new Promise((done) =>
+      child.once("close", (value) => {
+        exited = true;
+        code = value;
+        pendingWorkers.delete(child);
+        done(value);
+      }),
+    );
+    await wait(() => {
+      if (fault) throw fault;
+      if (exited && code !== 0) throw Error("Owned reservation worker failed.");
+      return stdout.includes("\n");
+    }, 15000);
+    const receipt = JSON.parse(stdout.trim());
+    assert.equal(receipt.ready, true);
+    assert.equal(receipt.pid, child.pid);
+    if (phase === "live") {
+      assert.equal(exited, false);
+      return { child, closed };
+    }
+    await wait(() => exited, 15000);
+    assert.equal(code, 0);
+    assert.equal(api.updateProcessState(receipt.pid), "stopped");
+    return receipt;
+  };
+  const publish = (phase) =>
+    exports.publishUpdatePhase({ phase, root: config.root });
+  const failureStages = new Set([
+    "historical-install",
+    "historical-recovery",
+    ...["extensions", "settings"].flatMap((destination) => [
+      `advisory-check-${destination}`,
+      `phase-ack-blocked-${destination}`,
+      `advisory-resume-${destination}`,
+      `workspace-return-${destination}`,
+      `phase-ack-returned-${destination}`,
+    ]),
+  ]);
+  const stage = async (phase) => {
+    assert.ok(failureStages.has(phase));
+    result.failurePhase = phase;
+    await save();
+  };
 
-    // Current latest is a different compatibility series. The separately checked
-    // official beta tag supplies an actual published same-series test target.
-    const abort = new AbortController();
-    const metadata = await bounded(
-      () => fetchUpdateMetadata("corePreview", abort.signal),
-      15000,
-      "official compatible CLI metadata",
-    ).finally(() => abort.abort());
-    assert.equal(parseCoreUpdate(metadata), config.cliTarget);
-    const verifyIdentity = async () => {
-      if (!readAutomaticUpdateSettings().cli) return false;
-      const current = await readUpdateProjectIdentity(
-        config.projectRoot,
-        config.cliBefore,
-      );
-      return (
-        current.origin === "registry" &&
-        current.fingerprint === before.fingerprint &&
-        current.version === before.version &&
-        current.dependencyGroup === before.dependencyGroup
-      );
-    };
-    const update = () =>
-      actions.updatePackageVersion(
-        key,
-        config.cliBefore,
-        config.cliTarget,
-        verifyIdentity,
-        "devDependencies",
-        {
-          automatic: true,
-          coordinationDirectory: path.join(
-            config.storagePath,
-            "cli-update-coordination",
-          ),
-        },
-      );
-    const manifestBefore = await fs.readFile(manifestPath);
-    const terminalCount = vscode.window.terminals.length;
-    await saveAutomaticUpdateSettings({ extension: false, cli: false });
-    assert.equal(await update(), false);
-    assert.equal(vscode.window.terminals.length, terminalCount);
-    assert.equal(
-      digest(await fs.readFile(manifestPath)),
-      digest(manifestBefore),
-    );
-    result.checks.push({
-      name: "revoked-cli-consent",
-      status: "passed",
-      dispatched: false,
-    });
-
-    await saveAutomaticUpdateSettings({ extension: false, cli: true });
+  try {
+    await save();
     assert.deepEqual(readAutomaticUpdateSettings(), {
       extension: false,
-      cli: true,
+      cli: false,
     });
-    const document = await vscode.workspace.openTextDocument(
-      vscode.Uri.file(manifestPath),
+    const loaded = await installedState();
+    assert.ok(
+      loaded,
+      "Registered and actually loaded installation must agree initially.",
     );
-    await vscode.window.showTextDocument(document, { preview: false });
-    const edit = new vscode.WorkspaceEdit();
-    edit.insert(
-      document.uri,
-      document.positionAt(document.getText().length),
-      "\n",
+    result.checks.push(
+      "exact installed extension activated with its actual path/version",
     );
-    assert.equal(await vscode.workspace.applyEdit(edit), true);
-    assert.equal(document.isDirty, true);
-    try {
-      assert.equal(await update(), false);
-      assert.equal(vscode.window.terminals.length, terminalCount);
-      assert.equal(
-        digest(await fs.readFile(manifestPath)),
-        digest(manifestBefore),
+    if (config.mode === "candidate") {
+      const future = config.futureVersion;
+      await worker("preparing", future);
+      await release(await acquire(future));
+      result.checks.push(
+        "exited preparing owner recovered against exact loaded candidate snapshot",
       );
-      result.checks.push({
-        name: "dirty-manifest-deferral",
-        status: "passed",
-        dispatched: false,
+      liveWorker = await worker("live", future);
+      const liveBefore = sha((await readRegular(lockPath, 16384)).bytes);
+      await assert.rejects(
+        acquire(future),
+        (error) => error.reason === "update-in-progress",
+      );
+      assert.equal(sha((await readRegular(lockPath, 16384)).bytes), liveBefore);
+      liveWorker.child.stdin.end();
+      assert.equal(await liveWorker.closed, 0);
+      liveWorker = undefined;
+      assert.ok(await missing(lockPath));
+      result.checks.push(
+        "live owner refused and reservation retained until its own release",
+      );
+      await worker("preparing", future);
+      const canary = Buffer.from("foreign replacement reservation\n");
+      await assert.rejects(
+        acquire(future, async () => {
+          await fs.rename(
+            lockPath,
+            path.join(config.root, "original-reservation.json"),
+          );
+          await fs.writeFile(lockPath, canary, { mode: 0o600, flag: "wx" });
+          return true;
+        }),
+        (error) => ["lock-unverified", "lock-changed"].includes(error.reason),
+      );
+      assert.deepEqual((await readRegular(lockPath, 16384)).bytes, canary);
+      // Preserve the negative fixture; remove no unverified reservation.
+      await fs.rename(
+        lockPath,
+        path.join(config.root, "replacement-preserved.txt"),
+      );
+      const temp = path.join(config.root, "owned-update.vsix");
+      await fs.writeFile(temp, "owned fixture", { flag: "wx", mode: 0o600 });
+      const identity = api.updateFileIdentity(
+        await fs.lstat(temp, { bigint: true }),
+      );
+      await fs.rename(temp, path.join(config.root, "original-update.vsix"));
+      await fs.writeFile(temp, "foreign VSIX canary", {
+        flag: "wx",
+        mode: 0o600,
       });
-    } finally {
-      assert.equal(
-        vscode.window.activeTextEditor?.document.uri.toString(),
-        document.uri.toString(),
+      assert.equal(await api.removeOwnedUpdateFile(temp, identity), false);
+      assert.equal(await fs.readFile(temp, "utf8"), "foreign VSIX canary");
+      result.checks.push(
+        "replacement reservation and temporary VSIX preserved by production helpers",
       );
-      await vscode.commands.executeCommand("workbench.action.files.revert");
-      assert.equal(document.isDirty, false);
+      await fs.writeFile(lockPath, "malformed owned test reservation", {
+        flag: "wx",
+        mode: 0o600,
+      });
+      const malformedBefore = sha((await readRegular(lockPath, 16384)).bytes);
+      const context = require("./native-editor-driver.cjs").context;
+      assert.ok(context);
+      await saveAutomaticUpdateSettings({ extension: true, cli: false });
+      for (const destination of ["extensions", "settings"]) {
+        advisory = createUpdateAdvisory({
+          projects: {
+            snapshotFor: () => ({
+              availability: "package_missing",
+              workspaceRoot: config.workspace,
+              workspaceName: folder.name,
+            }),
+          },
+          actions: {
+            updatePackageVersion: async () =>
+              assert.fail("Core update must not dispatch."),
+          },
+          state: context.workspaceState,
+          version: config.loadedVersion,
+          preview: true,
+          extensionUri: extension.extensionUri,
+          storagePath: config.storagePath,
+          request: async (kind) =>
+            kind === "extension"
+              ? [
+                  {
+                    tag_name: `v${future}`,
+                    draft: false,
+                    prerelease: false,
+                    html_url: `https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v${future}`,
+                    assets: [
+                      { name: `rehearsal-db-${future}.vsix` },
+                      { name: "SHA256SUMS" },
+                    ],
+                  },
+                ]
+              : null,
+        });
+        await stage(`advisory-check-${destination}`);
+        await advisory.check(folder.uri.toString());
+        await stage(`phase-ack-blocked-${destination}`);
+        await publish(`blocked-${destination}`);
+        assert.equal(
+          sha((await readRegular(lockPath, 16384)).bytes),
+          malformedBefore,
+        );
+        assert.deepEqual(readAutomaticUpdateSettings(), {
+          extension: true,
+          cli: false,
+        });
+        await stage(`advisory-resume-${destination}`);
+        await advisory.resumeAutomatic(folder.uri.toString());
+        advisory.dispose();
+        advisory = undefined;
+        await stage(`workspace-return-${destination}`);
+        await vscode.commands.executeCommand(
+          "rehearsal.openWorkspace",
+          folder.uri.toString(),
+        );
+        await wait(() => {
+          const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+          return (
+            tab?.input instanceof vscode.TabInputWebview &&
+            /Rehearsal/u.test(tab.label)
+          );
+        });
+        await stage(`phase-ack-returned-${destination}`);
+        await publish(`returned-${destination}`);
+      }
+      result.checks.push(
+        "synthetic future metadata blocked before download; native recovery actions, unchanged opt-ins and return to installed Rehearsal observed",
+      );
+    } else if (config.mode === "historical-install") {
+      await worker("preparing", config.targetVersion);
+      installer = new AutomaticExtensionInstaller({
+        storagePath: config.storagePath,
+        loadedVersion: config.loadedVersion,
+        loadedExtensionPath: extension.extensionPath,
+        preview: true,
+      });
+      await stage("historical-install");
+      installationStarted = true;
       assert.equal(
-        digest(await fs.readFile(manifestPath)),
-        digest(manifestBefore),
+        await installer.install(
+          config.targetVersion,
+          () =>
+            !readAutomaticUpdateSettings().extension &&
+            !readAutomaticUpdateSettings().cli,
+          async () => true,
+        ),
+        true,
+      );
+      installationAccepted = true;
+      assert.ok(await missing(lockPath));
+      assert.deepEqual(await fs.readdir(config.storagePath), []);
+      result.checks.push(
+        "explicitly authorized candidate installer component recovered preparing reservation and real VS Code accepted default official verified target; installed extension automatic settings remained off",
+      );
+      await worker("installer-dispatched", config.targetVersion);
+      const pendingBefore = sha((await readRegular(lockPath, 16384)).bytes);
+      await assert.rejects(
+        acquire(config.targetVersion),
+        (error) => error.reason === "installation-unconfirmed",
+      );
+      assert.equal(
+        sha((await readRegular(lockPath, 16384)).bytes),
+        pendingBefore,
+      );
+      result.checks.push(
+        "deliberate exited dispatched fixture retained while old version remains loaded; actual installer completion does not claim target activation",
+      );
+    } else {
+      await stage("historical-recovery");
+      assert.equal(config.loadedVersion, config.targetVersion);
+      await release(await acquire(config.targetVersion));
+      result.checks.push(
+        "after owned profile restart, actual loaded official target proves safe dispatched-reservation recovery",
       );
     }
-    await saveResult();
-
-    listener = vscode.window.onDidEndTerminalShellExecution((event) => {
-      const command = event.execution.commandLine.value;
-      if (!command.includes(`@rehearsal-db/core@${config.cliTarget}`)) return;
-      terminal = event.terminal;
-      ended = { exitCode: event.exitCode, command };
-      commandEvents.push(ended);
-    });
-    assert.equal(
-      await update(),
-      true,
-      "The real automatic CLI command did not dispatch.",
-    );
-    await waitFor(() => ended, 120000, "native npm shell execution completion");
-    assert.equal(
-      ended.exitCode,
-      0,
-      "Native npm did not report successful completion.",
-    );
-    assert.equal(commandEvents.length, 1);
-    for (const argument of [
-      "--save-dev",
-      "--save-exact",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      "--registry=https://registry.npmjs.org",
-      "--@rehearsal-db:registry=https://registry.npmjs.org",
-    ])
-      assert.ok(
-        ended.command.includes(argument),
-        `Missing exact npm argument ${argument}`,
-      );
-    await waitFor(
-      () =>
-        actions
-          .activityFor(key)
-          .find(
-            (entry) =>
-              entry.label === "Update Rehearsal" &&
-              entry.outcome === "completed" &&
-              entry.exitCode === 0,
-          ),
-      15000,
-      "the production completed-activity receipt",
-    );
-    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-    assert.equal(
-      manifest.devDependencies["@rehearsal-db/core"],
-      config.cliTarget,
-    );
-    assert.equal(manifest.dependencies?.["@rehearsal-db/core"], undefined);
-    assert.equal(
-      manifest.optionalDependencies?.["@rehearsal-db/core"],
-      undefined,
-    );
-    const after = await readUpdateProjectIdentity(
-      config.projectRoot,
-      config.cliTarget,
-    );
-    assert.equal(after.origin, "registry");
-    assert.equal(after.version, config.cliTarget);
-    assert.equal(after.dependencyGroup, "devDependencies");
-    assert.ok(
-      await absent(canary),
-      "An install lifecycle script unexpectedly ran.",
-    );
-    const leaseRoot = path.join(
-      config.storagePath,
-      "cli-update-coordination",
-      "package-update-leases",
-    );
-    assert.deepEqual(await fs.readdir(leaseRoot), []);
-    result.checks.push({
-      name: "native-compatible-cli-automatic-execution",
-      status: "passed",
-      from: config.cliBefore,
-      to: config.cliTarget,
-      targetMetadata:
-        "Live official npm beta metadata, separately validated before direct production updatePackageVersion invocation.",
-      exitCode: ended.exitCode,
-      command: ended.command,
-      registryIdentity: after.origin,
-      dependencyGroup: after.dependencyGroup,
-      scriptCanaryAbsent: true,
-      leaseReleased: true,
-      completedActivityReceipt: true,
-    });
+    assert.equal(terminals, 0);
+    assert.deepEqual(await fs.readdir(config.workspace), []);
+    await publish("done");
     result.status = "passed";
+    delete result.failurePhase;
   } catch (error) {
     result.status = "failed";
-    result.error = error instanceof Error ? error.message : String(error);
+    try {
+      const settings = readAutomaticUpdateSettings();
+      result.expectedOptinsMatch =
+        settings.extension === (config.mode === "candidate") &&
+        settings.cli === false;
+    } catch {
+      result.expectedOptinsMatch = null;
+    }
+    if (installationStarted && !installationAccepted)
+      result.recoveryRequired = true;
+    result.failureCode =
+      error.code === "ERR_ASSERTION"
+        ? "ASSERTION_FAILED"
+        : "NATIVE_UPDATE_ACCEPTANCE_FAILED";
     throw error;
   } finally {
     advisory?.dispose();
-    listener?.dispose();
-    // Only close a terminal whose actual native completion was observed.
-    if (ended && ended.exitCode !== undefined) terminal?.dispose();
-    actions?.dispose();
+    installer?.dispose();
+    terminalListener.dispose();
+    if (liveWorker) {
+      // Let only this captured child's own release path run; unknown closure retains recovery.
+      liveWorker.child.stdin.end();
+      try {
+        await Promise.race([
+          liveWorker.closed,
+          delay(5000).then(() => {
+            throw Error();
+          }),
+        ]);
+      } catch {
+        result.recoveryRequired = true;
+      }
+    }
+    if (pendingWorkers.size > 0) result.recoveryRequired = true;
     await saveAutomaticUpdateSettings({ extension: false, cli: false }).catch(
-      () => {},
+      () => {
+        result.recoveryRequired = true;
+      },
     );
-    output.dispose();
-    result.finishedAt = new Date().toISOString();
-    await saveResult();
+    await save();
   }
 };
