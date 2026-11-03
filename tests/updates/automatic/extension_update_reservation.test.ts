@@ -25,12 +25,32 @@ import {
 
 const race = vi.hoisted(() => ({
   afterLstat: undefined as ((path: string) => Promise<void>) | undefined,
+  afterRead: undefined as ((path: string) => Promise<void>) | undefined,
   windowsMode: false,
+  unchangedMetadata: undefined as
+    { path: string; entry: BigIntStats } | undefined,
 }));
 vi.mock("node:fs/promises", async (original) => {
   const actual = await original<typeof import("node:fs/promises")>();
-  const reported = <T extends Stats | BigIntStats>(entry: T): T =>
-    race.windowsMode
+  const reported = <T extends Stats | BigIntStats>(
+    entry: T,
+    path: string,
+  ): T => {
+    if (
+      race.unchangedMetadata?.path === path &&
+      typeof entry.dev === "bigint"
+    ) {
+      const saved = race.unchangedMetadata.entry;
+      entry = Object.assign(Object.create(entry), {
+        dev: saved.dev,
+        ino: saved.ino,
+        birthtimeNs: saved.birthtimeNs,
+        ctimeNs: saved.ctimeNs,
+        mtimeNs: saved.mtimeNs,
+        size: saved.size,
+      }) as T;
+    }
+    return race.windowsMode
       ? (Object.assign(Object.create(entry), {
           mode:
             typeof entry.mode === "bigint"
@@ -38,6 +58,7 @@ vi.mock("node:fs/promises", async (original) => {
               : (entry.mode & ~0o777) | 0o666,
         }) as T)
       : entry;
+  };
   return {
     ...actual,
     open: async (...args: Parameters<typeof actual.open>) => {
@@ -46,13 +67,21 @@ vi.mock("node:fs/promises", async (original) => {
         bigint?: boolean;
       }) => Promise<Stats | BigIntStats>;
       handle.stat = (async (options?: { bigint?: boolean }) =>
-        reported(await stat(options))) as typeof handle.stat;
+        reported(await stat(options), String(args[0]))) as typeof handle.stat;
+      const read = handle.read.bind(handle) as (
+        ...args: unknown[]
+      ) => Promise<unknown>;
+      handle.read = (async (...parameters: unknown[]) => {
+        const result = await read(...parameters);
+        await race.afterRead?.(String(args[0]));
+        return result;
+      }) as typeof handle.read;
       return handle;
     },
     lstat: async (...args: Parameters<typeof actual.lstat>) => {
       const result = await actual.lstat(args[0], args[1]);
       await race.afterLstat?.(String(args[0]));
-      return reported(result);
+      return reported(result, String(args[0]));
     },
   };
 });
@@ -61,7 +90,9 @@ const roots: string[] = [];
 const held: ExtensionUpdateReservation[] = [];
 afterEach(async () => {
   race.afterLstat = undefined;
+  race.afterRead = undefined;
   race.windowsMode = false;
+  race.unchangedMetadata = undefined;
   await Promise.all(held.splice(0).map((lease) => lease.close()));
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
@@ -163,16 +194,23 @@ describe("extension update reservation recovery", () => {
     await readFile(f.path);
   });
 
-  it.each([false, true])(
-    "preserves a same-inode mutation during cleanup; Windows=%s",
-    async (windows) => {
+  it.each([
+    [false, 2],
+    [false, 3],
+    [true, 2],
+    [true, 3],
+  ] as const)(
+    "preserves a same-inode mutation even when metadata is stale; Windows=%s observation=%i",
+    async (windows, mutationObservation) => {
       const f = await fixture();
       const path = join(f.root, "owned.vsix");
       await writeFile(path, "old", { mode: 0o600 });
-      const expected = updateFileIdentity(await lstat(path, { bigint: true }));
+      const initial = await lstat(path, { bigint: true });
+      const expected = updateFileIdentity(initial);
+      race.unchangedMetadata = { path, entry: initial };
       let observations = 0;
       race.afterLstat = async (observed) => {
-        if (observed === path && ++observations === 2) {
+        if (observed === path && ++observations === mutationObservation) {
           race.afterLstat = undefined;
           await writeFile(path, "new");
         }
@@ -185,10 +223,74 @@ describe("extension update reservation recovery", () => {
           createHash("sha256").update("old").digest("hex"),
         ),
       ).toBe(false);
-      expect(observations).toBe(2);
+      expect(observations).toBeGreaterThanOrEqual(mutationObservation);
       expect(await readFile(path, "utf8")).toBe("new");
     },
   );
+
+  it.each([false, true])(
+    "preserves a pathname replaced during the final content hash; Windows=%s",
+    async (windows) => {
+      const f = await fixture();
+      const path = join(f.root, "owned.vsix");
+      const saved = join(f.root, "retained.vsix");
+      await writeFile(path, "old", { mode: 0o600 });
+      const expected = updateFileIdentity(await lstat(path, { bigint: true }));
+      let reads = 0;
+      race.afterRead = async (observed) => {
+        if (observed === path && ++reads === (windows ? 5 : 3)) {
+          race.afterRead = undefined;
+          await rename(path, saved);
+          await writeFile(path, "new", { mode: 0o600 });
+        }
+      };
+      expect(
+        await removeOwnedUpdateFile(
+          path,
+          expected,
+          windows,
+          createHash("sha256").update("old").digest("hex"),
+        ),
+      ).toBe(false);
+      expect(await readFile(path, "utf8")).toBe("new");
+      expect(await readFile(saved, "utf8")).toBe("old");
+    },
+  );
+
+  it("preserves a lock rewritten after ownership proof even when its metadata is unchanged", async () => {
+    const f = await fixture();
+    const lease = (await f.acquire())!;
+    const original = await readFile(f.path, "utf8");
+    const replacement = original.replace(
+      '"schemaVersion":1',
+      '"schemaVersion":2',
+    );
+    expect(replacement).not.toBe(original);
+    const initial = await lstat(f.path, { bigint: true });
+    race.unchangedMetadata = { path: f.path, entry: initial };
+    let observations = 0;
+    race.afterLstat = async (path) => {
+      if (path === f.path && ++observations === 4) {
+        race.afterLstat = undefined;
+        await writeFile(path, replacement);
+      }
+    };
+    await lease.release();
+    expect(observations).toBe(4);
+    expect(await readFile(f.path, "utf8")).toBe(replacement);
+  });
+
+  it("preserves a file without exact expected content proof", async () => {
+    const f = await fixture();
+    const path = join(f.root, "owned.vsix");
+    await writeFile(path, "owned", { mode: 0o600 });
+    const expected = updateFileIdentity(await lstat(path, { bigint: true }));
+    expect(await removeOwnedUpdateFile(path, expected)).toBe(false);
+    expect(
+      await removeOwnedUpdateFile(path, expected, false, "0".repeat(64)),
+    ).toBe(false);
+    expect(await readFile(path, "utf8")).toBe("owned");
+  });
 
   it("recovers a dead preparing owner only with its exact unchanged loaded installation", async () => {
     const f = await fixture();
