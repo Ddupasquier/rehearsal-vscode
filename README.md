@@ -37,7 +37,8 @@ project readiness and local resource status.
 The [complete capability catalog](https://ddupasquier.github.io/rehearsal-db/capabilities/)
 records published versions and verified scope. The
 [public roadmap](https://ddupasquier.github.io/rehearsal-db/roadmap/) separately identifies
-intended, queued and paused work.
+intended, queued and paused work. New database targets and container engines take
+priority over further ORM integrations.
 
 The extension uses your project's Rehearsal CLI. Inspection is read-only; database
 operations and destructive cleanup retain their review and confirmation steps.
