@@ -10,9 +10,10 @@ import {
   stat,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { inspectProject } from "../../src/workspace/inspection/project_snapshot.js";
+import { captureLabAdapterInputs } from "./lab-adapter-fixture.js";
 import { nativeStorageRoot } from "../native/native-development-storage.js";
 import {
   bootstrapProjectDiscovery,
@@ -105,37 +106,65 @@ const bootstrapProfile = async (workspaceRoot: string, workspaceName: string) =>
     },
   });
 
-const main = async (): Promise<void> => {
-  labRoot();
-  await nativeStorageRoot();
-  const artifactArgument = process.argv[2];
-  if (!artifactArgument) {
-    throw new Error(
-      "Pass the exact Rehearsal package artifact: npm run test:lab -- /absolute/path/to/package.tgz",
+export function selectLabVerificationMode(arguments_: readonly string[]) {
+  const [input, ...extra] = arguments_;
+  if (!input || extra.length || !/\.(?:json|tgz)$/u.test(input))
+    throw Error(
+      "Pass one exact prepared fixture .json or legacy package .tgz.",
     );
-  }
-  const artifactPath = resolve(artifactArgument);
+  if (input.endsWith(".json") && !isAbsolute(input))
+    throw Error("Prepared fixture path must be absolute.");
+  return {
+    mode: input.endsWith(".json")
+      ? ("prepared" as const)
+      : ("archive" as const),
+    path: resolve(input),
+  };
+}
+
+export const verifyLabInput = async (
+  arguments_: readonly string[] = process.argv.slice(2),
+  inspect: typeof inspectProject = inspectProject,
+) => {
+  const selected = selectLabVerificationMode(arguments_);
+  // Prepared inputs are already installed and parent-owned; never consult the canonical Lab.
+  if (selected.mode === "archive") labRoot();
+  await nativeStorageRoot();
+  const before =
+    selected.mode === "prepared"
+      ? await captureLabAdapterInputs(
+          selected.path,
+          process.env.REHEARSAL_DEVELOPMENT_ROOT!,
+        )
+      : undefined;
+  const fixture = before?.manifest;
+  const artifactPath = fixture?.artifact.path ?? selected.path;
   if (!(await stat(artifactPath)).isFile()) {
     throw new Error("The Rehearsal package artifact is not a regular file.");
   }
 
-  const temporaryRoot = await mkdtemp(
-    resolve(tmpdir(), "rehearsal-vscode-lab-"),
-  );
+  const temporaryRoot = fixture
+    ? undefined
+    : await mkdtemp(resolve(tmpdir(), "rehearsal-vscode-lab-"));
+  let primary: unknown;
   try {
-    const [postgresqlRoot, libraryRoot] = await Promise.all([
-      copyProject("postgresql", temporaryRoot),
-      copyProject("library", temporaryRoot),
-    ]);
-    await Promise.all([
-      installCandidate(postgresqlRoot, artifactPath),
-      installCandidate(libraryRoot, artifactPath),
-    ]);
+    const [postgresqlRoot, libraryRoot] = fixture
+      ? [fixture.postgresqlRoot, fixture.libraryRoot]
+      : await Promise.all([
+          copyProject("postgresql", temporaryRoot!),
+          copyProject("library", temporaryRoot!),
+        ]);
+    if (!fixture)
+      await Promise.all([
+        installCandidate(postgresqlRoot, artifactPath),
+        installCandidate(libraryRoot, artifactPath),
+      ]);
 
-    const ready = await inspectProject({
+    const ready = await inspect({
       workspaceName: "Test Lab PostgreSQL",
       workspaceRoot: postgresqlRoot,
       trusted: true,
+      ...(fixture ? { configPath: fixture.postgresqlConfigPath } : {}),
       bootstrapDiscovery: await bootstrapProfile(
         postgresqlRoot,
         "Test Lab PostgreSQL",
@@ -150,7 +179,11 @@ const main = async (): Promise<void> => {
         `Expected ready Test Lab project; received ${ready.availability}${failedChecks ? ` (${failedChecks})` : ""}${ready.error ? ` (${ready.error.code}: ${ready.error.message})` : ""}.`,
       );
     }
-    if (!ready.version || ready.baseline?.rowCount !== 10_003) {
+    if (
+      !ready.version ||
+      (fixture && ready.version !== fixture.artifact.version) ||
+      ready.baseline?.rowCount !== 10_003
+    ) {
       throw new Error(
         "The Test Lab overview did not preserve the installed version and safe aggregate baseline count.",
       );
@@ -164,7 +197,11 @@ const main = async (): Promise<void> => {
       );
     }
     if (
-      !ready.packageLocation?.endsWith("node_modules/@rehearsal-db/core") ||
+      ready.packageLocation !==
+        relative(
+          postgresqlRoot,
+          resolve(postgresqlRoot, "node_modules/@rehearsal-db/core"),
+        ) ||
       ready.candidates?.targets.length !== 1
     ) {
       throw new Error(
@@ -183,7 +220,10 @@ const main = async (): Promise<void> => {
         `The Test Lab overview did not consume the structured activity and runtime contracts (activity=${ready.activity?.state ?? "missing"}, targetCount=${String(ready.runtime?.targets.length ?? "missing")}, runtimeState=${ready.runtime?.state ?? "missing"}, targetState=${runtimeTarget?.state ?? "missing"}, runtimeTarget=${runtimeTarget?.runtimeTarget ?? "missing"}, verifiedRuntimeAvailable=${String(runtimeTarget?.verifiedRuntimeAvailable ?? "missing")}).`,
       );
     }
-    if (ready.applicationUrl !== "http://127.0.0.1:5176") {
+    if (
+      ready.applicationUrl !==
+      (fixture?.applicationUrl ?? "http://127.0.0.1:5176")
+    ) {
       throw new Error(
         "The Test Lab overview did not expose the configured loopback application URL.",
       );
@@ -194,7 +234,8 @@ const main = async (): Promise<void> => {
       ready.resources.environments.length !== 1 ||
       ready.resources.environments[0]?.provider !== "postgresql" ||
       ready.resources.environments[0]?.projectId !==
-        "rehearsal-test-lab-postgresql-rehearsal"
+        (fixture?.resourceProjectId ??
+          "rehearsal-test-lab-postgresql-rehearsal")
     ) {
       throw new Error(
         "The Test Lab overview did not consume the ownership-scoped resource inventory.",
@@ -217,7 +258,7 @@ const main = async (): Promise<void> => {
       );
     }
 
-    const newUser = await inspectProject({
+    const newUser = await inspect({
       workspaceName: "Test Lab Library",
       workspaceRoot: libraryRoot,
       trusted: true,
@@ -248,52 +289,86 @@ const main = async (): Promise<void> => {
       );
     }
 
-    console.log(
-      JSON.stringify(
-        {
-          status: "passed",
-          artifact: basename(artifactPath),
-          installedVersion: ready.version,
-          readyProject: {
-            configPath: ready.configPath,
-            packageLocation: ready.packageLocation,
-            targetCount: ready.candidates.targets.length,
-            baselineRows: ready.baseline.rowCount,
-            retainedBaselines: ready.baseline.generations.length,
-            candidateCount: ready.candidates.count,
-            applicationUrl: ready.applicationUrl,
-            activityState: ready.activity.state,
-            runtimeState: ready.runtime.state,
-            runtimeTarget: ready.runtime.targets[0]?.runtimeTarget,
-            verifiedRuntimeAvailable:
-              ready.runtime.targets[0]?.verifiedRuntimeAvailable,
-            resourceEngine: ready.resources.engine.state,
-            resourceTarget: ready.resources.environments[0]?.projectId,
-            dockerDiskPercent: ready.resources.engine.disk?.usedPercent ?? null,
-            discoverySource: ready.discovery.source,
-            detected: ready.discovery.profile.detected.length,
-            suggested: ready.discovery.profile.suggested.length,
-            decisions: ready.discovery.profile.decisions.length,
-          },
-          cleanRoomProject: {
-            availability: newUser.availability,
-            activityState: newUser.activity.state,
-            firstFailedCheck: newUser.readiness.checks[0]?.id,
-            discoverySource: newUser.discovery.source,
-            configurationState: newUser.discovery.profile.configuration.state,
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    return {
+      status: "passed",
+      artifact: fixture
+        ? { sha256: fixture.artifact.sha256, version: fixture.artifact.version }
+        : basename(artifactPath),
+      ...(fixture
+        ? {
+            scope: "prepared-fixture-editor-adapter-only",
+            payloadTrust: fixture.payloadTrust,
+          }
+        : {}),
+      installedVersion: ready.version,
+      readyProject: {
+        configPath: ready.configPath,
+        packageLocation: ready.packageLocation,
+        targetCount: ready.candidates.targets.length,
+        baselineRows: ready.baseline.rowCount,
+        retainedBaselines: ready.baseline.generations.length,
+        candidateCount: ready.candidates.count,
+        applicationUrl: ready.applicationUrl,
+        activityState: ready.activity.state,
+        runtimeState: ready.runtime.state,
+        runtimeTarget: ready.runtime.targets[0]?.runtimeTarget,
+        verifiedRuntimeAvailable:
+          ready.runtime.targets[0]?.verifiedRuntimeAvailable,
+        resourceEngine: ready.resources.engine.state,
+        resourceTarget: ready.resources.environments[0]?.projectId,
+        dockerDiskPercent: ready.resources.engine.disk?.usedPercent ?? null,
+        discoverySource: ready.discovery.source,
+        detected: ready.discovery.profile.detected.length,
+        suggested: ready.discovery.profile.suggested.length,
+        decisions: ready.discovery.profile.decisions.length,
+      },
+      cleanRoomProject: {
+        availability: newUser.availability,
+        activityState: newUser.activity.state,
+        firstFailedCheck: newUser.readiness.checks[0]?.id,
+        discoverySource: newUser.discovery.source,
+        configurationState: newUser.discovery.profile.configuration.state,
+      },
+    };
+  } catch (error) {
+    primary = error;
+    throw error;
   } finally {
-    await makeTemporaryCopyWritable(temporaryRoot);
-    await rm(temporaryRoot, { recursive: true, force: true });
+    if (before) {
+      try {
+        const after = await captureLabAdapterInputs(
+          selected.path,
+          process.env.REHEARSAL_DEVELOPMENT_ROOT!,
+        );
+        if (after.fingerprint !== before.fingerprint)
+          throw Error(
+            "Read-only adapter verification changed reviewed fixture inputs; preserve parent recovery.",
+          );
+      } catch (preservation) {
+        if (primary)
+          throw new AggregateError(
+            [primary, preservation],
+            "Adapter inspection failed and reviewed input preservation is unconfirmed; preserve parent recovery.",
+          );
+        throw preservation;
+      }
+    } else if (temporaryRoot) {
+      await makeTemporaryCopyWritable(temporaryRoot);
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
   }
 };
 
-void main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (require.main === module)
+  void verifyLabInput()
+    .then((report) => console.log(JSON.stringify(report, null, 2)))
+    .catch((error: unknown) => {
+      console.error(
+        process.argv[2]?.endsWith(".json")
+          ? "Prepared Editor adapter verification failed; fixture and runtime remain parent-owned."
+          : error instanceof Error
+            ? error.message
+            : String(error),
+      );
+      process.exitCode = 1;
+    });
