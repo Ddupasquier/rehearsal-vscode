@@ -120,7 +120,11 @@ async function fakeWorkbenchUi(
   snapshots: CdpTarget[][],
   abortAt?: number,
   responseMilliseconds = 0,
-  interaction?: { wrongDestination?: boolean; ignoreFront?: boolean },
+  interaction?: {
+    wrongDestination?: boolean;
+    ignoreFront?: boolean;
+    settingsModal?: "valid" | "missing" | "ambiguous" | "foreign" | "failed";
+  },
 ) {
   let now = 0,
     queries = 0,
@@ -142,6 +146,32 @@ async function fakeWorkbenchUi(
     entered = false,
     pairs = 0,
     destination = "";
+  let modalOpen = false,
+    modalCloses = 0;
+  const modalClose = {
+    getBoundingClientRect: () => ({ width: 20, height: 20 }),
+    getAttribute: (name: string) =>
+      name === "aria-label" ? "Close Modal Editor (Escape)" : null,
+    focus: () => {
+      document.activeElement = modalClose;
+    },
+  };
+  const modal = {
+    getBoundingClientRect: () => ({ width: 100, height: 100 }),
+    querySelectorAll: (selector: string) =>
+      selector === ".settings-editor"
+        ? interaction?.settingsModal === "foreign"
+          ? []
+          : [{ getBoundingClientRect: () => ({ width: 100, height: 100 }) }]
+        : selector ===
+            ".modal-editor-header .modal-editor-action-container .action-label.codicon-close"
+          ? interaction?.settingsModal === "missing"
+            ? []
+            : interaction?.settingsModal === "ambiguous"
+              ? [modalClose, modalClose]
+              : [modalClose]
+          : [],
+  };
   const captures = new Map<number, number>();
   const button = {
     disabled: false,
@@ -162,33 +192,37 @@ async function fakeWorkbenchUi(
     activeElement: undefined,
     hasFocus: () => foreground,
     querySelectorAll: (selector) =>
-      selector === ".notification-list-item" &&
-      warning &&
-      [0, 2].includes(phaseIndex)
-        ? [
-            {
-              textContent: "unverified reservation was preserved",
-              getBoundingClientRect: () => ({ width: 100, height: 100 }),
-              querySelectorAll: () => [button],
-            },
-          ]
-        : ((selector === ".extensions-viewlet" && phaseIndex === 0) ||
-              (selector === ".settings-editor" && phaseIndex === 2)) &&
-            destination
+      selector === ".monaco-modal-editor-block"
+        ? modalOpen
+          ? [modal]
+          : []
+        : selector === ".notification-list-item" &&
+            warning &&
+            [0, 2].includes(phaseIndex)
           ? [
-              renderedSearchPanel(
-                phaseIndex === 0 ? "extensions" : "settings",
-                destination,
-              ),
+              {
+                textContent: "unverified reservation was preserved",
+                getBoundingClientRect: () => ({ width: 100, height: 100 }),
+                querySelectorAll: () => [button],
+              },
             ]
-          : selector === "input,textarea" && destination
+          : ((selector === ".extensions-viewlet" && phaseIndex === 0) ||
+                (selector === ".settings-editor" && phaseIndex === 2)) &&
+              destination
             ? [
-                {
-                  value: "",
-                  getBoundingClientRect: () => ({ width: 100, height: 20 }),
-                },
+                renderedSearchPanel(
+                  phaseIndex === 0 ? "extensions" : "settings",
+                  destination,
+                ),
               ]
-            : [],
+            : selector === "input,textarea" && destination
+              ? [
+                  {
+                    value: "",
+                    getBoundingClientRect: () => ({ width: 100, height: 20 }),
+                  },
+                ]
+              : [],
   };
   let timerId = 0;
   const timers = new Map<number, { end: number; run: () => void }>();
@@ -245,7 +279,15 @@ async function fakeWorkbenchUi(
         }
         if (request.method === "Input.dispatchKeyEvent") {
           const key = request.params;
-          if (key.type === "keyDown")
+          if (document.activeElement === modalClose) {
+            if (key.type === "keyDown")
+              entered = key.key === "Enter" && foreground;
+            else if (key.type === "keyUp" && entered) {
+              modalCloses++;
+              if (interaction.settingsModal !== "failed") modalOpen = false;
+              entered = false;
+            }
+          } else if (key.type === "keyDown")
             entered =
               foreground &&
               document.activeElement === button &&
@@ -269,6 +311,7 @@ async function fakeWorkbenchUi(
               phaseIndex === 0
                 ? "@id:rehearsal-db.rehearsal-db"
                 : "rehearsal.automaticUpdates";
+            if (phaseIndex === 2 && interaction.settingsModal) modalOpen = true;
             if (interaction.wrongDestination)
               destination += " PRIVATE_INPUT_VALUE";
             entered = false;
@@ -350,6 +393,7 @@ async function fakeWorkbenchUi(
                 "/owned/root/ack.json.new",
                 "/owned/root/ack.json",
               ]);
+              if (phaseIndex === 2) expect(modalOpen).toBe(false);
               phaseIndex++;
               warning = true;
               destination = "";
@@ -378,6 +422,7 @@ async function fakeWorkbenchUi(
     diagnostics,
     screenshots,
     pairs: () => pairs,
+    modalCloses: () => modalCloses,
     elapsed: () => now,
     closed: () => closed,
     pending: () => timers.size,
@@ -593,6 +638,33 @@ describe("trusted native updater keyboard actions", () => {
     expect(fixture.diagnostics).toEqual([]);
     expect(fixture.pending()).toBe(0);
   });
+  it("closes only the observed Settings modal through a focused native Enter before acknowledging return", async () => {
+    const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
+      settingsModal: "valid",
+    });
+    const observations = await fixture.run();
+    expect(observations).toHaveLength(4);
+    expect(fixture.modalCloses()).toBe(1);
+    expect(fixture.pairs()).toBe(2);
+    expect(fixture.pending()).toBe(0);
+  });
+  it.each(["missing", "ambiguous", "foreign", "failed"] as const)(
+    "refuses %s Settings modal closure without acknowledging a return",
+    async (kind) => {
+      const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
+        settingsModal: kind,
+      });
+      await expect(fixture.run()).rejects.toThrow();
+      expect(fixture.modalCloses()).toBe(kind === "failed" ? 1 : 0);
+      expect(
+        fixture.screenshots.some((path) =>
+          path.endsWith("returned-settings.png"),
+        ),
+      ).toBe(false);
+      expect(fixture.pending()).toBe(0);
+      if (kind === "failed") expect(fixture.elapsed()).toBe(30000);
+    },
+  );
   it("keeps exact destination proof strict and retains failure screenshot plus fixed state without input text", async () => {
     const fixture = await fakeWorkbenchUi([[page]], undefined, 0, {
       wrongDestination: true,

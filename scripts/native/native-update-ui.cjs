@@ -31,6 +31,10 @@ exports.nativeDestinationProbe = (destination) => {
       : "rehearsal.automaticUpdates";
   return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect(),style=getComputedStyle(node);return rect.width>0&&rect.height>0&&rect.right>0&&rect.bottom>0&&rect.left<innerWidth&&rect.top<innerHeight&&style.display!=='none'&&style.visibility!=='hidden';};const panels=[...document.querySelectorAll(${JSON.stringify(panel)})].filter(visible);const controls=panels.flatMap(node=>[...node.querySelectorAll(${JSON.stringify(search)})]).filter(visible);const lines=controls.flatMap(node=>[...node.querySelectorAll('.view-lines .view-line')]).filter(visible);const matches=lines.filter(node=>node.textContent===${JSON.stringify(query)}).length;return {matched:panels.length===1&&controls.length===1&&lines.length===1&&matches===1,panels:Math.min(panels.length,256),controls:Math.min(controls.length,256),lines:Math.min(lines.length,256),matchingQueries:Math.min(matches,256)};})()`;
 };
+// Pinned Code 1.143 modal editor title action; only dismiss the observed Settings owner.
+exports.settingsModalProbe = (focus = false) => {
+  return `(()=>{const visible=node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};const modals=[...document.querySelectorAll('.monaco-modal-editor-block')].filter(visible);if(!modals.length)return {kind:'tab',focused:false};if(modals.length!==1)return {kind:'invalid',focused:false};const settings=[...modals[0].querySelectorAll('.settings-editor')].filter(visible);const close=[...modals[0].querySelectorAll('.modal-editor-header .modal-editor-action-container .action-label.codicon-close')].filter(node=>visible(node)&&['Close Modal Editor','Close Modal Editor (Escape)'].includes(node.getAttribute('aria-label'))&&node.getAttribute('aria-disabled')!=='true');if(settings.length!==1||close.length!==1)return {kind:'invalid',focused:false};${focus ? "close[0].focus();" : ""}return {kind:'modal',focused:document.hasFocus()&&document.activeElement===close[0]};})()`;
+};
 exports.parseOwnedDevtoolsPort = (value) => {
   assert.ok(typeof value === "string" && value.length < 256);
   const [port, endpoint, ...extra] = value.trim().split("\n");
@@ -205,7 +209,7 @@ exports.driveUpdateUi = async ({
       return result.result.value;
     };
     // Match the maintained Chromium keyboard drivers: Enter carries carriage-return text.
-    const enter = async () => {
+    const enter = async (end) => {
       for (const type of ["keyDown", "keyUp"])
         await send(
           "Input.dispatchKeyEvent",
@@ -218,6 +222,7 @@ exports.driveUpdateUi = async ({
             ...(type === "keyDown" ? { text: "\r", unmodifiedText: "\r" } : {}),
           },
           sessionId,
+          end,
         );
     };
     await send("Page.bringToFront", {}, sessionId);
@@ -260,6 +265,7 @@ exports.driveUpdateUi = async ({
       assert.equal(interactive, true);
       assert.ok(Object.hasOwn(phases, phase.phase));
       const button = phases[phase.phase];
+      let destinationEnd;
       if (button) {
         let dispatched = false;
         try {
@@ -290,6 +296,7 @@ exports.driveUpdateUi = async ({
           dispatched = true;
           const destination =
             button === "Open Extensions" ? "extensions" : "settings";
+          destinationEnd = Date.now() + 30000;
           await wait(
             async (end) =>
               (await evaluate(exports.nativeDestinationProbe(destination), end))
@@ -394,6 +401,30 @@ exports.driveUpdateUi = async ({
       await fs.writeFile(path.join(evidence, `${phase.phase}.png`), bytes, {
         mode: 0o600,
       });
+      if (phase.phase === "blocked-settings") {
+        const modal = await evaluate(
+          exports.settingsModalProbe(),
+          destinationEnd,
+        );
+        assert.ok(modal.kind === "tab" || modal.kind === "modal");
+        if (modal.kind === "modal") {
+          const focused = await evaluate(
+            exports.settingsModalProbe(true),
+            destinationEnd,
+          );
+          assert.equal(focused.kind, "modal");
+          assert.equal(focused.focused, true);
+          await enter(destinationEnd);
+          await wait(
+            (end) =>
+              evaluate(
+                `(()=>{const visible=node=>{const r=node.getBoundingClientRect(),s=getComputedStyle(node);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';};return [...document.querySelectorAll('.monaco-modal-editor-block')].filter(visible).length===0;})()`,
+                end,
+              ),
+            Math.max(0, destinationEnd - Date.now()),
+          );
+        }
+      }
       observations.push({
         phase: phase.phase,
         keyboardAction: button,

@@ -231,6 +231,70 @@ export function assertAutomaticUpdateFinalization(
   assert.equal(value.status, "passed");
   assert.ok((value.checks as unknown[]).length > 0);
 }
+
+/** Persist the exact bound cleanup observation before any guard failure escapes. */
+export async function recordAutomaticUpdateCleanup(input: {
+  evidence: string;
+  mode: "candidate" | "historical-install" | "historical-recovery";
+  candidateSha256: string;
+  loadedVersion: string;
+  vscodeVersion: string;
+  nativeReport: unknown;
+  ui: unknown[];
+  cleanup: Awaited<ReturnType<typeof nativeEditorCleanupForReport>>;
+}) {
+  assert.ok(
+    ["candidate", "historical-install", "historical-recovery"].includes(
+      input.mode,
+    ),
+  );
+  assertAutomaticUpdateReportBinding(input.nativeReport, input);
+  const bytes =
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        scope: "native-updater-cleanup-observation",
+        status: "observed",
+        mode: input.mode,
+        candidateSha256: input.candidateSha256,
+        loadedVersion: input.loadedVersion,
+        vscodeVersion: input.vscodeVersion,
+        nativeReport: input.nativeReport,
+        ui: input.ui,
+        cleanup: input.cleanup,
+      },
+      null,
+      2,
+    ) + "\n";
+  let failure: unknown;
+  // The tracker owns a live mutable observation: snapshot and check it in one turn.
+  try {
+    assert.equal(input.cleanup.cleanupSkippedForRecovery, false);
+    assert.equal(input.cleanup.observation.rootObserved, true);
+    assert.equal(input.cleanup.observation.signalFailed, false);
+    assert.equal(input.cleanup.observation.identityUncertain, false);
+    assert.equal(input.cleanup.observation.observationFailed, false);
+    assert.deepEqual(input.cleanup.observation.remaining, []);
+    assert.deepEqual(input.cleanup.observation.unknown, []);
+    assert.deepEqual(input.cleanup.observation.awaitingReap, []);
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await writeFile(join(input.evidence, `${input.mode}-cleanup.json`), bytes, {
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (retention) {
+    if (failure)
+      throw new AggregateError(
+        [failure, retention],
+        "Native cleanup failed and its bound observation could not be retained.",
+      );
+    throw retention;
+  }
+  if (failure) throw failure;
+}
 async function regular(
   path: string,
   maximum = 8 * 1024 * 1024,
@@ -728,14 +792,16 @@ export async function runAutomaticUpdateAcceptance(
           nativeReport,
           tracker,
         );
-        assert.equal(cleanup.cleanupSkippedForRecovery, false);
-        assert.equal(cleanup.observation.rootObserved, true);
-        assert.equal(cleanup.observation.signalFailed, false);
-        assert.equal(cleanup.observation.identityUncertain, false);
-        assert.equal(cleanup.observation.observationFailed, false);
-        assert.deepEqual(cleanup.observation.remaining, []);
-        assert.deepEqual(cleanup.observation.unknown, []);
-        assert.deepEqual(cleanup.observation.awaitingReap, []);
+        await recordAutomaticUpdateCleanup({
+          evidence,
+          mode,
+          nativeReport,
+          ui: observedUi,
+          cleanup,
+          candidateSha256: get("candidate-sha"),
+          loadedVersion: selected.version,
+          vscodeVersion: get("code-version"),
+        });
         await wait(async () => exited, 15000);
         assertAutomaticUpdateFinalization(nativeReport, {
           mode,
