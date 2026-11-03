@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Make shipped Starter capabilities easier to discover in the README, with links
+  to the complete released-capability catalog and separate public roadmap.
+- Require README and documentation updates with every release, and verify the
+  published pages before marking a release complete.
+
 ## 0.1.27 — Drizzle journal review
 
 - Review explicit PostgreSQL Drizzle Kit 0.31.11 / ORM 0.45.4 / pg 8.23.1 journal identities and format 4 baselines through the public Core contract. Preserve journal order and exact SQL bytes without rewriting migrations.

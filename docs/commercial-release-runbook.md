@@ -23,7 +23,12 @@ Marketplace or paid-launch approval. Do not describe a planned tier as enforced 
 ## Exact-artifact verification and delivery
 
 1. Freeze one reviewed core artifact and one extension commit candidate. Record the
-   selected release route and its separately approved terms.
+   selected release route and its separately approved terms. Prepare capability and
+   roadmap copy before this freeze: update the README summary and compatibility guide
+   where behavior changes, and prepare the matching
+   [suite capability catalog](https://github.com/Ddupasquier/rehearsal-db/blob/main/docs/capabilities.md)
+   and [public roadmap](https://github.com/Ddupasquier/rehearsal-db/blob/main/docs/roadmap.md)
+   changes. Keep candidate additions labelled unreleased until publication is verified.
 2. Run `npm run check` and `npm run commercial:verify`. The latter checks bundled
    documents and metadata, not checkout, legal approval or entitlement behavior.
 3. Run `npm run test:lab -- /absolute/path/to/core.tgz` and complete applicable
@@ -39,10 +44,24 @@ Marketplace or paid-launch approval. Do not describe a planned tier as enforced 
    expiry rights, honest offline/revocation behavior and private issuer-key isolation.
 7. Record extension/core versions, SHA-256 values, supported platforms, limitations and
    acceptance paths. Preserve the tested files and the previous reviewed rollback artifact.
+   **README and documentation updates are required release deliverables.** Review the
+   README, compatibility/installation guides, capability catalog, roadmap and release
+   notes with every release, including releases whose feature scope is unchanged.
+   Each shipped claim must match the exact qualified artifact; queued, planned and
+   paused work retains its own status.
 8. Have the owner review the diff, exact evidence, release copy, license/privacy/support
    documents and the chosen route's additional requirements.
 9. Only after separate delivery approval, commit and distribute or publish the exact
    tested file. Marketplace and paid-launch authorization remain distinct.
+   Verify actual availability and artifact identity in the selected public channel,
+   then coordinate updates to the catalog's published version, verification date,
+   release links and the [public installation guide](https://github.com/Ddupasquier/rehearsal-db/blob/main/docs/vscode.md).
+   A GitHub-only release stays distinct from Marketplace availability. Publish these
+   availability updates as documentation changes; never rebuild the frozen VSIX to
+   refresh its README. Update only the component and scope actually released.
+   **Do not mark the release complete until its documentation updates are published
+   and the public README, capability, installation and roadmap pages are verified.**
+   Publication of the VSIX alone does not complete the release.
 
 Never rebuild after approval and present new bytes under an old checksum. Never put
 signing keys, payment secrets, customer details or license records in Git.
