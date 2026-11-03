@@ -6,17 +6,38 @@
 
 <p align="center"><strong>Test database changes before applying them.</strong></p>
 
+<p align="center">
+  <a href="https://marketplace.visualstudio.com/items?itemName=rehearsal-db.rehearsal-db"><img alt="VS Code Marketplace version" src="https://img.shields.io/visual-studio-marketplace/v/rehearsal-db.rehearsal-db?style=flat-square&label=Starter&labelColor=1c2a34&color=287b5c" /></a>
+</p>
+
+<p align="center">
+  <a href="https://ddupasquier.github.io/rehearsal-db/capabilities/">Released capabilities</a> ·
+  <a href="https://ddupasquier.github.io/rehearsal-db/roadmap/">Public roadmap</a> ·
+  <a href="#get-started">Get started</a> ·
+  <a href="docs/extension-guide.md">Detailed guide</a>
+</p>
+
 Rehearsal helps you review migrations, test them against a disposable local database,
 and understand the result—all from VS Code. The dashboard shows your next step,
 project readiness and local resource status.
 
-## What you can do
+## Available in free Starter
 
-- **Review migrations:** browse pending changes and optional static warnings before running them.
-- **Rehearse locally:** test changes against a baseline and review failures and reports.
-- **Manage environments:** open, verify, stop or reset project sandboxes with reviewed actions.
-- **Control resources:** inspect containers and disk usage, then review cleanup before confirming it.
-- **Configure your project:** review detected settings and an exact diff before saving changes.
+| Your next step              | What you can do today                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Understand your project** | Review detected settings, compatibility and readiness, then follow [guided setup](docs/extension-guide.md#project-setup-and-runtime-review).                                         |
+| **Review migrations**       | Filter SQL, Prisma and Drizzle migrations, record review, inspect [static warnings](docs/extension-guide.md#static-migration-insights) and open exact SQL inputs.                    |
+| **Rehearse changes**        | Run a full rehearsal, apply approved migrations without a reset, verify databases or open a [hands-on application session](docs/extension-guide.md#what-the-workbench-shows).        |
+| **Keep useful evidence**    | Browse baselines and privacy, Storage and data-shape evidence; compare summaries and [export redacted reports](docs/extension-guide.md#what-the-workbench-shows).                    |
+| **Recover and cancel**      | Follow persistent failure explanations, open unchanged attempted inputs and track or cancel [editor-owned operations](docs/extension-guide.md#what-the-workbench-shows).             |
+| **Manage resources**        | Inspect ownership and available usage metrics, review protection settings and [preview cleanup](docs/extension-guide.md#project-setup-and-runtime-review).                           |
+| **Shut down the VM**        | Review affected workloads, confirm [supported VM shutdown](docs/extension-guide.md#vm-shutdown), then return with **Back to Rehearsal**.                                             |
+| **Configure and update**    | Review exact configuration diffs, save display profiles and choose independent [extension/Core update preferences](docs/extension-guide.md#keep-the-canonical-installation-current). |
+
+The [complete capability catalog](https://ddupasquier.github.io/rehearsal-db/capabilities/)
+records published versions and verified scope. The
+[public roadmap](https://ddupasquier.github.io/rehearsal-db/roadmap/) separately identifies
+intended, queued and paused work.
 
 The extension uses your project's Rehearsal CLI. Inspection is read-only; database
 operations and destructive cleanup retain their review and confirmation steps.
@@ -58,10 +79,10 @@ Silicon, Colima 0.10.3, VZ and the default profile** with a compatible core. It 
 the shared VM, including other projects' workloads, while preserving data volumes.
 Use **Stop project services** when you only want to stop this project's services.
 
-Extension **0.1.27** targets **Core 2.2.0** for pinned PostgreSQL Drizzle journal
-review, format 4 baselines and exact SQL navigation. See the
-[compatibility and limits](docs/extension-guide.md#core-compatibility-and-upgrades);
-source availability does not establish publication or qualify a rebuilt artifact.
+Prisma and Drizzle review use pinned PostgreSQL SDKs and a compatible Core release.
+See the [compatibility guide](docs/extension-guide.md#core-compatibility-and-upgrades)
+for exact versions and qualification limits. Published availability is recorded in the
+[capability catalog](https://ddupasquier.github.io/rehearsal-db/capabilities/).
 
 ## Free Starter, optional updates
 
