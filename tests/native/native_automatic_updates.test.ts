@@ -64,6 +64,237 @@ const manifest = {
   version: "0.1.27",
 };
 
+type CdpTarget = { targetId: string; type: string; url: string };
+async function fakeWorkbenchUi(
+  snapshots: CdpTarget[][],
+  abortAt?: number,
+  responseMilliseconds = 0,
+) {
+  let now = 0,
+    queries = 0,
+    closed = false;
+  const controller = new AbortController();
+  const requests: { method: string; params: { targetId?: string } }[] = [];
+  const diagnostics: Record<string, unknown>[] = [];
+  let timerId = 0;
+  const timers = new Map<number, { end: number; run: () => void }>();
+  class Socket {
+    static OPEN = 1;
+    readyState = 1;
+    private listeners = new Map<string, (event: { data: string }) => void>();
+    constructor(address: string) {
+      expect(address).toBe("ws://127.0.0.1:12345/devtools/browser/owned-123");
+    }
+    addEventListener(
+      name: string,
+      callback: (event: { data: string }) => void,
+    ) {
+      this.listeners.set(name, callback);
+    }
+    close() {
+      this.readyState = 3;
+      closed = true;
+    }
+    send(input: string) {
+      const request = JSON.parse(input);
+      requests.push(request);
+      const result =
+        request.method === "Target.getTargets"
+          ? {
+              targetInfos: snapshots[Math.min(queries++, snapshots.length - 1)],
+            }
+          : request.method === "Target.attachToTarget"
+            ? { sessionId: "owned-session" }
+            : { result: { value: false } };
+      queueMicrotask(() => {
+        const end = now + responseMilliseconds;
+        const due = [...timers.entries()].sort(
+          (a, b) => a[1].end - b[1].end,
+        )[0];
+        if (due && due[1].end <= end) {
+          now = due[1].end;
+          timers.delete(due[0]);
+          due[1].run();
+          return;
+        }
+        now = end;
+        this.listeners.get("message")?.({
+          data: JSON.stringify({ id: request.id, result }),
+        });
+      });
+    }
+  }
+  const api = {
+    driveUpdateUi: undefined as unknown as (
+      input: unknown,
+    ) => Promise<unknown[]>,
+  };
+  const source = await readFile(
+    resolve(__dirname, "../../scripts/native/native-update-ui.cjs"),
+    "utf8",
+  );
+  runInNewContext(source, {
+    exports: api,
+    WebSocket: Socket,
+    Buffer,
+    URL,
+    Date: { now: () => now },
+    setTimeout: (run: () => void, milliseconds: number) => {
+      const id = ++timerId;
+      timers.set(id, { end: now + milliseconds, run });
+      return id;
+    },
+    clearTimeout: (id: number) => timers.delete(id),
+    require: (name: string) =>
+      name === "node:fs/promises"
+        ? {
+            readFile: async (path: string) =>
+              path.endsWith("DevToolsActivePort")
+                ? "12345\n/devtools/browser/owned-123\n"
+                : JSON.stringify({
+                    phase: "done",
+                    nonce: "11111111-1111-1111-1111-111111111111",
+                  }),
+            writeFile: async (
+              path: string,
+              bytes: string,
+              options: unknown,
+            ) => {
+              expect(path).toBe("/owned/evidence/workbench-readiness.json");
+              expect(options).toEqual({ mode: 0o600, flag: "wx" });
+              diagnostics.push(JSON.parse(bytes));
+            },
+          }
+        : name === "node:timers/promises"
+          ? {
+              setTimeout: async (milliseconds: number) => {
+                now += milliseconds;
+                if (abortAt !== undefined && now >= abortAt) controller.abort();
+              },
+            }
+          : nativeRequire(name),
+  });
+  return {
+    run: () =>
+      api.driveUpdateUi({
+        profile: "/owned/profile",
+        root: "/owned/root",
+        evidence: "/owned/evidence",
+        signal: controller.signal,
+        interactive: false,
+      }),
+    requests,
+    diagnostics,
+    elapsed: () => now,
+    closed: () => closed,
+    pending: () => timers.size,
+  };
+}
+
+describe("owned workbench CDP readiness", () => {
+  const page = {
+    targetId: "owned-page",
+    type: "page",
+    url: "vscode-file://vscode-app/owned/Code/resources/app/out/vs/code/electron-browser/workbench/workbench.html",
+  };
+  it("waits for a delayed actual CDP target before attaching once", async () => {
+    const fixture = await fakeWorkbenchUi([[], [], [page]]);
+    await expect(fixture.run()).resolves.toEqual([]);
+    expect(fixture.elapsed()).toBe(200);
+    expect(
+      fixture.requests.filter((row) => row.method === "Target.attachToTarget"),
+    ).toEqual([
+      expect.objectContaining({
+        params: { targetId: "owned-page", flatten: true },
+      }),
+    ]);
+    expect(fixture.diagnostics).toEqual([]);
+    expect(fixture.closed()).toBe(true);
+  });
+  it.each([
+    { targets: [page, { ...page, targetId: "ambiguous-page" }] },
+    {
+      targets: [
+        { ...page, url: "https://foreign.test/workbench?PRIVATE_TARGET_VALUE" },
+      ],
+    },
+  ])(
+    "refuses ambiguous or foreign workbenches without attaching",
+    async ({ targets }) => {
+      const fixture = await fakeWorkbenchUi([targets]);
+      await expect(fixture.run()).rejects.toThrow();
+      expect(
+        fixture.requests.some((row) => row.method === "Target.attachToTarget"),
+      ).toBe(false);
+      expect(fixture.elapsed()).toBe(0);
+      expect(fixture.diagnostics).toHaveLength(1);
+      expect(JSON.stringify(fixture.diagnostics)).not.toContain(
+        "PRIVATE_TARGET_VALUE",
+      );
+      expect(fixture.closed()).toBe(true);
+    },
+  );
+  it("retains only bounded target-shape diagnostics at the existing thirty-second deadline", async () => {
+    const fixture = await fakeWorkbenchUi([
+      [
+        {
+          ...page,
+          url: "vscode-file://vscode-app/PRIVATE_TARGET_VALUE/other.html",
+        },
+      ],
+    ]);
+    await expect(fixture.run()).rejects.toThrow(
+      "Owned update UI observation incomplete",
+    );
+    expect(fixture.elapsed()).toBe(30000);
+    expect(
+      fixture.requests.some((row) => row.method === "Target.attachToTarget"),
+    ).toBe(false);
+    expect(fixture.diagnostics).toEqual([
+      {
+        status: "failed",
+        scope: "owned-workbench-readiness",
+        targets: 1,
+        pages: 1,
+        nativePages: 1,
+        workbenches: 0,
+        foreignWorkbenches: 0,
+      },
+    ]);
+    expect(JSON.stringify(fixture.diagnostics)).not.toContain(
+      "PRIVATE_TARGET_VALUE",
+    );
+    expect(fixture.closed()).toBe(true);
+  });
+  it("honors cancellation while no workbench is ready and never attaches later", async () => {
+    const fixture = await fakeWorkbenchUi([[], [page]], 100);
+    await expect(fixture.run()).rejects.toThrow();
+    expect(fixture.elapsed()).toBe(100);
+    expect(
+      fixture.requests.filter((row) => row.method === "Target.getTargets"),
+    ).toHaveLength(1);
+    expect(
+      fixture.requests.some((row) => row.method === "Target.attachToTarget"),
+    ).toBe(false);
+    expect(fixture.closed()).toBe(true);
+  });
+  it("bounds delayed CDP replies by the same readiness deadline and clears pending requests", async () => {
+    const fixture = await fakeWorkbenchUi([[]], undefined, 10000);
+    await expect(fixture.run()).rejects.toThrow(
+      "Owned update CDP response incomplete",
+    );
+    expect(fixture.elapsed()).toBe(30000);
+    expect(
+      fixture.requests.filter((row) => row.method === "Target.getTargets"),
+    ).toHaveLength(3);
+    expect(
+      fixture.requests.some((row) => row.method === "Target.attachToTarget"),
+    ).toBe(false);
+    expect(fixture.pending()).toBe(0);
+    expect(fixture.closed()).toBe(true);
+  });
+});
+
 describe("native updater preflight memory refusal", () => {
   it.each([2, 4, 0, NaN])(
     "keeps preflight pressure %s fail-closed with accurate no-allocation guidance",

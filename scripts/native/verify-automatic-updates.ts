@@ -435,9 +435,12 @@ export async function runAutomaticUpdateAcceptance(
   );
   const futureVersion = `${parts[0]}.${parts[1]}.${parts[2]! + 1}`;
   // Allocation happens only after exact inputs, safe archive contents and runtime are verified.
+  const reportRoot = join(repository, "test-results");
+  await mkdir(reportRoot, { recursive: true, mode: 0o700 });
+  assert.equal(await realpath(reportRoot), reportRoot);
   const root = await createNativeTemporaryDirectory("au-");
   const evidence = await import("node:fs/promises").then(({ mkdtemp }) =>
-    mkdtemp(join(repository, "test-results/automatic-updates-231.")),
+    mkdtemp(join(reportRoot, "automatic-updates-231.")),
   );
   let complete = false;
   const report: Record<string, unknown> = {

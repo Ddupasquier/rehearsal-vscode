@@ -116,6 +116,8 @@ The three sequential native hosts keep their evidence separate:
   does not claim that VS Code actually crashed during the preceding install.
 
 Reports and silent screenshots go under `test-results/automatic-updates-231.*`.
+After preflight, the verifier creates its report parent in a fresh checkout and
+refuses a redirected path; no prior test run or temporary-directory fallback is needed.
 Every installed payload file must match its selected frozen VSIX, allowing only Code's
 manifest installation metadata. Clean owned processes may be retired after validated
 finalization; fixtures are removed only after the complete verifier succeeds. Dirty,

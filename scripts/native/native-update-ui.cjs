@@ -34,9 +34,11 @@ exports.driveUpdateUi = async ({
     const end = Date.now() + milliseconds;
     do {
       signal.throwIfAborted();
-      const value = await check();
+      const value = await check(end);
       if (value) return value;
-      await delay(100, undefined, { signal });
+      const remaining = end - Date.now();
+      if (remaining <= 0) break;
+      await delay(Math.min(100, remaining), undefined, { signal });
     } while (Date.now() < end);
     throw Error("Owned update UI observation incomplete.");
   };
@@ -71,17 +73,24 @@ exports.driveUpdateUi = async ({
     if (message.error) request.reject(Error("Owned update CDP refused."));
     else request.resolve(message.result);
   });
-  const send = (method, params = {}, sessionId) =>
+  const send = (method, params = {}, sessionId, end = Date.now() + 15000) =>
     new Promise((resolve, reject) => {
-      if (signal.aborted || socket.readyState !== WebSocket.OPEN) {
+      if (
+        signal.aborted ||
+        socket.readyState !== WebSocket.OPEN ||
+        end <= Date.now()
+      ) {
         reject(Error("Owned update CDP unavailable."));
         return;
       }
       const id = ++next;
-      const timer = setTimeout(() => {
-        pending.delete(id);
-        reject(Error("Owned update CDP response incomplete."));
-      }, 15000);
+      const timer = setTimeout(
+        () => {
+          pending.delete(id);
+          reject(Error("Owned update CDP response incomplete."));
+        },
+        Math.min(15000, end - Date.now()),
+      );
       pending.set(id, { resolve, reject, timer });
       socket.send(
         JSON.stringify({
@@ -94,13 +103,79 @@ exports.driveUpdateUi = async ({
     });
   try {
     await wait(() => socket.readyState === WebSocket.OPEN);
-    const targets = await send("Target.getTargets");
-    const pages = targets.targetInfos.filter(
-      (item) => item.type === "page" && item.url.includes("workbench"),
-    );
-    assert.equal(pages.length, 1, "Exactly one owned workbench is required.");
+    let shape = {
+      targets: 0,
+      pages: 0,
+      nativePages: 0,
+      workbenches: 0,
+      foreignWorkbenches: 0,
+    };
+    let page;
+    try {
+      page = await wait(async (end) => {
+        const targets = await send("Target.getTargets", {}, undefined, end);
+        assert.ok(
+          Array.isArray(targets.targetInfos) &&
+            targets.targetInfos.length <= 256,
+        );
+        const pages = targets.targetInfos.filter(
+          (item) => item?.type === "page",
+        );
+        assert.ok(
+          pages.every(
+            (item) => typeof item.url === "string" && item.url.length <= 8192,
+          ),
+        );
+        const workbenches = pages.filter((item) =>
+          item.url.includes("workbench"),
+        );
+        const native = (url) => /^vscode-file:\/\/vscode-app\//u.test(url);
+        const foreign = workbenches.filter(
+          (item) =>
+            !native(item.url) ||
+            !new URL(item.url).pathname.endsWith(
+              "/out/vs/code/electron-browser/workbench/workbench.html",
+            ),
+        );
+        shape = {
+          targets: targets.targetInfos.length,
+          pages: pages.length,
+          nativePages: pages.filter((item) => native(item.url)).length,
+          workbenches: workbenches.length,
+          foreignWorkbenches: foreign.length,
+        };
+        assert.equal(
+          foreign.length,
+          0,
+          "An unverified workbench target was refused.",
+        );
+        assert.ok(
+          workbenches.length <= 1,
+          "Exactly one owned workbench is required.",
+        );
+        return workbenches[0] ?? null;
+      });
+    } catch (error) {
+      try {
+        await fs.writeFile(
+          path.join(evidence, "workbench-readiness.json"),
+          JSON.stringify({
+            status: "failed",
+            scope: "owned-workbench-readiness",
+            ...shape,
+          }) + "\n",
+          { mode: 0o600, flag: "wx" },
+        );
+      } catch (diagnostic) {
+        throw new AggregateError(
+          [error, diagnostic],
+          "Owned workbench readiness failed; its bounded diagnostic could not be retained.",
+        );
+      }
+      throw error;
+    }
     const { sessionId } = await send("Target.attachToTarget", {
-      targetId: pages[0].targetId,
+      targetId: page.targetId,
       flatten: true,
     });
     const evaluate = async (expression) => {
