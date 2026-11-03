@@ -15,6 +15,22 @@ exports.notificationButtonProbe = (label) => {
   assert.ok(["Open Extensions", "Update Settings"].includes(label));
   return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect();return rect.width>0&&rect.height>0;};const items=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));const buttons=items.flatMap(item=>[...item.querySelectorAll('button,[role=button],.monaco-button')]).filter(node=>visible(node)&&!node.disabled&&(node.getAttribute('aria-label')||node.textContent).trim()===${JSON.stringify(label)});if(buttons.length!==1)return false;buttons[0].focus();return document.hasFocus()&&document.activeElement===buttons[0];})()`;
 };
+// Pinned Code 1.143.0: both native searches use SuggestEnabledInput/CodeEditorWidget.
+// Its rendered view-line carries the full query; the input proxy need not do so.
+exports.nativeDestinationProbe = (destination) => {
+  assert.ok(["extensions", "settings"].includes(destination));
+  const panel =
+    destination === "extensions" ? ".extensions-viewlet" : ".settings-editor";
+  const search =
+    destination === "extensions"
+      ? ".extensions-search-container .monaco-editor"
+      : ".settings-header .search-container .monaco-editor";
+  const query =
+    destination === "extensions"
+      ? "@id:rehearsal-db.rehearsal-db"
+      : "rehearsal.automaticUpdates";
+  return `(()=>{const visible=node=>{const rect=node.getBoundingClientRect(),style=getComputedStyle(node);return rect.width>0&&rect.height>0&&rect.right>0&&rect.bottom>0&&rect.left<innerWidth&&rect.top<innerHeight&&style.display!=='none'&&style.visibility!=='hidden';};const panels=[...document.querySelectorAll(${JSON.stringify(panel)})].filter(visible);const controls=panels.flatMap(node=>[...node.querySelectorAll(${JSON.stringify(search)})]).filter(visible);const lines=controls.flatMap(node=>[...node.querySelectorAll('.view-lines .view-line')]).filter(visible);const matches=lines.filter(node=>node.textContent===${JSON.stringify(query)}).length;return {matched:panels.length===1&&controls.length===1&&lines.length===1&&matches===1,panels:Math.min(panels.length,256),controls:Math.min(controls.length,256),lines:Math.min(lines.length,256),matchingQueries:Math.min(matches,256)};})()`;
+};
 exports.parseOwnedDevtoolsPort = (value) => {
   assert.ok(typeof value === "string" && value.length < 256);
   const [port, endpoint, ...extra] = value.trim().split("\n");
@@ -272,15 +288,12 @@ exports.driveUpdateUi = async ({
           );
           await enter();
           dispatched = true;
-          const expected =
-            button === "Open Extensions"
-              ? "@id:rehearsal-db.rehearsal-db"
-              : "rehearsal.automaticUpdates";
-          await wait((end) =>
-            evaluate(
-              `(()=>[...document.querySelectorAll('input,textarea')].some(node=>node.value===${JSON.stringify(expected)}&&node.getBoundingClientRect().width>0))()`,
-              end,
-            ),
+          const destination =
+            button === "Open Extensions" ? "extensions" : "settings";
+          await wait(
+            async (end) =>
+              (await evaluate(exports.nativeDestinationProbe(destination), end))
+                .matched === true,
           );
         } catch (error) {
           const end = Date.now() + 2000,
@@ -290,6 +303,24 @@ exports.driveUpdateUi = async ({
               button === "Open Extensions"
                 ? "@id:rehearsal-db.rehearsal-db"
                 : "rehearsal.automaticUpdates";
+            const destination = await evaluate(
+              exports.nativeDestinationProbe(
+                button === "Open Extensions" ? "extensions" : "settings",
+              ),
+              end,
+            );
+            assert.ok(
+              typeof destination.matched === "boolean" &&
+                [
+                  destination.panels,
+                  destination.controls,
+                  destination.lines,
+                  destination.matchingQueries,
+                ].every(
+                  (value) =>
+                    Number.isSafeInteger(value) && value >= 0 && value <= 256,
+                ),
+            );
             const state = await evaluate(
               `(()=>{const visible=node=>node.getBoundingClientRect().width>0;const inputs=[...document.querySelectorAll('input,textarea')].filter(visible);const warnings=[...document.querySelectorAll('.notification-list-item')].filter(node=>visible(node)&&node.textContent.includes('unverified reservation was preserved'));return {pageFocused:document.hasFocus(),warningVisible:warnings.length>0,actionFocused:warnings.some(node=>[...node.querySelectorAll('button,[role=button],.monaco-button')].some(button=>button===document.activeElement&&(button.getAttribute('aria-label')||button.textContent).trim()===${JSON.stringify(button)})),visibleInputs:Math.min(inputs.length,256),matchingInputs:Math.min(inputs.filter(node=>node.value===${JSON.stringify(expected)}).length,256)};})()`,
               end,
@@ -317,6 +348,11 @@ exports.driveUpdateUi = async ({
                 actionFocused: state.actionFocused,
                 visibleInputs: state.visibleInputs,
                 matchingInputs: state.matchingInputs,
+                nativeDestinationMatched: destination.matched,
+                nativePanels: destination.panels,
+                nativeSearchControls: destination.controls,
+                nativeQueryLines: destination.lines,
+                matchingNativeQueries: destination.matchingQueries,
               }) + "\n",
               { mode: 0o600, flag: "wx" },
             );

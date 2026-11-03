@@ -36,6 +36,7 @@ import {
 const nativeRequire = createRequire(__filename);
 const ui = nativeRequire("../../scripts/native/native-update-ui.cjs") as {
   notificationButtonProbe(label: string): string;
+  nativeDestinationProbe(destination: "extensions" | "settings"): string;
   parseOwnedDevtoolsPort(value: unknown): string;
 };
 const fixtureEnvironment = nativeRequire(
@@ -65,6 +66,56 @@ const manifest = {
 };
 
 type CdpTarget = { targetId: string; type: string; url: string };
+const nativeViewport = {
+  innerWidth: 1280,
+  innerHeight: 900,
+  getComputedStyle: (node: { hidden?: boolean }) => ({
+    display: "block",
+    visibility: node.hidden ? "hidden" : "visible",
+  }),
+};
+function renderedSearchPanel(
+  destination: "extensions" | "settings",
+  query: string,
+  offscreen = false,
+  hidden = false,
+) {
+  const bounds = () => ({
+    left: offscreen ? 1400 : 20,
+    right: offscreen ? 1660 : 280,
+    top: 50,
+    bottom: 72,
+    width: 260,
+    height: 22,
+  });
+  // SuggestEnabledInput's Monaco text model renders token spans, independently
+  // of its empty EditContext/textarea input proxy (pinned Code 1.143.0).
+  const tokens = [
+    { textContent: query.slice(0, 4) },
+    { textContent: query.slice(4) },
+  ];
+  const line = {
+    get textContent() {
+      return tokens.map((token) => token.textContent).join("");
+    },
+    getBoundingClientRect: bounds,
+  };
+  const editor = {
+    getBoundingClientRect: bounds,
+    querySelectorAll: (selector: string) =>
+      selector === ".view-lines .view-line" ? [line] : [],
+  };
+  const search =
+    destination === "extensions"
+      ? ".extensions-search-container .monaco-editor"
+      : ".settings-header .search-container .monaco-editor";
+  return {
+    hidden,
+    getBoundingClientRect: bounds,
+    querySelectorAll: (selector: string) =>
+      selector === search ? [editor] : [],
+  };
+}
 async function fakeWorkbenchUi(
   snapshots: CdpTarget[][],
   abortAt?: number,
@@ -121,14 +172,23 @@ async function fakeWorkbenchUi(
               querySelectorAll: () => [button],
             },
           ]
-        : selector === "input,textarea" && destination
+        : ((selector === ".extensions-viewlet" && phaseIndex === 0) ||
+              (selector === ".settings-editor" && phaseIndex === 2)) &&
+            destination
           ? [
-              {
-                value: destination,
-                getBoundingClientRect: () => ({ width: 100, height: 20 }),
-              },
+              renderedSearchPanel(
+                phaseIndex === 0 ? "extensions" : "settings",
+                destination,
+              ),
             ]
-          : [],
+          : selector === "input,textarea" && destination
+            ? [
+                {
+                  value: "",
+                  getBoundingClientRect: () => ({ width: 100, height: 20 }),
+                },
+              ]
+            : [],
   };
   let timerId = 0;
   const timers = new Map<number, { end: number; run: () => void }>();
@@ -166,7 +226,10 @@ async function fakeWorkbenchUi(
         if (request.method === "Runtime.evaluate")
           result = {
             result: {
-              value: runInNewContext(request.params.expression, { document }),
+              value: runInNewContext(request.params.expression, {
+                document,
+                ...nativeViewport,
+              }),
             },
           };
         if (request.method === "Page.captureScreenshot") {
@@ -425,6 +488,84 @@ describe("owned workbench CDP readiness", () => {
   });
 });
 
+describe("pinned native Monaco search oracle", () => {
+  for (const destination of ["extensions", "settings"] as const) {
+    const selector =
+      destination === "extensions" ? ".extensions-viewlet" : ".settings-editor";
+    const query =
+      destination === "extensions"
+        ? "@id:rehearsal-db.rehearsal-db"
+        : "rehearsal.automaticUpdates";
+    it(`reads the exact rendered ${destination} query even when its native input proxy is empty`, () => {
+      const proxy = { value: "" };
+      const panel = renderedSearchPanel(destination, query);
+      const document = {
+        querySelectorAll: (requested: string) =>
+          requested === selector
+            ? [panel]
+            : requested === "input,textarea"
+              ? [proxy]
+              : [],
+      };
+      expect(proxy.value).not.toBe(query);
+      expect(
+        runInNewContext(ui.nativeDestinationProbe(destination), {
+          document,
+          ...nativeViewport,
+        }),
+      ).toEqual({
+        matched: true,
+        panels: 1,
+        controls: 1,
+        lines: 1,
+        matchingQueries: 1,
+      });
+    });
+    it.each([
+      "wrong-query",
+      "leading-space",
+      "trailing-space",
+      "offscreen",
+      "hidden",
+      "foreign-panel",
+      "ambiguous-panel",
+    ])(
+      `refuses %s ${destination} evidence rather than matching another page input`,
+      (kind) => {
+        const actual =
+          kind === "wrong-query"
+            ? `${query}.other`
+            : kind === "leading-space"
+              ? ` ${query}`
+              : kind === "trailing-space"
+                ? `${query} `
+                : query;
+        const panel = renderedSearchPanel(
+          destination,
+          actual,
+          kind === "offscreen",
+          kind === "hidden",
+        );
+        const document = {
+          querySelectorAll: (requested: string) =>
+            requested === selector && kind !== "foreign-panel"
+              ? kind === "ambiguous-panel"
+                ? [panel, panel]
+                : [panel]
+              : requested === "input,textarea"
+                ? [{ value: query }]
+                : [],
+        };
+        const observed = runInNewContext(
+          ui.nativeDestinationProbe(destination),
+          { document, ...nativeViewport },
+        );
+        expect(observed.matched).toBe(false);
+      },
+    );
+  }
+});
+
 describe("trusted native updater keyboard actions", () => {
   const page = {
     targetId: "owned-page",
@@ -471,6 +612,11 @@ describe("trusted native updater keyboard actions", () => {
         actionFocused: false,
         visibleInputs: 1,
         matchingInputs: 0,
+        nativeDestinationMatched: false,
+        nativePanels: 1,
+        nativeSearchControls: 1,
+        nativeQueryLines: 1,
+        matchingNativeQueries: 0,
       },
     ]);
     expect(JSON.stringify(fixture.diagnostics)).not.toContain(
