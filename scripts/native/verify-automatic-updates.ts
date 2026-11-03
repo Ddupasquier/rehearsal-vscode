@@ -396,6 +396,67 @@ async function wait<T>(
   } while (Date.now() < deadline);
   throw Error("Owned native updater acceptance incomplete; retain recovery.");
 }
+/** Serialize the existing ancestry sampler and retain its first failure before cleanup. */
+export function automaticUpdateObserver(observe: () => Promise<unknown>) {
+  let pending: Promise<void> | undefined;
+  let stopped = false,
+    failed = false,
+    failure: unknown;
+  return {
+    poll() {
+      if (stopped || pending || failed) return;
+      pending = Promise.resolve()
+        .then(observe)
+        .then(
+          () => {},
+          (error) => {
+            failed = true;
+            failure = error;
+          },
+        )
+        .finally(() => {
+          pending = undefined;
+        });
+    },
+    async stop() {
+      stopped = true;
+      await pending;
+      if (failed) throw failure;
+    },
+  };
+}
+
+/** Allow the driver's native close to finish before existing ownership-scoped fallback. */
+export async function cleanupAutomaticUpdateNativeHost(
+  report: unknown,
+  tracker: Parameters<typeof nativeEditorCleanupForReport>[1],
+  isClosed: () => boolean,
+  options: {
+    signal?: AbortSignal;
+    stopObserving?: () => Promise<void>;
+    now?: () => number;
+    pause?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  } = {},
+) {
+  if (!recovery.shouldRetainNativeEditor(report)) {
+    const now = options.now ?? (() => performance.now());
+    const pause =
+      options.pause ??
+      ((milliseconds, signal) =>
+        delay(milliseconds, undefined, signal ? { signal } : {}));
+    const deadline = now() + 15000;
+    while (!isClosed()) {
+      options.signal?.throwIfAborted();
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
+      await pause(Math.min(100, remaining), options.signal);
+    }
+    options.signal?.throwIfAborted();
+  }
+  await options.stopObserving?.();
+  return nativeEditorCleanupForReport(report, tracker);
+}
+
 export async function runAutomaticUpdateAcceptance(
   values: readonly string[] = process.argv.slice(2),
 ) {
@@ -727,8 +788,7 @@ export async function runAutomaticUpdateAcceptance(
       let exited = false,
         exitCode: number | null = null,
         exitSignal: NodeJS.Signals | null = null,
-        childError: Error | undefined,
-        observing = false;
+        childError: Error | undefined;
       child.once("error", (error) => {
         childError = error;
       });
@@ -738,14 +798,12 @@ export async function runAutomaticUpdateAcceptance(
         exitSignal = signal;
       });
       await tracker.observe();
-      const observation = setInterval(() => {
-        if (!observing) {
-          observing = true;
-          void tracker.observe().finally(() => {
-            observing = false;
-          });
-        }
-      }, 200);
+      const observer = automaticUpdateObserver(() => tracker.observe());
+      const observation = setInterval(() => observer.poll(), 200);
+      const stopObserving = async () => {
+        clearInterval(observation);
+        await observer.stop();
+      };
       observation.unref();
       const abort = new AbortController();
       const uiPromise = ui.driveUpdateUi({
@@ -788,9 +846,16 @@ export async function runAutomaticUpdateAcceptance(
         });
         if (nativeReport.status !== "passed") abort.abort();
         const observedUi = await uiDone;
-        const cleanup = await nativeEditorCleanupForReport(
+        const cleanup = await cleanupAutomaticUpdateNativeHost(
           nativeReport,
           tracker,
+          () => exited,
+          {
+            stopObserving,
+            ...(nativeReport.status === "passed"
+              ? { signal: abort.signal }
+              : {}),
+          },
         );
         await recordAutomaticUpdateCleanup({
           evidence,
@@ -802,7 +867,10 @@ export async function runAutomaticUpdateAcceptance(
           loadedVersion: selected.version,
           vscodeVersion: get("code-version"),
         });
-        await wait(async () => exited, 15000);
+        assert.ok(
+          exited,
+          "Owned native updater host closure remains unconfirmed.",
+        );
         assertAutomaticUpdateFinalization(nativeReport, {
           mode,
           candidateSha256: get("candidate-sha"),
@@ -842,7 +910,9 @@ export async function runAutomaticUpdateAcceptance(
         lanes.push(evidenceRow);
         return evidenceRow;
       } finally {
-        clearInterval(observation);
+        // Any existing primary failure remains primary; observer failure already
+        // refuses cleanup at the explicit stop/drain boundary above.
+        await stopObserving().catch(() => {});
         abort.abort();
         await uiDone;
         // Unknown/dirty/missing finalization never grants signalling or fixture deletion.
