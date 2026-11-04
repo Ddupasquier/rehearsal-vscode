@@ -92,11 +92,12 @@ export interface CandidatesData {
 }
 
 export interface BaselineData {
-  readonly formatVersion?: 1 | 2 | 3 | 4;
+  readonly formatVersion?: 1 | 2 | 3 | 4 | 6;
+  readonly engine?: SqliteBaselineEngine;
   readonly nativeMigrations?: NativeMigrationToolBinding;
   readonly generationId: string;
   readonly createdAt: string | null;
-  readonly migrationCutoff: MigrationCutoff;
+  readonly migrationCutoff: MigrationCutoff | null;
   readonly tableCount: number;
   readonly rowCount: number;
   readonly migrationCount: number;
@@ -111,14 +112,23 @@ export interface BaselineData {
     readonly generationId: string;
     readonly createdAt: string | null;
     readonly active: boolean;
-    readonly formatVersion: 1 | 2 | 3 | 4;
+    readonly formatVersion: 1 | 2 | 3 | 4 | 6;
+    readonly engine?: SqliteBaselineEngine;
     readonly nativeMigrations?: NativeMigrationToolBinding;
     readonly rowCount: number;
     readonly tableCount: number;
     readonly migrationCount: number;
-    readonly migrationCutoff: MigrationCutoff;
-    readonly storageAssetCount: number;
+    readonly migrationCutoff: MigrationCutoff | null;
+    readonly storageAssetCount?: number;
   }[];
+}
+
+export interface SqliteBaselineEngine {
+  readonly family: "sqlite";
+  readonly service: "sqlite";
+  readonly version: "3.53.4";
+  readonly driverVersion: 1;
+  readonly codecVersion: 1;
 }
 
 export interface ExplainData {
@@ -168,14 +178,15 @@ export type RuntimeState = "running" | "stopped" | "unavailable" | "unhealthy";
 
 export type RuntimeStateReason =
   | "container_engine_unavailable"
+  | "sqlite_backend_unavailable"
   | "runtime_not_running"
   | "health_check_failed";
 
 export interface RuntimeStatusSnapshot {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly state: RuntimeState;
   readonly reason: RuntimeStateReason | null;
-  readonly runtimeTarget: "supabase" | "postgresql";
+  readonly runtimeTarget: "supabase" | "postgresql" | "sqlite";
   readonly projectId: string;
   /** Null means the installed core predates this additive status field. */
   readonly verifiedRuntimeAvailable: boolean | null;
@@ -187,6 +198,7 @@ export interface RuntimeStatusSnapshot {
         readonly port: number;
         readonly database: string;
       }
+    | { readonly kind: "embedded-file"; readonly bindingSha256: string }
     | null;
   readonly baselineGenerationId: string;
   readonly candidateSha256: string;
@@ -737,11 +749,38 @@ const parseRuntimeEndpoint = (
       database: value.database,
     };
   }
+  if (value.kind === "embedded-file" && target === "sqlite") {
+    if (
+      Object.keys(value).sort().join(",") !== "bindingSha256,kind" ||
+      typeof value.bindingSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(value.bindingSha256)
+    )
+      throw new ContractError("Runtime SQLite file binding is invalid.");
+    return { kind: "embedded-file", bindingSha256: value.bindingSha256 };
+  }
   throw new ContractError("Runtime endpoint does not match its target.");
 };
 
-export const parseRuntimeStatus = (value: unknown): RuntimeStatusSnapshot => {
-  if (!isRecord(value) || value.schemaVersion !== 1) {
+export interface RuntimeContractOptions {
+  /** Set only after the installed package and target-scoped report both negotiate SQLite. */
+  readonly sqliteTarget?: boolean;
+}
+
+export const parseRuntimeStatus = (
+  value: unknown,
+  options: RuntimeContractOptions = {},
+): RuntimeStatusSnapshot => {
+  if (
+    !isRecord(value) ||
+    !(
+      (value.schemaVersion === 1 &&
+        (value.runtimeTarget === "postgresql" ||
+          value.runtimeTarget === "supabase")) ||
+      (options.sqliteTarget === true &&
+        value.schemaVersion === 2 &&
+        value.runtimeTarget === "sqlite")
+    )
+  ) {
     throw new ContractError("Runtime status schema is unsupported.");
   }
   const states = ["running", "stopped", "unavailable", "unhealthy"] as const;
@@ -755,21 +794,26 @@ export const parseRuntimeStatus = (value: unknown): RuntimeStatusSnapshot => {
       : state === "stopped"
         ? "runtime_not_running"
         : state === "unavailable"
-          ? "container_engine_unavailable"
+          ? value.runtimeTarget === "sqlite"
+            ? "sqlite_backend_unavailable"
+            : "container_engine_unavailable"
           : "health_check_failed";
   if (value.reason !== expectedReason) {
     throw new ContractError("Runtime state and reason do not match.");
   }
   if (
     value.runtimeTarget !== "supabase" &&
-    value.runtimeTarget !== "postgresql"
+    value.runtimeTarget !== "postgresql" &&
+    value.runtimeTarget !== "sqlite"
   ) {
     throw new ContractError("Runtime target is unsupported.");
   }
   requireString(value.projectId, "runtimeStatus.projectId");
   if (
-    value.verifiedRuntimeAvailable !== undefined &&
-    typeof value.verifiedRuntimeAvailable !== "boolean"
+    (value.schemaVersion === 2 &&
+      typeof value.verifiedRuntimeAvailable !== "boolean") ||
+    (value.verifiedRuntimeAvailable !== undefined &&
+      typeof value.verifiedRuntimeAvailable !== "boolean")
   ) {
     throw new ContractError(
       "Runtime verified-runtime availability is invalid.",
@@ -788,7 +832,7 @@ export const parseRuntimeStatus = (value: unknown): RuntimeStatusSnapshot => {
     throw new ContractError("Runtime endpoint does not match its state.");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: value.schemaVersion,
     state,
     reason: expectedReason,
     runtimeTarget: value.runtimeTarget,
@@ -807,7 +851,10 @@ export const parseRuntimeStatus = (value: unknown): RuntimeStatusSnapshot => {
   };
 };
 
-const parseStatusTarget = (value: unknown): StatusTargetData => {
+const parseStatusTarget = (
+  value: unknown,
+  options: RuntimeContractOptions,
+): StatusTargetData => {
   if (!isRecord(value) || value.action !== "status") {
     throw new ContractError("Runtime status target is invalid.");
   }
@@ -816,11 +863,14 @@ const parseStatusTarget = (value: unknown): StatusTargetData => {
     action: "status",
     target: value.target,
     durationMs: requireFiniteNumber(value.durationMs, "status.durationMs"),
-    runtimeStatus: parseRuntimeStatus(value.runtimeStatus),
+    runtimeStatus: parseRuntimeStatus(value.runtimeStatus, options),
   };
 };
 
-export const parseStatusData = (value: unknown): StatusData => {
+export const parseStatusData = (
+  value: unknown,
+  options: RuntimeContractOptions = {},
+): StatusData => {
   if (!isRecord(value) || value.action !== "status") {
     throw new ContractError("Runtime status result is invalid.");
   }
@@ -831,10 +881,10 @@ export const parseStatusData = (value: unknown): StatusData => {
     return {
       action: "status",
       durationMs: requireFiniteNumber(value.durationMs, "status.durationMs"),
-      targets: value.targets.map(parseStatusTarget),
+      targets: value.targets.map((entry) => parseStatusTarget(entry, options)),
     };
   }
-  return parseStatusTarget(value);
+  return parseStatusTarget(value, options);
 };
 
 export const parseActivityData = (value: unknown): ActivityData => {

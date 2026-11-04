@@ -25,6 +25,29 @@ checks. Historical identities, versions, publication status and resource blocker
 belong to their recorded observations, not the current release. They do not certify
 later artifacts or unexercised native/provider/accessibility behavior.
 
+## SQLite target contract — unreleased
+
+The editor requires both `sqliteTarget: 1` and `databaseCapabilities: 1` from the
+installed package before accepting SQLite status schema 2 or baseline format 6.
+The closed `database capabilities --json` report binds the primary engine/backend
+and the fixed feature set; package flags alone never enable an operation.
+Format 6 additionally binds SQLite 3.53.4, driver 1 and codec 1. Its empty history
+uses an explicit null cutoff. Existing PostgreSQL/Supabase schemas remain unchanged.
+
+SQLite inspection skips container inventory and PostgreSQL plan/Insights queries.
+Configuration presentation uses Core's reported SQLite target and hides inapplicable
+PostgreSQL/Supabase suggestions; static discovery keeps its unvalidated provenance.
+Its cleanup capability applies only to owned-file discard; container cleanup,
+stale-container stopping and VM controls stay unavailable, even with stale inventory.
+Its embedded-file endpoint carries only an opaque binding digest. Readiness is
+measured in the actual Electron inspection runtime, with no automatic Node selection.
+An unavailable binding stays NOT READY; a ready report must agree with the baseline,
+candidate and status identities. Enable/pause describes the cooperative owned-file
+lifecycle, not an assertion that an arbitrary application connection started or stopped.
+
+This source contract still needs exact installed-pair/native qualification before
+publication. Pure parser and snapshot tests do not establish native editor support.
+
 ## 0.1.25 / core 2.0.0 release candidate
 
 Source Starter **0.1.25** targets core **2.0.0**. This is release preparation, not a

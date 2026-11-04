@@ -2,6 +2,10 @@ import type { ProjectSnapshot } from "../inspection/project_snapshot.js";
 import { engineShutdownAvailable } from "../../runtime/engines/engine_lifecycle_view.js";
 import { isPublishedVersion } from "../../updates/advisory/update_advisory.js";
 import type { TerminalShellFamily } from "../../runtime/transport/platform_runtime.js";
+import {
+  supportsDatabaseFeature,
+  type DatabaseFeature,
+} from "../../runtime/reports/database_capabilities.js";
 
 export type WorkspaceActionId =
   | "refresh"
@@ -179,10 +183,50 @@ const hasVerifiedRuntime = (snapshot: ProjectSnapshot): boolean =>
     ),
   );
 
+export const isSqliteProject = (snapshot: ProjectSnapshot): boolean =>
+  snapshot.databaseCapabilities?.engine.family === "sqlite" ||
+  snapshot.environment?.target === "sqlite" ||
+  snapshot.runtime?.targets.some(
+    (target) => target.runtimeTarget === "sqlite",
+  ) === true;
+
 export const workspaceActionPlan = (
   snapshot: ProjectSnapshot,
   id: WorkspaceActionId,
 ): WorkspaceActionPlan | null => {
+  const sqlite = isSqliteProject(snapshot);
+  if (sqlite) {
+    if (["identityConnect", "cleanupPreview", "shutdownVm"].includes(id))
+      return null;
+    const required: Partial<
+      Record<WorkspaceActionId, readonly DatabaseFeature[]>
+    > = {
+      runRehearsal: [
+        "restore",
+        "schema",
+        "migrations",
+        "privacy",
+        "recovery",
+        "persistence",
+      ],
+      migrate: ["migrations", "recovery"],
+      openSandbox: ["applicationConnection", "persistence"],
+      startRuntime: ["applicationConnection", "persistence"],
+      verify: ["schema", "migrations"],
+      reset: ["restore", "recovery"],
+      stopRuntime: ["persistence"],
+      discardRuntime: ["cleanup"],
+    };
+    if (
+      required[id] &&
+      (snapshot.databaseCapabilities?.availability !== "available" ||
+        required[id]!.some(
+          (feature) =>
+            !supportsDatabaseFeature(snapshot.databaseCapabilities, feature),
+        ))
+    )
+      return null;
+  }
   if (
     snapshot.error?.code === "platform_unsupported" &&
     !["refresh", "documentation", "showOutput", "checkUpdates"].includes(id)
@@ -364,13 +408,18 @@ export const workspaceActionPlan = (
       return terminalPlan(
         snapshot,
         id,
-        "Start runtime",
-        "Start only this project's verified local database targets.",
+        sqlite ? "Enable SQLite sandbox" : "Start runtime",
+        sqlite
+          ? "Enable the verified owned database file for this project's application. No database daemon starts."
+          : "Start only this project's verified local database targets.",
         ["start"],
         {
-          title: "Start this project's local runtime?",
-          detail:
-            "This may start Docker-compatible local services, but it will not stop or modify another project's runtime.",
+          title: sqlite
+            ? "Enable this project's SQLite sandbox?"
+            : "Start this project's local runtime?",
+          detail: sqlite
+            ? "Rehearsal revalidates its owned SQLite file. The original application database remains unchanged."
+            : "This may start Docker-compatible local services, but it will not stop or modify another project's runtime.",
           confirmLabel: "Start Runtime",
         },
       );
@@ -407,13 +456,16 @@ export const workspaceActionPlan = (
       return terminalPlan(
         snapshot,
         id,
-        "Stop project services",
-        "Stop only this project's local Rehearsal services while preserving their data.",
+        sqlite ? "Pause SQLite sandbox" : "Stop project services",
+        sqlite
+          ? "Close Rehearsal-owned handles and preserve the SQLite file. Other applications keep control of their connections."
+          : "Stop only this project's local Rehearsal services while preserving their data.",
         ["stop"],
         {
           title: "Stop this project's Rehearsal runtime?",
-          detail:
-            "The disposable database and Storage data are preserved for the next start.",
+          detail: sqlite
+            ? "The owned SQLite file and sandbox edits are preserved. This does not stop other applications or close their SQLite connections."
+            : "The disposable database and Storage data are preserved for the next start.",
           confirmLabel: "Stop Runtime",
         },
       );
@@ -428,8 +480,9 @@ export const workspaceActionPlan = (
         ["discard"],
         {
           title: "Discard this disposable runtime?",
-          detail:
-            "This deletes this project's disposable database and Storage volumes, including all current sandbox edits. The immutable baseline remains available to recreate the sandbox. Other projects' containers and volumes are preserved. The shared engine is preserved unless your explicitly enabled owner-only Colima policy verifies that Rehearsal started that exact idle engine boot and no containers are running.",
+          detail: sqlite
+            ? "This removes only the verified owned SQLite sandbox and its owned sidecars, including current sandbox edits. The original application database, immutable baseline and unrelated files remain intact. Close applications using the sandbox before continuing."
+            : "This deletes this project's disposable database and Storage volumes, including all current sandbox edits. The immutable baseline remains available to recreate the sandbox. Other projects' containers and volumes are preserved. The shared engine is preserved unless your explicitly enabled owner-only Colima policy verifies that Rehearsal started that exact idle engine boot and no containers are running.",
           confirmLabel: "Discard Runtime",
           destructive: true,
         },

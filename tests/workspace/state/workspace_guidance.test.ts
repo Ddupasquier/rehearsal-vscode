@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectSnapshot } from "../../../src/workspace/inspection/project_snapshot.js";
 import type { RecentOperationProgress } from "../../../src/runtime/operations/operation_progress.js";
+import { sqliteCapabilities } from "../../runtime/reports/database_capabilities_fixture.js";
 import {
   journeyFor,
   sandboxSessionPresentation,
@@ -212,4 +213,18 @@ describe("dashboard guidance", () => {
     );
     expect(sandboxSessionPresentation(null)).toBeNull();
   });
+});
+
+it("describes SQLite file readiness independently from application connections", () => {
+  const current = snapshot({
+    runtime: runtime(true, true),
+    databaseCapabilities: sqliteCapabilities(),
+  });
+  expect(statusFor(current)).toMatchObject({
+    label: "SQLite sandbox file enabled",
+    detail: expect.stringContaining("does not prove an application connection"),
+  });
+  expect(statusFor({ ...current, runtime: runtime(true, false) }).label).toBe(
+    "SQLite sandbox file paused",
+  );
 });

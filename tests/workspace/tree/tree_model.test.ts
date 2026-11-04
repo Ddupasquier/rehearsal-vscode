@@ -4,8 +4,34 @@ import {
   overviewItems,
 } from "../../../src/workspace/tree/tree_model.js";
 import type { ProjectSnapshot } from "../../../src/workspace/inspection/project_snapshot.js";
+import { sqliteCapabilities } from "../../runtime/reports/database_capabilities_fixture.js";
 
 describe("tree model", () => {
+  it("labels SQLite file readiness without exposing its private binding", () => {
+    const snapshot: ProjectSnapshot = {
+      workspaceName: "SQLite",
+      workspaceRoot: "/workspace",
+      availability: "ready",
+      databaseCapabilities: sqliteCapabilities(),
+      runtime: {
+        state: "running",
+        targets: [
+          {
+            name: "primary",
+            runtimeTarget: "sqlite",
+            state: "running",
+            reason: null,
+            verifiedRuntimeAvailable: true,
+            endpoint: { kind: "embedded-file", bindingSha256: "e".repeat(64) },
+          },
+        ],
+      },
+    };
+    const item = overviewItems(snapshot).find(({ id }) => id === "runtime")!;
+    expect(item.description).toBe("file enabled");
+    expect(item.tooltip).toContain("owned SQLite file");
+    expect(item.tooltip).not.toContain("e".repeat(64));
+  });
   it("directs native Windows to WSL without offering a runtime action", () => {
     const items = overviewItems({
       workspaceName: "Windows project",

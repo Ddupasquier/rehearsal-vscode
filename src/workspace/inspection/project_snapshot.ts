@@ -3,6 +3,10 @@ import type {
   DrizzleMigrationIdentity,
 } from "../../migrations/native/native_migration_contract.js";
 import type { NativeMigrationToolBinding } from "../../migrations/review/migration_review.js";
+import {
+  parseDatabaseCapabilities,
+  type DatabaseCapabilities,
+} from "../../runtime/reports/database_capabilities.js";
 import { realpath } from "node:fs/promises";
 import {
   parseEngineLifecycleStatus,
@@ -20,6 +24,7 @@ import type {
   ResultEnvelope,
   StatusData,
   VersionResult,
+  SqliteBaselineEngine,
 } from "../../contracts.js";
 import {
   ContractError,
@@ -95,6 +100,7 @@ export interface ProjectSnapshot {
   };
   readonly configPath?: string;
   readonly configurationMetadata?: ConfigurationMetadata;
+  readonly databaseCapabilities?: DatabaseCapabilities;
   readonly activity?: ActivityData;
   readonly readiness?: {
     readonly state: "READY" | "NOT READY";
@@ -109,9 +115,10 @@ export interface ProjectSnapshot {
     readonly rowCount: number;
     readonly migrationCount: number;
     readonly verification: string;
-    readonly formatVersion?: 1 | 2 | 3 | 4;
+    readonly formatVersion?: 1 | 2 | 3 | 4 | 6;
+    readonly engine?: SqliteBaselineEngine;
     readonly nativeMigrations?: NativeMigrationToolBinding;
-    readonly migrationCutoff?: MigrationCutoff;
+    readonly migrationCutoff?: MigrationCutoff | null;
     readonly migrationHistorySha256?: string | null;
     readonly sourceSchemaSha256?: string | null;
     readonly sanitizationPolicySha256?: string;
@@ -122,12 +129,13 @@ export interface ProjectSnapshot {
       readonly generationId: string;
       readonly createdAt: string | null;
       readonly active: boolean;
-      readonly formatVersion: 1 | 2 | 3 | 4;
+      readonly formatVersion: 1 | 2 | 3 | 4 | 6;
+      readonly engine?: SqliteBaselineEngine;
       readonly nativeMigrations?: NativeMigrationToolBinding;
       readonly rowCount: number;
       readonly tableCount: number;
       readonly migrationCount: number;
-      readonly migrationCutoff: MigrationCutoff;
+      readonly migrationCutoff: MigrationCutoff | null;
       readonly storageAssetCount?: number;
     }[];
   };
@@ -164,10 +172,11 @@ export interface ProjectSnapshot {
       readonly state: "running" | "stopped" | "unavailable" | "unhealthy";
       readonly reason:
         | "container_engine_unavailable"
+        | "sqlite_backend_unavailable"
         | "runtime_not_running"
         | "health_check_failed"
         | null;
-      readonly runtimeTarget: "supabase" | "postgresql";
+      readonly runtimeTarget: "supabase" | "postgresql" | "sqlite";
       readonly baselineGenerationId?: string;
       readonly candidateSha256?: string;
       readonly verifiedRuntimeAvailable: boolean | null;
@@ -179,6 +188,7 @@ export interface ProjectSnapshot {
             readonly port: number;
             readonly database: string;
           }
+        | { readonly kind: "embedded-file"; readonly bindingSha256: string }
         | null;
     }[];
   };
@@ -186,13 +196,13 @@ export interface ProjectSnapshot {
   readonly authenticationReview?: AuthenticationReview;
   readonly reviewTargets?: readonly {
     readonly name: string;
-    readonly provider: "supabase" | "postgresql";
+    readonly provider: "supabase" | "postgresql" | "sqlite";
     readonly configurationSha256: string | null;
     readonly baseline: {
       readonly generationId: string;
-      readonly formatVersion: 1 | 2 | 3 | 4 | null;
+      readonly formatVersion: 1 | 2 | 3 | 4 | 6 | null;
       readonly nativeMigrations?: NativeMigrationToolBinding;
-      readonly migrationCutoff: MigrationCutoff;
+      readonly migrationCutoff: MigrationCutoff | null;
       readonly migrationHistorySha256: string | null;
       readonly sourceSchemaSha256?: string | null;
       readonly sanitizationPolicySha256: string | null;
@@ -253,6 +263,8 @@ export interface SnapshotClient {
       readonly migrationInsightsSchema?: 1 | null;
       readonly configurationReviewSchema?: 1 | null;
       readonly engineLifecycleSchema?: 1 | null;
+      readonly sqliteTargetSchema?: 1 | null;
+      readonly databaseCapabilitiesSchema?: 1 | null;
     }
   >;
   command<Data>(options: {
@@ -293,6 +305,8 @@ export const processSnapshotClient: SnapshotClient = {
         migrationInsightsSchema: resolved.migrationInsightsSchema,
         configurationReviewSchema: resolved.configurationReviewSchema,
         engineLifecycleSchema: resolved.engineLifecycleSchema,
+        sqliteTargetSchema: resolved.sqliteTargetSchema ?? null,
+        databaseCapabilitiesSchema: resolved.databaseCapabilitiesSchema ?? null,
       };
     }
     const version = await runVersion(workspaceRoot, {
@@ -310,6 +324,8 @@ export const processSnapshotClient: SnapshotClient = {
       migrationInsightsSchema: resolved.migrationInsightsSchema,
       configurationReviewSchema: resolved.configurationReviewSchema,
       engineLifecycleSchema: resolved.engineLifecycleSchema,
+      sqliteTargetSchema: resolved.sqliteTargetSchema ?? null,
+      databaseCapabilitiesSchema: resolved.databaseCapabilitiesSchema ?? null,
     };
   },
   command: (options) => runRehearsalJson(options),
@@ -409,6 +425,7 @@ const failureSnapshot = (
   partial: Pick<ProjectSnapshot, "activity" | "readiness"> & {
     readonly discovery?: ProjectSnapshot["discovery"];
     readonly engineLifecycle?: EngineLifecycleObservation;
+    readonly databaseCapabilities?: DatabaseCapabilities;
   } = {},
 ): ProjectSnapshot => {
   const observed = observedVersion
@@ -430,6 +447,9 @@ const failureSnapshot = (
       }
     : {};
   const partialEvidence = {
+    ...(partial.databaseCapabilities
+      ? { databaseCapabilities: partial.databaseCapabilities }
+      : {}),
     ...(partial.engineLifecycle
       ? { engineLifecycle: partial.engineLifecycle }
       : {}),
@@ -576,7 +596,8 @@ export const inspectProject = async ({
       ? { source: "bootstrap", profile: bootstrapDiscovery }
       : undefined;
   let observedReadiness: ProjectSnapshot["readiness"] | undefined;
-  let observedEngine: EngineLifecycleObservation | undefined;
+  let observedEngine: EngineLifecycleObservation = { state: "unsupported" };
+  let observedDatabaseCapabilities: DatabaseCapabilities | undefined;
   try {
     const version = await client.version(workspaceRoot, signal, timeoutMs);
     observedVersion = version;
@@ -628,35 +649,41 @@ export const inspectProject = async ({
       ...(signal ? { signal } : {}),
       ...(timeoutMs ? { timeoutMs } : {}),
     };
-    observedEngine = { state: "unsupported" };
-    if (version.engineLifecycleSchema === 1) {
-      observedEngine = { state: "unavailable" };
-      let engineVersion: string | undefined;
-      try {
-        const execution = await client.command<unknown>({
-          workspaceRoot,
-          command: ["engine", "status"],
-          expectedCommand: "engine status",
-          ...(signal ? { signal } : {}),
-          ...(timeoutMs ? { timeoutMs } : {}),
-        });
-        engineVersion = execution.result.rehearsalVersion;
-        requireRehearsalVersion(version.version, [execution.result]);
-        if (execution.result.status !== "success")
-          throw new ContractError("Engine inspection was not successful.");
-        observedEngine = {
-          state: "available",
-          report: parseEngineLifecycleStatus(execution.result.data),
-        };
-      } catch (error) {
-        if (
-          signal?.aborted ||
-          (engineVersion !== undefined && engineVersion !== version.version)
-        )
-          throw error;
+    const negotiatesDatabase = version.databaseCapabilitiesSchema === 1;
+    const inspectEngine = async (): Promise<void> => {
+      observedEngine = { state: "unsupported" };
+      if (version.engineLifecycleSchema === 1) {
         observedEngine = { state: "unavailable" };
+        let engineVersion: string | undefined;
+        try {
+          const execution = await client.command<unknown>({
+            workspaceRoot,
+            command: ["engine", "status"],
+            expectedCommand: "engine status",
+            ...(signal ? { signal } : {}),
+            ...(timeoutMs ? { timeoutMs } : {}),
+          });
+          engineVersion = execution.result.rehearsalVersion;
+          requireRehearsalVersion(version.version, [execution.result]);
+          if (execution.result.status !== "success")
+            throw new ContractError("Engine inspection was not successful.");
+          observedEngine = {
+            state: "available",
+            report: parseEngineLifecycleStatus(execution.result.data),
+          };
+        } catch (error) {
+          if (
+            signal?.aborted ||
+            (engineVersion !== undefined && engineVersion !== version.version)
+          )
+            throw error;
+          observedEngine = { state: "unavailable" };
+        }
       }
-    }
+    };
+    // Legacy clients keep their established inspection order. New target-aware
+    // packages must identify the backend before any optional Docker inspection.
+    if (!negotiatesDatabase) await inspectEngine();
     const activityExecution = await client.command<ActivityData>({
       ...activityOptions,
       command: ["activity"],
@@ -677,6 +704,35 @@ export const inspectProject = async ({
         engineLifecycle: observedEngine,
       });
     }
+    if (negotiatesDatabase) {
+      const execution = await client.command<unknown>({
+        ...common,
+        command: ["database", "capabilities"],
+        expectedCommand: "database capabilities",
+      });
+      requireRehearsalVersion(version.version, [execution.result]);
+      if (execution.result.status !== "success")
+        throw new ContractError(
+          "Database capability inspection did not succeed.",
+        );
+      observedDatabaseCapabilities = parseDatabaseCapabilities(
+        execution.result.data,
+      );
+      if (observedDatabaseCapabilities.target !== "primary")
+        throw new ContractError(
+          "Database capabilities do not identify the primary target.",
+        );
+      if (observedDatabaseCapabilities.engine.family === "sqlite") {
+        if (version.sqliteTargetSchema !== 1)
+          throw new ContractError(
+            "Core does not advertise the SQLite target contract. Update Core and refresh.",
+          );
+        observedEngine = { state: "unsupported" };
+      } else await inspectEngine();
+    }
+    const sqliteTarget =
+      observedDatabaseCapabilities?.engine.family === "sqlite";
+    const runtimeContract = { sqliteTarget };
     const discovery =
       version.projectDiscoverySchema === 1
         ? parseProjectDiscoveryData(
@@ -753,7 +809,11 @@ export const inspectProject = async ({
           // An unavailable configuration review must not hide the actionable Doctor result.
         }
       }
-      if (configurationMetadata && version.resourceInventorySchema === 1) {
+      if (
+        !sqliteTarget &&
+        configurationMetadata &&
+        version.resourceInventorySchema === 1
+      ) {
         try {
           // Inventory needs validated configuration, not a baseline or running engine.
           // A detailed endpoint refusal is not authority to bypass its local-engine guard.
@@ -809,6 +869,9 @@ export const inspectProject = async ({
         engineLifecycle: observedEngine,
         ...discoverySnapshot,
         readiness,
+        ...(observedDatabaseCapabilities
+          ? { databaseCapabilities: observedDatabaseCapabilities }
+          : {}),
         ...(configurationMetadata
           ? { configurationMetadata, configPath: configurationMetadata.path }
           : {}),
@@ -845,7 +908,7 @@ export const inspectProject = async ({
         command: ["status"],
         expectedCommand: "status",
       }),
-      version.resourceInventorySchema === 1
+      !sqliteTarget && version.resourceInventorySchema === 1
         ? client.command<ResourceInventoryData>({
             ...common,
             command: [
@@ -859,7 +922,7 @@ export const inspectProject = async ({
                 : "environments",
           })
         : Promise.resolve(null),
-      version.migrationReviewSchema === 1
+      !sqliteTarget && version.migrationReviewSchema === 1
         ? client.command<unknown>({
             ...common,
             command: ["inspect", "plan"],
@@ -873,6 +936,7 @@ export const inspectProject = async ({
             expectedCommand: "configuration",
           })
         : Promise.resolve(null),
+      !sqliteTarget &&
       version.migrationReviewSchema === 1 &&
       version.migrationInsightsSchema === 1
         ? client
@@ -919,8 +983,29 @@ export const inspectProject = async ({
         engineLifecycle: observedEngine,
       });
     }
-    const statusData = parseStatusData(status.result.data);
-    const reviewTargets = parseReviewTargets(explain.result.data);
+    const statusData = parseStatusData(status.result.data, runtimeContract);
+    const reviewTargets = parseReviewTargets(
+      explain.result.data,
+      runtimeContract,
+    );
+    if (
+      observedDatabaseCapabilities &&
+      explain.result.data.environment.target !==
+        observedDatabaseCapabilities.engine.service
+    )
+      throw new ContractError(
+        "Database capability and execution target identities disagree.",
+      );
+    if (
+      sqliteTarget &&
+      (reviewTargets.length !== 1 ||
+        reviewTargets[0]?.provider !== "sqlite" ||
+        observedDatabaseCapabilities?.availability !== "available" ||
+        observedDatabaseCapabilities.engine.version !== "3.53.4")
+    )
+      throw new ContractError(
+        "SQLite readiness is not backed by one qualified primary target.",
+      );
     const parsedMigrationReview = migrationReview
       ? parseMigrationReviewPlan(migrationReview.result.data)
       : undefined;
@@ -1001,6 +1086,7 @@ export const inspectProject = async ({
         data: parseBaselineInspectionData(
           baselineExecution.result.data,
           reviewTargets[0]!.provider,
+          runtimeContract,
         ),
       },
     };
@@ -1035,6 +1121,39 @@ export const inspectProject = async ({
       );
     const statusTargets =
       "targets" in statusData ? statusData.targets : [statusData];
+    if (sqliteTarget) {
+      const candidateData = candidates.result.data;
+      const target = candidateData.targets?.[0];
+      const runtime = statusTargets[0];
+      if (
+        statusTargets.length !== 1 ||
+        runtime?.target !== "primary" ||
+        runtime.runtimeStatus.runtimeTarget !== "sqlite" ||
+        candidateData.targets?.length !== 1 ||
+        target?.name !== "primary" ||
+        candidateData.baselineGenerationId !==
+          baseline.result.data.generationId ||
+        runtime.runtimeStatus.baselineGenerationId !==
+          baseline.result.data.generationId ||
+        runtime.runtimeStatus.candidateSha256 !== target.candidateSha256 ||
+        !/^[a-f0-9]{64}$/u.test(candidateData.candidateSha256) ||
+        !Number.isSafeInteger(candidateData.candidateCount) ||
+        candidateData.candidateCount < 0 ||
+        candidateData.candidateCount !== candidateData.candidates?.length ||
+        target.candidateCount !== candidateData.candidateCount ||
+        target.candidates?.length !== candidateData.candidateCount ||
+        baseline.result.data.engine?.version !==
+          observedDatabaseCapabilities?.engine.version ||
+        Object.keys(explain.result.data.environment.ports ?? {}).length !== 0 ||
+        (explain.result.data.environment.authenticationProviders?.length ??
+          0) !== 0 ||
+        (explain.result.data.environment.authenticationCallback ?? null) !==
+          null
+      )
+        throw new ContractError(
+          "SQLite baseline, candidate, status or environment identities disagree. Refresh the project.",
+        );
+    }
     const states = new Set(
       statusTargets.map(({ runtimeStatus }) => runtimeStatus.state),
     );
@@ -1057,6 +1176,9 @@ export const inspectProject = async ({
         explain.result.data.config.path,
       ),
       readiness,
+      ...(observedDatabaseCapabilities
+        ? { databaseCapabilities: observedDatabaseCapabilities }
+        : {}),
       baseline: {
         generationId: baseline.result.data.generationId,
         createdAt: baseline.result.data.createdAt,
@@ -1067,6 +1189,9 @@ export const inspectProject = async ({
         ...(baseline.result.data.shape !== undefined ? { shape } : {}),
         ...(baseline.result.data.formatVersion
           ? { formatVersion: baseline.result.data.formatVersion }
+          : {}),
+        ...(baseline.result.data.engine
+          ? { engine: baseline.result.data.engine }
           : {}),
         ...(baseline.result.data.nativeMigrations
           ? { nativeMigrations: baseline.result.data.nativeMigrations }
@@ -1099,6 +1224,9 @@ export const inspectProject = async ({
             createdAt: baseline.result.data.createdAt,
             active: true,
             formatVersion: baseline.result.data.formatVersion ?? 1,
+            ...(baseline.result.data.engine
+              ? { engine: baseline.result.data.engine }
+              : {}),
             ...(baseline.result.data.nativeMigrations
               ? { nativeMigrations: baseline.result.data.nativeMigrations }
               : {}),
@@ -1224,6 +1352,9 @@ export const inspectProject = async ({
         ...(observedDiscovery ? { discovery: observedDiscovery } : {}),
         ...(observedReadiness ? { readiness: observedReadiness } : {}),
         ...(observedEngine ? { engineLifecycle: observedEngine } : {}),
+        ...(observedDatabaseCapabilities
+          ? { databaseCapabilities: observedDatabaseCapabilities }
+          : {}),
       },
     );
   }

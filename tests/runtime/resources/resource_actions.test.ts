@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { ProjectSnapshot } from "../../../src/workspace/inspection/project_snapshot.js";
 import { activityStorageKey } from "../../../src/workspace/state/workspace_activity.js";
 import { engineLifecyclePresentation } from "../../../src/runtime/engines/engine_lifecycle_view.js";
+import { sqliteCapabilities } from "../reports/database_capabilities_fixture.js";
 import {
   engineSnapshot,
   lifecyclePreview,
@@ -537,6 +538,27 @@ describe("reviewed resource actions", () => {
       exitCode: 0,
     }));
   };
+  it("refuses container resource messages for SQLite despite supported file cleanup and stale inventory", async () => {
+    prepareStaleReview();
+    current = {
+      ...current,
+      databaseCapabilities: sqliteCapabilities(),
+    };
+    const runner = actions();
+    for (const action of [
+      "startRuntime",
+      "stopRuntime",
+      "discardRuntime",
+    ] as const)
+      await runner.runWorkspace("file:///workspace", action, "primary");
+    await runner.cleanupImages("file:///workspace", [id]);
+    await runner.reviewStaleStop("file:///workspace");
+    expect(mocks.read).not.toHaveBeenCalled();
+    expect(mocks.review).not.toHaveBeenCalled();
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(mocks.terminal).not.toHaveBeenCalled();
+    expect(mocks.execute).not.toHaveBeenCalled();
+  });
   it("refuses new terminal, package and resource work when identity coexistence is unsafe", async () => {
     prepareStaleReview();
     const runner = actions(new Map(), undefined, true, () => false);

@@ -85,6 +85,8 @@ export interface ResolvedRehearsal {
   readonly migrationInsightsSchema: 1 | null;
   readonly configurationReviewSchema: 1 | null;
   readonly engineLifecycleSchema: 1 | null;
+  readonly sqliteTargetSchema?: 1 | null;
+  readonly databaseCapabilitiesSchema?: 1 | null;
 }
 
 export interface RunOptions {
@@ -291,6 +293,8 @@ export const resolveWorkspaceRehearsal = async (
     migrationInsightsSchema: contracts.migrationInsights === 1 ? 1 : null,
     configurationReviewSchema: contracts.configurationReview === 1 ? 1 : null,
     engineLifecycleSchema: contracts.containerEngineLifecycle === 1 ? 1 : null,
+    sqliteTargetSchema: contracts.sqliteTarget === 1 ? 1 : null,
+    databaseCapabilitiesSchema: contracts.databaseCapabilities === 1 ? 1 : null,
   };
 };
 

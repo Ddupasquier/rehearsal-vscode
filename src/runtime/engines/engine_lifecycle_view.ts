@@ -23,6 +23,7 @@ export const ENGINE_SHUTDOWN_UI_LABELS: Record<EngineShutdownUiState, string> =
       "Colima profile already stopped; this request did not verify a previous VM process exit.",
   };
 export const engineShutdownAvailable = (snapshot: ProjectSnapshot): boolean =>
+  snapshot.databaseCapabilities?.engine.family !== "sqlite" &&
   ![
     "untrusted",
     "loading",
@@ -43,6 +44,13 @@ export const engineLifecyclePresentation = (snapshot: ProjectSnapshot) => {
       profile: "VM state unknown",
       detail:
         "Trust this workspace before inspecting or reviewing VM shutdown.",
+    };
+  if (snapshot.databaseCapabilities?.engine.family === "sqlite")
+    return {
+      selected: "SQLite: native file backend",
+      profile: "No VM required",
+      detail:
+        "This target uses an owned SQLite file. VM state was not inspected; other projects may still have a VM running.",
     };
   const observation = snapshot.engineLifecycle;
   if (!observation || observation.state !== "available")

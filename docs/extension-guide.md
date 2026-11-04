@@ -93,6 +93,19 @@ package cannot supply that evidence.
 Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
 for safe setup and baseline inputs.
 
+### SQLite compatibility — in development
+
+SQLite support is being qualified with Core; this source change is not a published
+support claim. SQLite uses a separate owned file and needs no container engine.
+The dashboard distinguishes **file enabled** from **paused**. Pausing preserves
+sandbox edits and does not close another application's SQLite connections.
+
+Dashboard inspection uses VS Code's runtime, which can differ from Node in your
+terminal. If that runtime lacks the qualified SQLite binding, the dashboard stays
+**NOT READY** with Core's guidance. Rehearsal does not silently install or switch
+Node. PostgreSQL-only analysis and Supabase Auth/Storage remain unavailable for
+SQLite; use the released capability catalog for current qualification limits.
+
 ### Direct GitHub installation
 
 The reviewed VSIX is an alternative to Marketplace. For **0.1.28**, use the official

@@ -4,7 +4,12 @@ import {
 } from "../../migrations/native/native_migration_contract.js";
 import { parseNativeMigrationToolBinding } from "../../migrations/review/migration_review.js";
 import { ContractError } from "../../contracts.js";
-import type { BaselineData, ExplainData } from "../../contracts.js";
+import type {
+  BaselineData,
+  ExplainData,
+  RuntimeContractOptions,
+  SqliteBaselineEngine,
+} from "../../contracts.js";
 
 type ObjectValue = Record<string, unknown>;
 const object = (value: unknown, label: string): ObjectValue => {
@@ -341,12 +346,65 @@ const cutoff = (value: unknown): MigrationCutoff => {
     throw new ContractError("Baseline migration boundary is invalid.");
   return value;
 };
-const formatVersion = (value: unknown): 1 | 2 | 3 | 4 => {
-  if (value !== 1 && value !== 2 && value !== 3 && value !== 4)
+const formatVersion = (
+  value: unknown,
+  options: RuntimeContractOptions,
+): 1 | 2 | 3 | 4 | 6 => {
+  if (
+    value !== 1 &&
+    value !== 2 &&
+    value !== 3 &&
+    value !== 4 &&
+    !(value === 6 && options.sqliteTarget === true)
+  )
     throw new ContractError("Baseline format is unsupported.");
   return value;
 };
-const baselineNativeMetadata = (input: ObjectValue) => {
+const sqliteEngine = (value: unknown): SqliteBaselineEngine => {
+  const engine = object(value, "SQLite baseline engine");
+  if (
+    Object.keys(engine).sort().join(",") !==
+      "codecVersion,driverVersion,family,service,version" ||
+    engine.family !== "sqlite" ||
+    engine.service !== "sqlite" ||
+    engine.version !== "3.53.4" ||
+    engine.driverVersion !== 1 ||
+    engine.codecVersion !== 1
+  )
+    throw new ContractError("SQLite baseline engine or codec is unsupported.");
+  return {
+    family: "sqlite",
+    service: "sqlite",
+    version: "3.53.4",
+    driverVersion: 1,
+    codecVersion: 1,
+  };
+};
+type BaselineProvider = "supabase" | "postgresql" | "sqlite";
+const baselineNativeMetadata = (
+  input: ObjectValue,
+  expectedProvider: BaselineProvider | undefined,
+  options: RuntimeContractOptions,
+) => {
+  if (input.formatVersion === 6) {
+    if (options.sqliteTarget !== true || expectedProvider !== "sqlite")
+      throw new ContractError(
+        "SQLite baseline requires negotiated target support.",
+      );
+    if (
+      input.nativeMigrations !== undefined ||
+      input.review !== undefined ||
+      input.shape !== undefined
+    )
+      throw new ContractError(
+        "SQLite baseline cannot inherit PostgreSQL review evidence.",
+      );
+    return { engine: sqliteEngine(input.engine) };
+  }
+  if (expectedProvider === "sqlite" || input.engine !== undefined)
+    throw new ContractError(
+      "Baseline family does not match its reviewed target.",
+    );
   if (input.formatVersion === 3 || input.formatVersion === 4) {
     const nativeMigrations = parseNativeMigrationToolBinding(
       input.nativeMigrations,
@@ -371,18 +429,29 @@ const baselineNativeMetadata = (input: ObjectValue) => {
 };
 export const parseBaselineInspectionData = (
   value: unknown,
-  expectedProvider?: BaselineScopeReview["provider"],
+  expectedProvider?: BaselineProvider,
+  options: RuntimeContractOptions = {},
 ): BaselineData => {
   const input = object(value, "Baseline inspection");
+  const nativeMetadata = baselineNativeMetadata(
+    input,
+    expectedProvider,
+    options,
+  );
   const review =
     input.review === undefined
       ? undefined
       : parseBaselineScopeReview(input.review);
   const result: BaselineData = {
-    ...baselineNativeMetadata(input),
+    ...nativeMetadata,
     generationId: metadataText(input.generationId, "Baseline generation"),
     createdAt: createdAt(input.createdAt),
-    migrationCutoff: cutoff(input.migrationCutoff),
+    migrationCutoff:
+      input.formatVersion === 6 &&
+      input.migrationCount === 0 &&
+      input.migrationCutoff === null
+        ? null
+        : cutoff(input.migrationCutoff),
     rowCount: count(input.rowCount, "Baseline rows"),
     tableCount: count(input.tableCount, "Baseline tables"),
     migrationCount: count(input.migrationCount, "Baseline migrations"),
@@ -392,7 +461,7 @@ export const parseBaselineInspectionData = (
       "Baseline verification",
     ),
     ...(input.formatVersion !== undefined
-      ? { formatVersion: formatVersion(input.formatVersion) }
+      ? { formatVersion: formatVersion(input.formatVersion, options) }
       : {}),
     ...(input.migrationHistorySha256 !== undefined
       ? {
@@ -438,19 +507,37 @@ export const parseBaselineInspectionData = (
               ),
               createdAt: createdAt(generation.createdAt),
               active: boolean(generation.active, "Active generation"),
-              formatVersion: formatVersion(generation.formatVersion),
-              ...baselineNativeMetadata(generation),
+              formatVersion: formatVersion(generation.formatVersion, options),
+              ...baselineNativeMetadata(generation, expectedProvider, options),
               rowCount: count(generation.rowCount, "Retained rows"),
               tableCount: count(generation.tableCount, "Retained tables"),
               migrationCount: count(
                 generation.migrationCount,
                 "Retained migrations",
               ),
-              migrationCutoff: cutoff(generation.migrationCutoff),
-              storageAssetCount: count(
-                generation.storageAssetCount,
-                "Retained Storage assets",
-              ),
+              migrationCutoff:
+                generation.formatVersion === 6 &&
+                generation.migrationCount === 0 &&
+                generation.migrationCutoff === null
+                  ? null
+                  : cutoff(generation.migrationCutoff),
+              ...(generation.formatVersion === 6
+                ? (() => {
+                    if (
+                      generation.storageAssetCount !== undefined &&
+                      generation.storageAssetCount !== 0
+                    )
+                      throw new ContractError(
+                        "SQLite baseline cannot claim Supabase Storage assets.",
+                      );
+                    return {};
+                  })()
+                : {
+                    storageAssetCount: count(
+                      generation.storageAssetCount,
+                      "Retained Storage assets",
+                    ),
+                  }),
             };
           }),
         }
@@ -499,13 +586,18 @@ export const parseBaselineInspectionData = (
   return result;
 };
 
-export const parseReviewTargets = (data: ExplainData) => {
+export const parseReviewTargets = (
+  data: ExplainData,
+  options: RuntimeContractOptions = {},
+) => {
   const entries = data.targets ?? [{ name: "primary", plan: data }];
   if (!Array.isArray(entries) || entries.length < 1 || entries.length > 32)
     throw new ContractError("Target review exceeds its bounded contract.");
   const primaryProvider = enumValue(
     data.environment.target,
-    ["supabase", "postgresql"],
+    options.sqliteTarget
+      ? ["supabase", "postgresql", "sqlite"]
+      : ["supabase", "postgresql"],
     "Primary reviewed provider",
   );
   if (entries[0]?.name !== "primary")
@@ -520,7 +612,9 @@ export const parseReviewTargets = (data: ExplainData) => {
     names.add(label);
     const provider = enumValue(
       plan.environment.target,
-      ["supabase", "postgresql"],
+      options.sqliteTarget
+        ? ["supabase", "postgresql", "sqlite"]
+        : ["supabase", "postgresql"],
       "Reviewed provider",
     );
     if (index === 0 && provider !== primaryProvider)
@@ -528,7 +622,7 @@ export const parseReviewTargets = (data: ExplainData) => {
         "Primary target provider contradicts the project review. Refresh the project.",
       );
     const baseline = plan.baseline
-      ? parseBaselineInspectionData(plan.baseline, provider)
+      ? parseBaselineInspectionData(plan.baseline, provider, options)
       : null;
     const review =
       plan.baselineReview === undefined
@@ -537,6 +631,14 @@ export const parseReviewTargets = (data: ExplainData) => {
     if (review && review.provider !== provider)
       throw new ContractError(
         "Target scope provider contradicts the reviewed target. Refresh the project.",
+      );
+    if (
+      provider === "sqlite" &&
+      (plan.baselineReview !== undefined ||
+        plan.authenticationReview !== undefined)
+    )
+      throw new ContractError(
+        "SQLite does not expose PostgreSQL scope or native Auth review.",
       );
     if (
       review &&

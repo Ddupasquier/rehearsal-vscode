@@ -37,6 +37,7 @@ import {
   shellCommand,
   WORKSPACE_ACTION_IDS,
   workspaceActionPlan,
+  isSqliteProject,
   exactPackageUpdateArguments,
   type WorkspaceActionId,
 } from "./action_catalog.js";
@@ -302,6 +303,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
       await this.refresh(workspaceKey, true);
       return;
     }
+    if (resourceTarget !== undefined && isSqliteProject(snapshot)) return;
     if (
       this.engineShutdownController &&
       !["refresh", "showOutput", "documentation"].includes(action)
@@ -758,6 +760,7 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     if (
       !snapshot ||
       !folder ||
+      isSqliteProject(snapshot) ||
       !snapshot.resources?.catalog ||
       rawIds.some(
         (id) =>
@@ -1143,7 +1146,12 @@ export class RehearsalWorkspaceActions implements vscode.Disposable {
     const folder = vscode.workspace.workspaceFolders?.find(
       (folder) => folder.uri.toString() === workspaceKey,
     );
-    if (!snapshot?.configurationMetadata || !snapshot.resources || !folder)
+    if (
+      !snapshot?.configurationMetadata ||
+      isSqliteProject(snapshot) ||
+      !snapshot.resources ||
+      !folder
+    )
       return;
     if (!this.reviews) {
       void vscode.window.showInformationMessage(

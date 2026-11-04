@@ -17,6 +17,7 @@ import {
 } from "../../../src/workspace/state/workspace_view_state.js";
 import { changedConfigurationFormValues } from "../../../src/configuration/forms/configuration_form.js";
 import { migrationReviewCheckboxId } from "../../../src/migrations/review/migration_view.js";
+import { sqliteCapabilities } from "../../runtime/reports/database_capabilities_fixture.js";
 import {
   applyConfigurationProposal,
   parseConfigurationProposal,
@@ -2428,5 +2429,118 @@ describe("Rehearsal workspace document", () => {
       "command:rehearsal.workspaceAction?inspectionSettings",
     );
     expect(html).toContain("Run Doctor");
+  });
+});
+
+describe("SQLite workspace presentation", () => {
+  it("reconciles static PostgreSQL suggestions with the Core-reported SQLite target without validating discovery", () => {
+    const original = readySnapshot();
+    const discovery = original.discovery!;
+    const snapshot: ProjectSnapshot = {
+      ...original,
+      databaseCapabilities: sqliteCapabilities(),
+      discovery: {
+        ...discovery,
+        profile: {
+          ...discovery.profile,
+          configuration: {
+            ...discovery.profile.configuration,
+            fields: [
+              ...discovery.profile.configuration.fields,
+              {
+                path: "runtime.target",
+                status: "suggested",
+                value: "postgresql",
+                sourceItemIds: [],
+              },
+              {
+                path: "postgresql.migrationDirectory",
+                status: "suggested",
+                value: "migrations",
+                sourceItemIds: [],
+              },
+              {
+                path: "supabase.workdir",
+                status: "suggested",
+                value: "supabase",
+                sourceItemIds: [],
+              },
+              {
+                path: "cleanup",
+                status: "decision_required",
+                sourceItemIds: [],
+              },
+            ],
+          },
+        },
+      },
+    };
+    const before = JSON.stringify(snapshot.discovery);
+    const html = renderWorkspaceDocument(snapshot, assets, "configuration");
+    const configuration = html.match(
+      /<section id="configuration"[\s\S]*?<\/section>/u,
+    )![0];
+    expect(configuration).toContain(
+      "<code>runtime.target</code><small>sqlite</small>",
+    );
+    expect(configuration).toContain("configured target");
+    expect(configuration).toContain(
+      "Discovery suggestions remain unvalidated.",
+    );
+    expect(configuration).toContain("present unvalidated");
+    expect(configuration).not.toContain("postgresql.migrationDirectory");
+    expect(configuration).not.toContain("supabase.workdir");
+    expect(configuration).not.toContain("Retain 4 baseline versions");
+    expect(JSON.stringify(snapshot.discovery)).toBe(before);
+    const { databaseCapabilities: _capabilities, ...withoutReport } = snapshot;
+    const fallback = renderWorkspaceDocument(
+      withoutReport,
+      assets,
+      "configuration",
+    ).match(/<section id="configuration"[\s\S]*?<\/section>/u)![0];
+    expect(fallback).toContain("postgresql.migrationDirectory");
+    expect(fallback).not.toContain("configured target");
+  });
+  it("renders owned-file state and applicability without leaking its binding or requesting a VM", () => {
+    const original = readySnapshot();
+    const {
+      resources: _resources,
+      authenticationReview: _auth,
+      ...withoutContainerEvidence
+    } = original;
+    const snapshot: ProjectSnapshot = {
+      ...withoutContainerEvidence,
+      databaseCapabilities: sqliteCapabilities(),
+      engineLifecycle: { state: "unsupported" },
+      runtime: {
+        state: "running",
+        targets: [
+          {
+            name: "primary",
+            runtimeTarget: "sqlite",
+            state: "running",
+            reason: null,
+            verifiedRuntimeAvailable: true,
+            endpoint: { kind: "embedded-file", bindingSha256: "f".repeat(64) },
+          },
+        ],
+      },
+    };
+    const html = renderWorkspaceDocument(snapshot, assets, "runtime");
+    expect(html).toContain("file enabled");
+    expect(html).toContain("owned file verified");
+    expect(html).toContain("No VM required");
+    expect(html).not.toContain('name="retainBaselineGenerations"');
+    expect(html).toContain("Application URL (optional)");
+    expect(html).not.toMatch(/name="applicationUrl"[^>]* required/u);
+    expect(html).toContain(
+      "Baseline pruning is not available for this target.",
+    );
+    expect(html).toContain("No container inventory is needed");
+    expect(html).toContain("SQLite has no Supabase Auth or Storage service");
+    expect(html).not.toContain("f".repeat(64));
+    expect(html).not.toContain(
+      "This core version does not expose VM shutdown controls",
+    );
   });
 });

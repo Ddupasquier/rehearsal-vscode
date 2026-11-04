@@ -35,6 +35,7 @@ const runtimeEndpoint = (
 ): string => {
   if (!endpoint) return "no active endpoint";
   if (endpoint.kind === "http") return endpoint.url;
+  if (endpoint.kind === "embedded-file") return "owned SQLite file";
   return `${endpoint.host}:${endpoint.port}/${endpoint.database}`;
 };
 
@@ -242,11 +243,18 @@ export const overviewItems = (
     items.push({
       id: "runtime",
       label: `${targetCount} disposable runtime target${targetCount === 1 ? "" : "s"}`,
-      description: snapshot.runtime.state,
+      description:
+        snapshot.databaseCapabilities?.engine.family === "sqlite"
+          ? snapshot.runtime.state === "running"
+            ? "file enabled"
+            : snapshot.runtime.state === "stopped"
+              ? "paused"
+              : snapshot.runtime.state
+          : snapshot.runtime.state,
       tooltip: snapshot.runtime.targets
         .map(
           ({ name, runtimeTarget, state, reason, endpoint }) =>
-            `${name}: ${runtimeTarget} · ${state}${reason ? ` (${reason})` : ""} · ${runtimeEndpoint(endpoint)}`,
+            `${name}: ${runtimeTarget} · ${runtimeTarget === "sqlite" && state === "running" ? "file enabled" : runtimeTarget === "sqlite" && state === "stopped" ? "paused" : state}${reason ? ` (${reason})` : ""} · ${runtimeEndpoint(endpoint)}`,
         )
         .join("\n"),
       icon:
