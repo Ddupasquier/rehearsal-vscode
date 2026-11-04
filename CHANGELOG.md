@@ -10,6 +10,8 @@
   no Node installation or runtime switch occurs automatically.
 - Show the confirmed SQLite target in Configuration while keeping static discovery
   suggestions separate. Existing PostgreSQL/Supabase contracts retain their meanings.
+- Keep missing or invalid configuration in setup guidance with capability-aware Core.
+  Read discovery and Doctor before configuration-dependent capabilities or container inspection.
 
 ## 0.1.28 — Update recovery
 

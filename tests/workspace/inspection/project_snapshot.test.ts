@@ -2019,6 +2019,32 @@ const sqliteClient = (
     ) => {
       let execution: { result: ResultEnvelope<unknown>; exitCode: number };
       switch (request.expectedCommand) {
+        case "doctor":
+          if (options.ready !== false) return base.command<Data>(request);
+          calls.push(request.expectedCommand);
+          execution = envelope(
+            "doctor",
+            {
+              state: "NOT READY",
+              checks: [
+                {
+                  id: "configuration",
+                  label: "Configuration",
+                  status: "pass",
+                  detail: "Reviewed SQLite configuration is valid.",
+                },
+                {
+                  id: "sqlite_backend",
+                  label: "SQLite binding",
+                  status: "fail",
+                  detail:
+                    "The editor host does not supply the qualified SQLite binding.",
+                },
+              ],
+            },
+            "not_ready",
+          );
+          break;
         case "database capabilities":
           calls.push(request.expectedCommand);
           execution = envelope(
@@ -2087,6 +2113,236 @@ const sqliteClient = (
   };
   return { fake, calls };
 };
+
+describe("capability-aware setup inspection", () => {
+  it.each(["missing", "invalid"])(
+    "keeps a capability-v1 Core clean room with %s configuration NOT READY without configuration-dependent or engine reads",
+    async (configuration) => {
+      const calls: string[] = [];
+      const base = client("NOT READY");
+      const snapshot = await inspectProject({
+        workspaceName: "Clean library",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: {
+          version: async () => ({
+            name: "@rehearsal-db/core",
+            version: "2.3.0",
+            databaseCapabilitiesSchema: 1,
+            projectDiscoverySchema: 1,
+            configurationReviewSchema: 1,
+            resourceInventorySchema: 1,
+            resourceManagerSchema: 1,
+            engineLifecycleSchema: 1,
+          }),
+          command: async <Data>(
+            request: Parameters<SnapshotClient["command"]>[0],
+          ) => {
+            calls.push(request.expectedCommand);
+            const execution =
+              request.expectedCommand === "discover"
+                ? envelope("discover", {
+                    ...partialDiscovery,
+                    configuration: {
+                      state:
+                        configuration === "missing"
+                          ? "missing"
+                          : "present_unvalidated",
+                      activePath:
+                        configuration === "missing"
+                          ? null
+                          : "rehearsal.config.mjs",
+                      discoveredPaths:
+                        configuration === "missing"
+                          ? []
+                          : ["rehearsal.config.mjs"],
+                      fields: [],
+                    },
+                  })
+                : ["activity", "doctor"].includes(request.expectedCommand)
+                  ? await base.command<Data>(request)
+                  : (() => {
+                      throw Error(
+                        "A clean room cannot run configuration-dependent or engine inspection.",
+                      );
+                    })();
+            return {
+              ...execution,
+              result: { ...execution.result, rehearsalVersion: "2.3.0" },
+            } as { result: ResultEnvelope<Data>; exitCode: number };
+          },
+        },
+      });
+      expect(snapshot.availability).toBe("not_ready");
+      expect(snapshot.discovery?.profile.configuration.state).toBe(
+        configuration === "missing" ? "missing" : "present_unvalidated",
+      );
+      expect(snapshot.readiness?.checks[0]).toMatchObject({
+        id: "configuration",
+        status: "fail",
+      });
+      expect(snapshot.databaseCapabilities).toBeUndefined();
+      expect(snapshot.resources).toBeUndefined();
+      expect(calls).toEqual(["activity", "discover", "doctor", "activity"]);
+    },
+  );
+
+  it("negotiates a configured PostgreSQL backend after Doctor and before optional engine inspection", async () => {
+    const calls: string[] = [],
+      base = client();
+    const snapshot = await inspectProject({
+      workspaceName: "Configured PostgreSQL",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        version: async (...args) => ({
+          ...(await base.version(...args)),
+          projectDiscoverySchema: 1,
+          databaseCapabilitiesSchema: 1,
+          engineLifecycleSchema: 1,
+        }),
+        command: async <Data>(
+          request: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          calls.push(request.expectedCommand);
+          if (request.expectedCommand === "discover")
+            return envelope("discover", partialDiscovery) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (request.expectedCommand === "engine status")
+            return envelope("engine status", lifecycleStatus()) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          if (request.expectedCommand === "database capabilities")
+            return envelope("database capabilities", {
+              ...sqliteCapabilities(),
+              engine: {
+                family: "postgresql",
+                service: "postgresql",
+                version: "17.0",
+              },
+              backend: "container",
+              capabilities: Object.fromEntries(
+                Object.entries(sqliteCapabilities().capabilities).map(
+                  ([name, value]) => [
+                    name,
+                    { ...value, scope: "postgresql-v1" },
+                  ],
+                ),
+              ),
+            }) as { result: ResultEnvelope<Data>; exitCode: number };
+          return base.command<Data>(request);
+        },
+      },
+    });
+    expect(snapshot.availability).toBe("ready");
+    expect(snapshot.databaseCapabilities?.engine.service).toBe("postgresql");
+    expect(snapshot.engineLifecycle?.state).toBe("available");
+    expect(calls.slice(0, 5)).toEqual([
+      "activity",
+      "discover",
+      "doctor",
+      "database capabilities",
+      "engine status",
+    ]);
+  });
+
+  it.each(["before", "after"])(
+    "retains the %s-inspection idle barrier for capability-aware SQLite",
+    async (when) => {
+      const { fake, calls } = sqliteClient();
+      let activities = 0;
+      const snapshot = await inspectProject({
+        workspaceName: "Busy SQLite",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: {
+          ...fake,
+          command: async <Data>(
+            request: Parameters<SnapshotClient["command"]>[0],
+          ) => {
+            if (
+              request.expectedCommand === "activity" &&
+              (++activities > 1 || when === "before")
+            ) {
+              calls.push("activity");
+              return envelope("activity", {
+                schemaVersion: 1,
+                state: "busy",
+                operation: {
+                  kind: "run",
+                  startedAt: "2026-10-09T00:00:00Z",
+                  rehearsalVersion: "0.1.0-rc.4",
+                },
+              }) as { result: ResultEnvelope<Data>; exitCode: number };
+            }
+            return fake.command<Data>(request);
+          },
+        },
+      });
+      expect(snapshot.availability).toBe("operation_active");
+      expect(snapshot.databaseCapabilities).toBeUndefined();
+      expect(snapshot.readiness).toBeUndefined();
+      expect(snapshot.runtime).toBeUndefined();
+      expect(calls).not.toContain("engine status");
+      if (when === "before") expect(calls).toEqual(["activity"]);
+    },
+  );
+
+  it("does not probe capabilities or infrastructure after Doctor fails", async () => {
+    const { fake, calls } = sqliteClient();
+    const snapshot = await inspectProject({
+      workspaceName: "Failed Doctor",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...fake,
+        command: async <Data>(
+          request: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          if (request.expectedCommand === "doctor") {
+            calls.push("doctor");
+            throw new AdapterError("timeout", "Doctor inspection timed out.");
+          }
+          return fake.command<Data>(request);
+        },
+      },
+    });
+    expect(snapshot.availability).toBe("error");
+    expect(calls).toEqual(["activity", "doctor"]);
+    expect(snapshot.databaseCapabilities).toBeUndefined();
+    expect(snapshot.resources).toBeUndefined();
+  });
+
+  it("refuses a READY claim without positive configuration validation", async () => {
+    const { fake, calls } = sqliteClient();
+    const snapshot = await inspectProject({
+      workspaceName: "Contradictory Doctor",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...fake,
+        command: async <Data>(
+          request: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          if (request.expectedCommand === "doctor") {
+            calls.push("doctor");
+            return envelope("doctor", { state: "READY", checks: [] }) as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          }
+          return fake.command<Data>(request);
+        },
+      },
+    });
+    expect(snapshot.availability).toBe("error");
+    expect(snapshot.error?.code).toBe("invalid_cli_contract");
+    expect(calls).toEqual(["activity", "doctor"]);
+  });
+});
 
 describe("SQLite target-scoped inspection", () => {
   it("accepts a negotiated SQLite snapshot without inspecting Docker or PG-only features", async () => {
