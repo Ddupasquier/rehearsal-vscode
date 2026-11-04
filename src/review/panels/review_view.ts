@@ -15,6 +15,8 @@ const state = (value: boolean | null): string =>
 export const renderBaselineScopeReview = (
   snapshot: ProjectSnapshot,
 ): string => {
+  if (snapshot.databaseCapabilities?.engine.family === "sqlite")
+    return '<div class="empty-state"><strong>Review the SQLite baseline policy</strong><p>SQLite uses its reviewed column decisions and verified baseline. PostgreSQL-specific scope and Supabase Storage reports do not apply. Review the tracked SQLite policy before changing what data is included.</p></div>';
   const review = snapshot.baseline?.review;
   if (!review)
     return `<div class="empty-state"><strong>${snapshot.baseline ? "Detailed scope is unavailable in this core release" : "No verified baseline yet"}</strong><p>${snapshot.baseline ? "Update Rehearsal to a core that returns baseline scope evidence, or review the tracked policies directly. Missing Storage and relationship facts are not treated as zero." : "Complete guided setup and review your safe local inputs. Rehearsal will show the reviewed policy and aggregate shape after baseline verification."}</p></div>`;
@@ -53,6 +55,8 @@ export const renderBaselineScopeReview = (
 export const renderAuthenticationReview = (
   snapshot: ProjectSnapshot,
 ): string => {
+  if (snapshot.databaseCapabilities?.engine.family === "sqlite")
+    return '<div class="empty-state"><strong>Authentication belongs to your application</strong><p>SQLite has no Supabase Auth or Storage service. Configure and test your application’s identity provider separately; Rehearsal does not infer a sign-in result from the database file.</p></div>';
   const review = snapshot.authenticationReview;
   if (!review)
     return `<div class="empty-state"><strong>Detailed authentication review is unavailable</strong><p>Configured provider names: ${escape(snapshot.environment?.authenticationProviders.join(", ") || "None declared")}. Update to a core that exposes provider-state evidence or review the local provider configuration. No login result is inferred.</p></div>`;

@@ -12,6 +12,7 @@ const scenarios = Object.freeze({
   cancellation: () => require("./native-cancellation-test.cjs"),
   "drizzle-review": () => require("./native-prisma-review-test.cjs"),
   "real-consumer": () => require("./native-real-consumer-test.cjs"),
+  "sqlite-review": () => require("./native-sqlite-test.cjs"),
   "prisma-review": () => require("./native-prisma-review-test.cjs"),
   "workbench-review": () => require("./native-workbench-review-test.cjs"),
   "presentation-review": () => require("./native-workbench-review-test.cjs"),

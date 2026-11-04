@@ -514,16 +514,22 @@ const targetMarkup = (snapshot: ProjectSnapshot): string => {
         (entry) => entry.target === name,
       )?.classification;
       const presence =
-        classification?.presence.state === "created"
-          ? "created"
-          : classification?.presence.state === "not-created"
-            ? "not created"
-            : "creation unknown";
+        runtimeTarget === "sqlite"
+          ? verifiedRuntimeAvailable === true
+            ? "owned file verified"
+            : verifiedRuntimeAvailable === false
+              ? "sandbox not created"
+              : "file ownership unknown"
+          : classification?.presence.state === "created"
+            ? "created"
+            : classification?.presence.state === "not-created"
+              ? "not created"
+              : "creation unknown";
       return `
         <article class="runtime-row" data-display-target="${escapeHtml(name)}" data-summary-row="targets" data-summary-target="${escapeHtml(name)}">
           <span class="runtime-row__icon" aria-hidden="true">DB</span>
           <span class="runtime-row__copy"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(runtimeTarget)}${reason ? ` · ${escapeHtml(reason.replaceAll("_", " "))}` : ""} · ${verifiedRuntimeAvailable === true ? "verified receipt available" : verifiedRuntimeAvailable === false ? "verified receipt unavailable" : "preparation unknown"} · ${presence}</small></span>
-          <span class="state-chip">${escapeHtml(state)}</span>
+          <span class="state-chip">${escapeHtml(runtimeTarget === "sqlite" && state === "running" ? "file enabled" : runtimeTarget === "sqlite" && state === "stopped" ? "paused" : state)}</span>
         </article>`;
     })
     .join(
@@ -540,6 +546,8 @@ const resourceInventoryMarkup = (
 ): string => {
   const inventory = snapshot.resources;
   if (!inventory) {
+    if (snapshot.databaseCapabilities?.engine.family === "sqlite")
+      return '<div class="empty-state">SQLite uses an owned project-local file. No container inventory is needed. Pausing preserves the file and does not close other applications’ connections.</div>';
     return '<div class="empty-state">Update Rehearsal core to view owned containers and Docker capacity here.</div>';
   }
   const disk = inventory.engine.disk;
@@ -613,31 +621,34 @@ const configurationControlsMarkup = (
     snapshot.configuration?.application.proofCommand ??
     discoveryFieldValue(profile, "application.proofCommand");
   const activeOperation = snapshot.availability === "operation_active";
+  const sqlite = snapshot.databaseCapabilities?.engine.family === "sqlite";
   const applicationUrl = activeOperation
     ? isLoopbackUrl(preferences.applicationUrl)
       ? preferences.applicationUrl
       : ""
     : preferences.applicationUrl ||
       snapshot.applicationUrl ||
-      "http://localhost:5175";
+      (sqlite ? "" : "http://localhost:5175");
   const addressOrigin = preferences.applicationUrl
     ? "Your custom browser address"
     : activeOperation
       ? "Enter the local address from the owning terminal"
       : snapshot.applicationUrl
         ? "Saved & validated browser address"
-        : "Suggested example — choose your application's address";
+        : sqlite
+          ? "Optional application browser address; SQLite needs no database port"
+          : "Suggested example — choose your application's address";
   const commandOrigin = snapshot.configuration
     ? "Saved & validated"
     : "Suggested — review the project script before saving";
   return `<form id="configuration-controls" class="configuration-controls">
     <div class="form-grid">
-      <label><span>Application URL</span><input name="applicationUrl" type="url" value="${escapeHtml(applicationUrl)}" required /><small>${escapeHtml(addressOrigin)} · HTTP(S) loopback only. Does not change the readiness endpoint or provider callback.</small></label>
-      <label><span>Baseline versions to retain</span><input name="retainBaselineGenerations" type="number" value="${snapshot.configuration?.cleanup?.retainBaselineGenerations ?? 2}" min="1" max="100" /><small>The active baseline is always protected.</small></label>
+      <label><span>Application URL${sqlite ? " (optional)" : ""}</span><input name="applicationUrl" type="url" value="${escapeHtml(applicationUrl)}"${sqlite ? "" : " required"} /><small>${escapeHtml(addressOrigin)} · HTTP(S) loopback only. Does not change the readiness endpoint or provider callback.</small></label>
+      ${sqlite ? '<p class="control-note">SQLite baseline generations are retained. Baseline pruning is not available for this target.</p>' : `<label><span>Baseline versions to retain</span><input name="retainBaselineGenerations" type="number" value="${snapshot.configuration?.cleanup?.retainBaselineGenerations ?? 2}" min="1" max="100" /><small>The active baseline is always protected.</small></label>`}
       <label><span>Application start command</span><input name="startCommand" type="text" value="${escapeHtml(startCommand)}" /><small>${escapeHtml(commandOrigin)}. Stored only after an exact diff and confirmation.</small></label>
       <label><span>Application proof command</span><input name="proofCommand" type="text" value="${escapeHtml(proofCommand)}" /><small>${escapeHtml(commandOrigin)}. Choose the project-owned proof for migration behavior.</small></label>
-      <label><span>After a rehearsal run</span><select name="runPersistence"><option value="keep-until-stop"${snapshot.lifecycle?.run === "keep-until-stop" ? " selected" : ""}>Keep environment running</option><option value="stop-after-run"${snapshot.lifecycle?.run === "stop-after-run" ? " selected" : ""}>Stop after proof</option></select></label>
-      <label><span>When the application closes</span><select name="openPersistence"><option value="keep-until-stop"${snapshot.lifecycle?.open === "keep-until-stop" ? " selected" : ""}>Keep database running</option><option value="stop-on-application-exit"${snapshot.lifecycle?.open === "stop-on-application-exit" ? " selected" : ""}>Stop database runtime</option></select></label>
+      <label><span>After a rehearsal run</span><select name="runPersistence"><option value="keep-until-stop"${snapshot.lifecycle?.run === "keep-until-stop" ? " selected" : ""}>${sqlite ? "Keep sandbox file enabled" : "Keep environment running"}</option><option value="stop-after-run"${snapshot.lifecycle?.run === "stop-after-run" ? " selected" : ""}>${sqlite ? "Pause after proof" : "Stop after proof"}</option></select></label>
+      <label><span>When the application closes</span><select name="openPersistence"><option value="keep-until-stop"${snapshot.lifecycle?.open === "keep-until-stop" ? " selected" : ""}>${sqlite ? "Keep sandbox file enabled" : "Keep database running"}</option><option value="stop-on-application-exit"${snapshot.lifecycle?.open === "stop-on-application-exit" ? " selected" : ""}>${sqlite ? "Pause sandbox file" : "Stop database runtime"}</option></select></label>
     </div>
     <div class="action-group"><button class="button button--primary" type="submit">Review exact configuration diff</button><button class="button button--secondary" type="reset">Restore form values</button></div>
     <p class="control-note">Readiness endpoint: ${snapshot.configuration?.application.readinessUrl ? `<code>${escapeHtml(snapshot.configuration.application.readinessUrl)}</code> · saved & validated` : "not configured"}. Change it separately in the structured settings or source view. Authentication return paths and provider-console registration require their own review.</p>
@@ -649,6 +660,7 @@ const configurationMarkup = (
   profile: ProjectDiscoveryData,
   snapshot: ProjectSnapshot,
 ): string => {
+  const sqlite = snapshot.databaseCapabilities?.engine.service === "sqlite";
   const validated = new Map<string, string>([
     [
       "application.startCommand",
@@ -670,8 +682,17 @@ const configurationMarkup = (
     ],
   ]);
   return `
+  ${sqlite ? '<p class="control-note">The SQLite target is confirmed by Core’s capability report. Discovery suggestions remain unvalidated.</p>' : ""}
   <div class="configuration-table" role="list" aria-label="Proposed Rehearsal configuration">
+    ${sqlite ? '<div class="configuration-row" role="listitem"><span><code>runtime.target</code><small>sqlite</small></span><strong class="field-state field-state--present_unvalidated">configured target</strong></div>' : ""}
     ${profile.configuration.fields
+      .filter(
+        (field) =>
+          !sqlite ||
+          (field.path !== "runtime.target" &&
+            field.path !== "cleanup" &&
+            !/^(postgresql|supabase)\./u.test(field.path)),
+      )
       .map((field) => {
         const current = validated.get(field.path);
         const isValidated = Boolean(current);
@@ -734,6 +755,7 @@ export const renderWorkspaceDocument = (
     ? ({ ...snapshot, availability: "loading" } as ProjectSnapshot)
     : snapshot;
   const status = statusFor(guidanceSnapshot);
+  const sqlite = snapshot.databaseCapabilities?.engine.family === "sqlite";
   const sandboxSession = sandboxSessionPresentation(
     openSandboxSessionState(guidanceSnapshot),
   );
@@ -848,8 +870,12 @@ export const renderWorkspaceDocument = (
                   : "muted",
           ),
           metric(
-            "Database",
-            snapshot.runtime?.state ??
+            sqlite ? "SQLite file" : "Database",
+            (sqlite && snapshot.runtime?.state === "running"
+              ? "file enabled"
+              : sqlite && snapshot.runtime?.state === "stopped"
+                ? "paused"
+                : snapshot.runtime?.state) ??
               (isLoading
                 ? "Checking…"
                 : snapshot.error
@@ -861,7 +887,9 @@ export const renderWorkspaceDocument = (
                 : snapshot.error
                   ? "Inspection did not reach this check"
                   : "Run the project check to continue"
-              : `${formatCount(targetCount)} local target${targetCount === 1 ? "" : "s"} · database lifecycle, not command progress`,
+              : sqlite
+                ? "Owned-file readiness; application connections are separate"
+                : `${formatCount(targetCount)} local target${targetCount === 1 ? "" : "s"} · database lifecycle, not command progress`,
             snapshot.runtime?.state === "running"
               ? "active"
               : isLoading

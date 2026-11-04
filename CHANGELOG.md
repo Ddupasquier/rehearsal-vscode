@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Negotiate SQLite capabilities, versioned baselines and opaque owned-file status
+  independently from PostgreSQL/Supabase features. SQLite views avoid container,
+  Auth/Storage and PostgreSQL-only inspection.
+- Describe SQLite enable/pause/discard as file lifecycle operations. Preserve
+  actionable readiness failures when VS Code's runtime lacks the qualified binding;
+  no Node installation or runtime switch occurs automatically.
+
 ## 0.1.28 — Update recovery
 
 - Explain blocked automatic extension updates and open the relevant native Extensions

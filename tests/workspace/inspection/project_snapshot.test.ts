@@ -29,6 +29,10 @@ import {
 } from "../../migrations/insights/migration_insights_fixture.js";
 import { engineShutdownAvailable } from "../../../src/runtime/engines/engine_lifecycle_view.js";
 import { lifecycleStatus } from "../../runtime/engines/engine_lifecycle_fixture.js";
+import {
+  sqliteBaselineEngine,
+  sqliteCapabilities,
+} from "../../runtime/reports/database_capabilities_fixture.js";
 
 const envelope = <Data>(command: string, data: Data, status = "success") => ({
   result: {
@@ -1970,4 +1974,192 @@ describe("Drizzle snapshot public cross-view binding", () => {
     expect(result.availability).toBe("error");
     expect(result.migrationReview).toBeUndefined();
   });
+});
+
+const sqliteClient = (
+  options: {
+    ready?: boolean;
+    advertiseSqlite?: boolean;
+    capabilities?: unknown;
+    wrongGeneration?: boolean;
+    capabilityVersion?: string;
+  } = {},
+) => {
+  const calls: string[] = [];
+  const base = client(
+    options.ready === false ? "NOT READY" : "READY",
+    undefined,
+    calls,
+  );
+  const baseline: BaselineData = {
+    formatVersion: 6,
+    engine: sqliteBaselineEngine,
+    generationId: "baseline-1",
+    createdAt: "2026-10-09T00:00:00Z",
+    migrationCutoff: "20261009000000",
+    tableCount: 4,
+    rowCount: 12,
+    migrationCount: 2,
+    verification: "checksums_verified",
+  };
+  const fake: SnapshotClient = {
+    version: async () => ({
+      name: "@rehearsal-db/core",
+      version: "0.1.0-rc.4",
+      sqliteTargetSchema: options.advertiseSqlite === false ? null : 1,
+      databaseCapabilitiesSchema: 1,
+      resourceInventorySchema: 1,
+      resourceManagerSchema: 1,
+      migrationReviewSchema: 1,
+      migrationInsightsSchema: 1,
+      engineLifecycleSchema: 1,
+    }),
+    command: async <Data>(
+      request: Parameters<SnapshotClient["command"]>[0],
+    ) => {
+      let execution: { result: ResultEnvelope<unknown>; exitCode: number };
+      switch (request.expectedCommand) {
+        case "database capabilities":
+          calls.push(request.expectedCommand);
+          execution = envelope(
+            "database capabilities",
+            options.capabilities ?? sqliteCapabilities(),
+          );
+          if (options.capabilityVersion)
+            execution.result = {
+              ...execution.result,
+              rehearsalVersion: options.capabilityVersion,
+            };
+          break;
+        case "explain": {
+          const original = await base.command<ExplainData>(request);
+          execution = {
+            ...original,
+            result: {
+              ...original.result,
+              data: {
+                ...original.result.data,
+                environment: {
+                  ...original.result.data.environment,
+                  target: "sqlite",
+                  ports: {},
+                },
+                baseline,
+              },
+            },
+          };
+          break;
+        }
+        case "inspect baseline":
+          calls.push(request.expectedCommand);
+          execution = envelope("inspect baseline", baseline);
+          break;
+        case "status":
+          calls.push(request.expectedCommand);
+          execution = envelope("status", {
+            action: "status",
+            target: "primary",
+            durationMs: 1,
+            runtimeStatus: {
+              schemaVersion: 2,
+              state: "running",
+              reason: null,
+              runtimeTarget: "sqlite",
+              projectId: "sqlite-fixture",
+              verifiedRuntimeAvailable: true,
+              endpoint: {
+                kind: "embedded-file",
+                bindingSha256: "e".repeat(64),
+              },
+              baselineGenerationId: options.wrongGeneration
+                ? "foreign-generation"
+                : "baseline-1",
+              candidateSha256: "a".repeat(64),
+              candidates: ["20261009000100_add_index.sql"],
+            },
+          });
+          break;
+        default:
+          return base.command<Data>(request);
+      }
+      return execution as { result: ResultEnvelope<Data>; exitCode: number };
+    },
+  };
+  return { fake, calls };
+};
+
+describe("SQLite target-scoped inspection", () => {
+  it("accepts a negotiated SQLite snapshot without inspecting Docker or PG-only features", async () => {
+    const { fake, calls } = sqliteClient();
+    const snapshot = await inspectProject({
+      workspaceName: "SQLite",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot.availability).toBe("ready");
+    expect(snapshot.databaseCapabilities?.engine.service).toBe("sqlite");
+    expect(snapshot.baseline?.engine).toEqual(sqliteBaselineEngine);
+    expect(snapshot.runtime?.targets[0]?.endpoint).toEqual({
+      kind: "embedded-file",
+      bindingSha256: "e".repeat(64),
+    });
+    expect(snapshot.engineLifecycle?.state).toBe("unsupported");
+    expect(snapshot.resources).toBeUndefined();
+    expect(snapshot.migrationReview).toBeUndefined();
+    expect(snapshot.authenticationReview).toBeUndefined();
+    expect(calls).toContain("database capabilities");
+    for (const command of [
+      "engine status",
+      "resources",
+      "environments",
+      "inspect plan",
+      "inspect insights",
+    ])
+      expect(calls).not.toContain(command);
+  });
+
+  it("keeps unavailable editor-host bindings NOT READY without disguising them as a CLI pass", async () => {
+    const report = {
+      ...sqliteCapabilities(),
+      availability: "unavailable",
+      engine: { family: "sqlite", service: "sqlite", version: null },
+    };
+    const { fake, calls } = sqliteClient({
+      ready: false,
+      capabilities: report,
+    });
+    const snapshot = await inspectProject({
+      workspaceName: "SQLite",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: fake,
+    });
+    expect(snapshot.availability).toBe("not_ready");
+    expect(snapshot.databaseCapabilities?.availability).toBe("unavailable");
+    expect(snapshot.readiness?.state).toBe("NOT READY");
+    expect(calls).not.toContain("status");
+    expect(calls).not.toContain("engine status");
+  });
+
+  it.each([
+    { advertiseSqlite: false },
+    { wrongGeneration: true },
+    { capabilityVersion: "0.1.0-rc.5" },
+    { capabilities: { ...sqliteCapabilities(), availability: "unavailable" } },
+  ])(
+    "refuses unnegotiated, drifting or contradictory ready evidence",
+    async (options) => {
+      const { fake } = sqliteClient(options);
+      const snapshot = await inspectProject({
+        workspaceName: "SQLite",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: fake,
+      });
+      expect(snapshot.availability).toBe("error");
+      expect(snapshot.error?.code).toBe("invalid_cli_contract");
+      expect(snapshot.runtime).toBeUndefined();
+    },
+  );
 });

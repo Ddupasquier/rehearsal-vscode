@@ -16,6 +16,7 @@ import {
 } from "../../../src/runtime/engines/engine_lifecycle_view.js";
 import { parseWorkspaceMessage } from "../../../src/workspace/state/workspace_preferences.js";
 import { workspaceActionPlan } from "../../../src/workspace/actions/action_catalog.js";
+import { sqliteCapabilities } from "../reports/database_capabilities_fixture.js";
 import {
   engineSnapshot,
   lifecycleStatus,
@@ -24,6 +25,19 @@ import {
 } from "./engine_lifecycle_fixture.js";
 
 describe("independent engine lifecycle contract", () => {
+  it("does not infer a stopped VM or enable shutdown from an owned SQLite file", () => {
+    const snapshot = {
+      ...engineSnapshot(),
+      databaseCapabilities: sqliteCapabilities(),
+    };
+    expect(engineShutdownAvailable(snapshot)).toBe(false);
+    expect(engineLifecyclePresentation(snapshot)).toMatchObject({
+      profile: "No VM required",
+      detail: expect.stringContaining(
+        "other projects may still have a VM running",
+      ),
+    });
+  });
   it("keeps selected engine and stopped profile separate after global selection changes", () => {
     const report = parseEngineLifecycleStatus({
       ...lifecycleStatus(),

@@ -78,6 +78,7 @@ export const sandboxSessionPresentation = (
 };
 
 export const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
+  const sqlite = snapshot.databaseCapabilities?.engine.family === "sqlite";
   switch (snapshot.availability) {
     case "loading":
       return {
@@ -143,11 +144,16 @@ export const statusFor = (snapshot: ProjectSnapshot): ProductStatus => {
                 : "warning",
           };
         return {
-          label:
-            snapshot.runtime?.state === "running"
+          label: sqlite
+            ? snapshot.runtime?.state === "running"
+              ? "SQLite sandbox file enabled"
+              : "SQLite sandbox file paused"
+            : snapshot.runtime?.state === "running"
               ? "Database sandbox running"
               : "Database sandbox prepared",
-          detail: `${idle}Database state does not prove that a rehearsal or application proof passed.`,
+          detail: sqlite
+            ? `${idle}Owned-file readiness does not prove an application connection or a successful rehearsal.`
+            : `${idle}Database state does not prove that a rehearsal or application proof passed.`,
           tone: "muted",
         };
       }

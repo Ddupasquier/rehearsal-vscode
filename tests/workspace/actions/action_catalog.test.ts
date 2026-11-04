@@ -5,6 +5,7 @@ import {
   WORKSPACE_ACTION_IDS,
 } from "../../../src/workspace/actions/action_catalog.js";
 import type { ProjectSnapshot } from "../../../src/workspace/inspection/project_snapshot.js";
+import { sqliteCapabilities } from "../../runtime/reports/database_capabilities_fixture.js";
 
 const snapshot = (
   overrides: Partial<ProjectSnapshot> = {},
@@ -222,5 +223,88 @@ describe("workspace action catalog", () => {
     expect(
       workspaceActionPlan(snapshot(), "cancelOwnedOperation"),
     ).not.toHaveProperty("arguments");
+  });
+});
+
+describe("SQLite workspace actions", () => {
+  const sqlite = (): ProjectSnapshot =>
+    snapshot({
+      databaseCapabilities: sqliteCapabilities(),
+      runtime: {
+        state: "stopped",
+        targets: [
+          {
+            name: "primary",
+            state: "stopped",
+            reason: "runtime_not_running",
+            runtimeTarget: "sqlite",
+            verifiedRuntimeAvailable: true,
+            endpoint: null,
+          },
+        ],
+      },
+    });
+
+  it("uses owned-file lifecycle wording without promising to stop other applications", () => {
+    expect(
+      workspaceActionPlan(sqlite(), "startRuntime")?.confirmation?.detail,
+    ).toContain("owned SQLite file");
+    expect(
+      workspaceActionPlan(sqlite(), "stopRuntime")?.confirmation?.detail,
+    ).toContain("does not stop other applications");
+    const discard = workspaceActionPlan(sqlite(), "discardRuntime")!;
+    expect(discard.confirmation?.detail).toContain("owned sidecars");
+    expect(discard.confirmation?.detail).not.toContain("Storage volumes");
+    expect(discard.confirmation?.destructive).toBe(true);
+    expect(workspaceActionPlan(sqlite(), "runRehearsal")?.arguments).toContain(
+      `--confirm-candidates=${"a".repeat(64)}`,
+    );
+  });
+
+  it("does not offer SQLite Auth, container cleanup or VM actions", () => {
+    for (const id of [
+      "identityConnect",
+      "cleanupPreview",
+      "shutdownVm",
+    ] as const)
+      expect(workspaceActionPlan(sqlite(), id)).toBeNull();
+  });
+
+  it("refuses mutation with missing, unavailable or unqualified per-target capability evidence", () => {
+    const noCapability = sqlite();
+    const { databaseCapabilities: _report, ...missing } = noCapability;
+    expect(workspaceActionPlan(missing, "runRehearsal")).toBeNull();
+    expect(
+      workspaceActionPlan(
+        {
+          ...sqlite(),
+          databaseCapabilities: {
+            ...sqliteCapabilities(),
+            availability: "unknown",
+          },
+        },
+        "reset",
+      ),
+    ).toBeNull();
+    const report = sqliteCapabilities();
+    expect(
+      workspaceActionPlan(
+        {
+          ...sqlite(),
+          databaseCapabilities: {
+            ...report,
+            capabilities: {
+              ...report.capabilities,
+              migrations: {
+                state: "unknown",
+                reason: "qualification_missing",
+                scope: "sqlite-v1",
+              },
+            },
+          },
+        },
+        "runRehearsal",
+      ),
+    ).toBeNull();
   });
 });

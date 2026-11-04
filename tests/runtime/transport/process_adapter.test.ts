@@ -476,6 +476,25 @@ if (process.argv.includes("--version")) console.log(JSON.stringify({name:"@rehea
     },
   );
 
+  it.each([undefined, 1, 2])(
+    "negotiates database capabilities and SQLite only for explicit schema %s",
+    async (schema) => {
+      const root = await workspace(
+        "",
+        "9.9.9",
+        schema === undefined
+          ? {}
+          : {
+              databaseCapabilities: schema,
+              sqliteTarget: schema,
+            },
+      );
+      const resolved = await resolveWorkspaceRehearsal(root);
+      expect(resolved.databaseCapabilitiesSchema).toBe(schema === 1 ? 1 : null);
+      expect(resolved.sqliteTargetSchema).toBe(schema === 1 ? 1 : null);
+    },
+  );
+
   it("keeps larger static JSON bounded separately from the ordinary one-MiB command limit", async () => {
     const root = await workspace(
       `console.log(JSON.stringify({schemaVersion:1,rehearsalVersion:"9.9.9",command:"inspect insights",status:"success",startedAt:new Date(0).toISOString(),durationMs:1,warnings:[],data:{fixture:"x".repeat(1100000)}}));`,
