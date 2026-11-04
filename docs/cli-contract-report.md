@@ -25,7 +25,12 @@ checks. Historical identities, versions, publication status and resource blocker
 belong to their recorded observations, not the current release. They do not certify
 later artifacts or unexercised native/provider/accessibility behavior.
 
-## SQLite target contract — unreleased
+## Starter 0.1.29 / Core 2.3.0 SQLite contract
+
+This pair adds the explicit native SQLite target. The
+[capability catalog](https://ddupasquier.github.io/rehearsal-db/capabilities/)
+records published availability and exact qualification scope. Earlier private
+0.1.28/2.2.1 development artifacts do not establish a published SQLite release.
 
 The editor requires both `sqliteTarget: 1` and `databaseCapabilities: 1` from the
 installed package before accepting SQLite status schema 2 or baseline format 6.
@@ -33,6 +38,15 @@ The closed `database capabilities --json` report binds the primary engine/backen
 and the fixed feature set; package flags alone never enable an operation.
 Format 6 additionally binds SQLite 3.53.4, driver 1 and codec 1. Its empty history
 uses an explicit null cutoff. Existing PostgreSQL/Supabase schemas remain unchanged.
+
+For capability-aware Core, the idle Activity barrier precedes discovery and Doctor.
+An explicit configuration or operating-system failure retains Doctor's setup guidance
+without capability, configuration-metadata, engine or resource reads. Otherwise the
+database capability command independently reloads and validates configuration before
+the editor accepts its report or performs optional container inspection. Valid server
+Doctor reports do not emit a configuration-success row; none is required. A success
+envelope with an explicit configuration/host failure is contradictory and refused.
+The final Activity barrier still discards inspection details if work starts concurrently.
 
 SQLite inspection skips container inventory and PostgreSQL plan/Insights queries.
 Configuration presentation uses Core's reported SQLite target and hides inapplicable
@@ -45,8 +59,10 @@ An unavailable binding stays NOT READY; a ready report must agree with the basel
 candidate and status identities. Enable/pause describes the cooperative owned-file
 lifecycle, not an assertion that an arbitrary application connection started or stopped.
 
-This source contract still needs exact installed-pair/native qualification before
-publication. Pure parser and snapshot tests do not establish native editor support.
+Exact installed-pair/native evidence remains specific to its recorded hashes and
+runtime. The initial qualified setup is macOS arm64, Node 24.21.0 / SQLite 3.53.4
+and VS Code 1.143.0. Pure parser and snapshot tests do not establish support for
+another native host, accessibility environment or later artifact.
 
 ## 0.1.25 / core 2.0.0 release candidate
 

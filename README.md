@@ -31,6 +31,7 @@ project readiness and local resource status.
 | **Keep useful evidence**    | Browse baselines and privacy, Storage and data-shape evidence; compare summaries and [export redacted reports](docs/extension-guide.md#what-the-workbench-shows).                    |
 | **Recover and cancel**      | Follow persistent failure explanations, open unchanged attempted inputs and track or cancel [editor-owned operations](docs/extension-guide.md#what-the-workbench-shows).             |
 | **Manage resources**        | Inspect ownership and available usage metrics, review protection settings and [preview cleanup](docs/extension-guide.md#project-setup-and-runtime-review).                           |
+| **Use SQLite files**        | Review SQLite readiness and baselines, then enable or pause the owned file [without a VM](docs/extension-guide.md#sqlite-file-workflows).                                            |
 | **Shut down the VM**        | Review affected workloads, confirm [supported VM shutdown](docs/extension-guide.md#vm-shutdown), then return with **Back to Rehearsal**.                                             |
 | **Configure and update**    | Review exact configuration diffs, save display profiles and choose independent [extension/Core update preferences](docs/extension-guide.md#keep-the-canonical-installation-current). |
 
@@ -40,8 +41,9 @@ records published versions and verified scope. The
 intended, queued and paused work. New database targets and container engines take
 priority over further ORM integrations.
 
-[SQLite compatibility work](docs/extension-guide.md#sqlite-compatibility--in-development)
-is in development; its source changes do not yet establish published support.
+Starter **0.1.29** pairs with **Core 2.3.0** for
+[SQLite file workflows](docs/extension-guide.md#sqlite-file-workflows).
+Check the catalog for published availability and the guide for the qualified runtime.
 
 The extension uses your project's Rehearsal CLI. Inspection is read-only; database
 operations and destructive cleanup retain their review and confirmation steps.

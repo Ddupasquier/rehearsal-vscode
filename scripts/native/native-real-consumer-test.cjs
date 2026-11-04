@@ -74,6 +74,7 @@ exports.run = async () => {
     "engine status",
     "inspect configuration",
     "activity",
+    "database capabilities",
     "doctor",
     "discover",
     "explain",

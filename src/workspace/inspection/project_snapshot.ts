@@ -681,8 +681,8 @@ export const inspectProject = async ({
         }
       }
     };
-    // Legacy clients keep their established inspection order. New target-aware
-    // packages must identify the backend before any optional Docker inspection.
+    // Legacy clients keep their established inspection order. Target-aware
+    // packages validate configuration and backend before optional Docker reads.
     if (!negotiatesDatabase) await inspectEngine();
     const activityExecution = await client.command<ActivityData>({
       ...activityOptions,
@@ -704,35 +704,6 @@ export const inspectProject = async ({
         engineLifecycle: observedEngine,
       });
     }
-    if (negotiatesDatabase) {
-      const execution = await client.command<unknown>({
-        ...common,
-        command: ["database", "capabilities"],
-        expectedCommand: "database capabilities",
-      });
-      requireRehearsalVersion(version.version, [execution.result]);
-      if (execution.result.status !== "success")
-        throw new ContractError(
-          "Database capability inspection did not succeed.",
-        );
-      observedDatabaseCapabilities = parseDatabaseCapabilities(
-        execution.result.data,
-      );
-      if (observedDatabaseCapabilities.target !== "primary")
-        throw new ContractError(
-          "Database capabilities do not identify the primary target.",
-        );
-      if (observedDatabaseCapabilities.engine.family === "sqlite") {
-        if (version.sqliteTargetSchema !== 1)
-          throw new ContractError(
-            "Core does not advertise the SQLite target contract. Update Core and refresh.",
-          );
-        observedEngine = { state: "unsupported" };
-      } else await inspectEngine();
-    }
-    const sqliteTarget =
-      observedDatabaseCapabilities?.engine.family === "sqlite";
-    const runtimeContract = { sqliteTarget };
     const discovery =
       version.projectDiscoverySchema === 1
         ? parseProjectDiscoveryData(
@@ -779,10 +750,49 @@ export const inspectProject = async ({
       checks: doctor.result.data.checks,
     };
     observedReadiness = readiness;
+    const backendInspectionBlocked = readiness.checks.some(
+      ({ id, status }) =>
+        status === "fail" &&
+        (id === "configuration" || id === "operating-system"),
+    );
+    if (negotiatesDatabase && !backendInspectionBlocked) {
+      const execution = await client.command<unknown>({
+        ...common,
+        command: ["database", "capabilities"],
+        expectedCommand: "database capabilities",
+      });
+      requireRehearsalVersion(version.version, [execution.result]);
+      if (execution.result.status !== "success")
+        throw new ContractError(
+          "Database capability inspection did not succeed.",
+        );
+      observedDatabaseCapabilities = parseDatabaseCapabilities(
+        execution.result.data,
+      );
+      if (observedDatabaseCapabilities.target !== "primary")
+        throw new ContractError(
+          "Database capabilities do not identify the primary target.",
+        );
+      if (observedDatabaseCapabilities.engine.family === "sqlite") {
+        if (version.sqliteTargetSchema !== 1)
+          throw new ContractError(
+            "Core does not advertise the SQLite target contract. Update Core and refresh.",
+          );
+        observedEngine = { state: "unsupported" };
+      } else await inspectEngine();
+    } else if (negotiatesDatabase && doctor.result.status === "success") {
+      throw new ContractError(
+        "Doctor readiness contradicts its configuration or host failure. Refresh the project.",
+      );
+    }
+    const sqliteTarget =
+      observedDatabaseCapabilities?.engine.family === "sqlite";
+    const runtimeContract = { sqliteTarget };
     if (doctor.result.status === "not_ready") {
       let configurationMetadata: ConfigurationMetadata | undefined;
       let resources: ResourceInventoryData | undefined;
       if (
+        (!negotiatesDatabase || !backendInspectionBlocked) &&
         version.configurationReviewSchema === 1 &&
         discovery?.configuration.activePath
       ) {

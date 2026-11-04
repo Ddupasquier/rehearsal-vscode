@@ -67,7 +67,9 @@ default; installation requires an explicit option and never starts a database.
 
 ### Core compatibility and upgrades
 
-Extension **0.1.28** targets **Core 2.2.1**. Its opt-in PostgreSQL Drizzle review, introduced in
+Extension **0.1.29** targets **Core 2.3.0** for SQLite file workflows. Check the
+[capability catalog](https://ddupasquier.github.io/rehearsal-db/capabilities/) for
+published availability before selecting either version. Its opt-in PostgreSQL Drizzle review, introduced in
 **0.1.27 / Core 2.2.0**, requires **Drizzle Kit 0.31.11, ORM 0.45.4 and pg 8.23.1**, with format 4 baselines
 and journal-order SQL review. Core 2.1.x and earlier do not supply this Drizzle
 capability. The native review scope is **PostgreSQL 17, Ubuntu 24.04 x64, Node.js 24
@@ -93,12 +95,17 @@ package cannot supply that evidence.
 Confirm the target appears on npm before selecting it. Follow [Getting started](https://ddupasquier.github.io/rehearsal-db/getting-started/)
 for safe setup and baseline inputs.
 
-### SQLite compatibility — in development
+### SQLite file workflows
 
-SQLite support is being qualified with Core; this source change is not a published
-support claim. SQLite uses a separate owned file and needs no container engine.
+Starter 0.1.29 consumes Core 2.3.0's explicit SQLite target. SQLite uses a separate
+owned file and needs no container engine. Configure the source, SQL history and
+privacy decisions with the [SQLite guide](https://ddupasquier.github.io/rehearsal-db/sqlite/).
 The dashboard distinguishes **file enabled** from **paused**. Pausing preserves
 sandbox edits and does not close another application's SQLite connections.
+
+The initial qualified setup is **macOS Apple Silicon, Node 24.21.0 / SQLite 3.53.4
+and VS Code 1.143.0**. Support for the package's other Node lines does not qualify
+their SQLite bindings. Other SQLite host combinations remain unqualified.
 
 Dashboard inspection uses VS Code's runtime, which can differ from Node in your
 terminal. If that runtime lacks the qualified SQLite binding, the dashboard stays
@@ -108,28 +115,28 @@ SQLite; use the released capability catalog for current qualification limits.
 
 ### Direct GitHub installation
 
-The reviewed VSIX is an alternative to Marketplace. For **0.1.28**, use the official
-[0.1.28 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.28)
-only when it publishes `rehearsal-db-0.1.28.vsix` and `SHA256SUMS`. A draft or source
+The reviewed VSIX is an alternative to Marketplace. For **0.1.29**, use the official
+[0.1.29 GitHub release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.29)
+only when it publishes `rehearsal-db-0.1.29.vsix` and `SHA256SUMS`. A draft or source
 version does not prove availability. If either asset is absent, publication has not
 completed; do not substitute an engineering candidate's checksum. Marketplace may
 list a different version.
-The [previous 0.1.27 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.27)
+The [previous 0.1.28 release](https://github.com/Ddupasquier/rehearsal-vscode/releases/tag/v0.1.28)
 retains its original assets for rollback.
 
-1. Download `rehearsal-db-0.1.28.vsix` and `SHA256SUMS` from the same official release.
+1. Download `rehearsal-db-0.1.29.vsix` and `SHA256SUMS` from the same official release.
 2. Calculate the downloaded VSIX's SHA-256:
 
    **macOS**
 
    ```sh
-   shasum -a 256 /path/to/rehearsal-db-0.1.28.vsix
+   shasum -a 256 /path/to/rehearsal-db-0.1.29.vsix
    ```
 
    **Linux**
 
    ```sh
-   sha256sum /path/to/rehearsal-db-0.1.28.vsix
+   sha256sum /path/to/rehearsal-db-0.1.29.vsix
    ```
 
 3. Compare the result with `SHA256SUMS`. **Stop if they differ.**
@@ -139,7 +146,7 @@ retains its original assets for rollback.
 If the `code` command is available, step 4 can instead use:
 
 ```sh
-code --install-extension /absolute/path/to/rehearsal-db-0.1.28.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.29.vsix --force
 ```
 
 [Back to navigation](#on-this-page)
@@ -660,7 +667,7 @@ GitHub VSIX installations update automatically only after the separate opt-in ab
 version, compatible core version, and SHA-256. Install a replacement with:
 
 ```bash
-code --install-extension /absolute/path/to/rehearsal-db-0.1.28.vsix --force
+code --install-extension /absolute/path/to/rehearsal-db-0.1.29.vsix --force
 ```
 
 Read the bundled [license](../LICENSE), [privacy statement](../PRIVACY.md), and
