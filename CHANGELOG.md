@@ -1,13 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.1.29 — SQLite file workflows
 
-- Negotiate SQLite capabilities, versioned baselines and opaque owned-file status
+- Target Core 2.3.0 for SQLite capabilities, versioned baselines and opaque owned-file status
   independently from PostgreSQL/Supabase features. SQLite views avoid container,
   Auth/Storage and PostgreSQL-only inspection.
 - Describe SQLite enable/pause/discard as file lifecycle operations. Preserve
   actionable readiness failures when VS Code's runtime lacks the qualified binding;
   no Node installation or runtime switch occurs automatically.
+- Show the confirmed SQLite target in Configuration while keeping static discovery
+  suggestions separate. Existing PostgreSQL/Supabase contracts retain their meanings.
 
 ## 0.1.28 — Update recovery
 

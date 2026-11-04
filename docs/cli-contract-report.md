@@ -25,7 +25,12 @@ checks. Historical identities, versions, publication status and resource blocker
 belong to their recorded observations, not the current release. They do not certify
 later artifacts or unexercised native/provider/accessibility behavior.
 
-## SQLite target contract — unreleased
+## Starter 0.1.29 / Core 2.3.0 SQLite contract
+
+This pair adds the explicit native SQLite target. The
+[capability catalog](https://ddupasquier.github.io/rehearsal-db/capabilities/)
+records published availability and exact qualification scope. Earlier private
+0.1.28/2.2.1 development artifacts do not establish a published SQLite release.
 
 The editor requires both `sqliteTarget: 1` and `databaseCapabilities: 1` from the
 installed package before accepting SQLite status schema 2 or baseline format 6.
@@ -45,8 +50,10 @@ An unavailable binding stays NOT READY; a ready report must agree with the basel
 candidate and status identities. Enable/pause describes the cooperative owned-file
 lifecycle, not an assertion that an arbitrary application connection started or stopped.
 
-This source contract still needs exact installed-pair/native qualification before
-publication. Pure parser and snapshot tests do not establish native editor support.
+Exact installed-pair/native evidence remains specific to its recorded hashes and
+runtime. The initial qualified setup is macOS arm64, Node 24.21.0 / SQLite 3.53.4
+and VS Code 1.143.0. Pure parser and snapshot tests do not establish support for
+another native host, accessibility environment or later artifact.
 
 ## 0.1.25 / core 2.0.0 release candidate
 
