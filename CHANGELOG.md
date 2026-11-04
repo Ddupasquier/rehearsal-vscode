@@ -12,6 +12,7 @@
   suggestions separate. Existing PostgreSQL/Supabase contracts retain their meanings.
 - Keep missing or invalid configuration in setup guidance with capability-aware Core.
   Read discovery and Doctor before configuration-dependent capabilities or container inspection.
+- Preserve PostgreSQL/Supabase readiness and resource guidance with their existing Doctor reports.
 
 ## 0.1.28 — Update recovery
 

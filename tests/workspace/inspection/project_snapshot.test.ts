@@ -2115,6 +2115,61 @@ const sqliteClient = (
 };
 
 describe("capability-aware setup inspection", () => {
+  // Server Doctor's actual public shape has no configuration-success row.
+  // Only its early failure path emits configuration:fail (Core plan.mts).
+  const serverDoctor = (
+    service: "postgresql" | "supabase",
+    notReady = false,
+  ) => ({
+    state: notReady ? "NOT READY" : "READY",
+    checks: [
+      {
+        id: "node",
+        label: "Node.js compatibility",
+        status: "pass",
+        detail: "Node is supported.",
+      },
+      {
+        id: "operating-system",
+        label: "Operating-system support",
+        status: "pass",
+        detail: "Host is supported.",
+      },
+      {
+        id: "package-manager",
+        label: "Package-manager support",
+        status: "pass",
+        detail: "npm",
+      },
+      {
+        id: service === "postgresql" ? "postgresql-image" : "supabase-cli",
+        label: "Provider dependency",
+        status: "pass",
+        detail: "Provider is available.",
+      },
+      {
+        id: "baseline",
+        label: "Verified baseline",
+        status: notReady ? "fail" : "pass",
+        detail: notReady
+          ? "Create the reviewed baseline."
+          : "Baseline is verified.",
+        remediation: "Create the reviewed baseline.",
+      },
+    ],
+  });
+  const serverCapabilities = (service: "postgresql" | "supabase") => ({
+    ...sqliteCapabilities(),
+    engine: { family: "postgresql", service, version: null },
+    backend: "container",
+    availability: "unknown",
+    capabilities: Object.fromEntries(
+      Object.entries(sqliteCapabilities().capabilities).map(([name, value]) => [
+        name,
+        { ...value, scope: `${service}-v1` },
+      ]),
+    ),
+  });
   it.each(["missing", "invalid"])(
     "keeps a capability-v1 Core clean room with %s configuration NOT READY without configuration-dependent or engine reads",
     async (configuration) => {
@@ -2187,67 +2242,142 @@ describe("capability-aware setup inspection", () => {
     },
   );
 
-  it("negotiates a configured PostgreSQL backend after Doctor and before optional engine inspection", async () => {
-    const calls: string[] = [],
-      base = client();
-    const snapshot = await inspectProject({
-      workspaceName: "Configured PostgreSQL",
-      workspaceRoot: "/workspace",
-      trusted: true,
-      client: {
-        version: async (...args) => ({
-          ...(await base.version(...args)),
-          projectDiscoverySchema: 1,
-          databaseCapabilitiesSchema: 1,
-          engineLifecycleSchema: 1,
-        }),
-        command: async <Data>(
-          request: Parameters<SnapshotClient["command"]>[0],
-        ) => {
-          calls.push(request.expectedCommand);
-          if (request.expectedCommand === "discover")
-            return envelope("discover", partialDiscovery) as {
-              result: ResultEnvelope<Data>;
-              exitCode: number;
-            };
-          if (request.expectedCommand === "engine status")
-            return envelope("engine status", lifecycleStatus()) as {
-              result: ResultEnvelope<Data>;
-              exitCode: number;
-            };
-          if (request.expectedCommand === "database capabilities")
-            return envelope("database capabilities", {
-              ...sqliteCapabilities(),
-              engine: {
-                family: "postgresql",
-                service: "postgresql",
-                version: "17.0",
-              },
-              backend: "container",
-              capabilities: Object.fromEntries(
-                Object.entries(sqliteCapabilities().capabilities).map(
-                  ([name, value]) => [
-                    name,
-                    { ...value, scope: "postgresql-v1" },
-                  ],
-                ),
-              ),
-            }) as { result: ResultEnvelope<Data>; exitCode: number };
-          return base.command<Data>(request);
+  it.each(["postgresql", "supabase"] as const)(
+    "accepts actual READY %s server Doctor without a configuration-success row",
+    async (service) => {
+      const calls: string[] = [],
+        base = client();
+      const snapshot = await inspectProject({
+        workspaceName: "Configured PostgreSQL",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: {
+          version: async (...args) => ({
+            ...(await base.version(...args)),
+            projectDiscoverySchema: 1,
+            databaseCapabilitiesSchema: 1,
+            engineLifecycleSchema: 1,
+          }),
+          command: async <Data>(
+            request: Parameters<SnapshotClient["command"]>[0],
+          ) => {
+            calls.push(request.expectedCommand);
+            if (request.expectedCommand === "discover")
+              return envelope("discover", partialDiscovery) as {
+                result: ResultEnvelope<Data>;
+                exitCode: number;
+              };
+            if (request.expectedCommand === "doctor")
+              return envelope("doctor", serverDoctor(service)) as {
+                result: ResultEnvelope<Data>;
+                exitCode: number;
+              };
+            if (request.expectedCommand === "engine status")
+              return envelope("engine status", lifecycleStatus()) as {
+                result: ResultEnvelope<Data>;
+                exitCode: number;
+              };
+            if (request.expectedCommand === "database capabilities")
+              return envelope(
+                "database capabilities",
+                serverCapabilities(service),
+              ) as { result: ResultEnvelope<Data>; exitCode: number };
+            if (request.expectedCommand === "explain") {
+              const execution = await base.command<ExplainData>(request);
+              return {
+                ...execution,
+                result: {
+                  ...execution.result,
+                  data: {
+                    ...execution.result.data,
+                    environment: {
+                      ...execution.result.data.environment,
+                      target: service,
+                    },
+                  },
+                },
+              } as { result: ResultEnvelope<Data>; exitCode: number };
+            }
+            return base.command<Data>(request);
+          },
         },
-      },
-    });
-    expect(snapshot.availability).toBe("ready");
-    expect(snapshot.databaseCapabilities?.engine.service).toBe("postgresql");
-    expect(snapshot.engineLifecycle?.state).toBe("available");
-    expect(calls.slice(0, 5)).toEqual([
-      "activity",
-      "discover",
-      "doctor",
-      "database capabilities",
-      "engine status",
-    ]);
-  });
+      });
+      expect(snapshot.availability).toBe("ready");
+      expect(snapshot.databaseCapabilities?.engine.service).toBe(service);
+      expect(snapshot.engineLifecycle?.state).toBe("available");
+      expect(calls.slice(0, 5)).toEqual([
+        "activity",
+        "discover",
+        "doctor",
+        "database capabilities",
+        "engine status",
+      ]);
+    },
+  );
+
+  it.each(["postgresql", "supabase"] as const)(
+    "retains configured NOT READY %s server resource guidance without a configuration-success row",
+    async (service) => {
+      const inventory = partialInventory();
+      inventory.environments[0]!.provider = service;
+      const { fake, calls } = partialClient({ inventory });
+      const snapshot = await inspectProject({
+        workspaceName: "Configured server without baseline",
+        workspaceRoot: "/workspace",
+        trusted: true,
+        client: {
+          ...fake,
+          version: async (...args) => ({
+            ...(await fake.version(...args)),
+            databaseCapabilitiesSchema: 1,
+            engineLifecycleSchema: 1,
+          }),
+          command: async <Data>(
+            request: Parameters<SnapshotClient["command"]>[0],
+          ) => {
+            let execution;
+            if (request.expectedCommand === "doctor")
+              execution = envelope(
+                "doctor",
+                serverDoctor(service, true),
+                "not_ready",
+              );
+            else if (request.expectedCommand === "database capabilities")
+              execution = envelope(
+                "database capabilities",
+                serverCapabilities(service),
+              );
+            else if (request.expectedCommand === "engine status")
+              execution = envelope("engine status", lifecycleStatus());
+            else return fake.command<Data>(request);
+            calls.push(request);
+            return execution as {
+              result: ResultEnvelope<Data>;
+              exitCode: number;
+            };
+          },
+        },
+      });
+      expect(snapshot.availability).toBe("not_ready");
+      expect(
+        snapshot.readiness?.checks.find((check) => check.id === "baseline")
+          ?.remediation,
+      ).toBe("Create the reviewed baseline.");
+      expect(snapshot.configurationMetadata?.path).toBe("rehearsal.config.mjs");
+      expect(snapshot.resources?.environments[0]?.provider).toBe(service);
+      expect(snapshot.databaseCapabilities?.engine.service).toBe(service);
+      expect(calls.map((call) => call.expectedCommand)).toEqual([
+        "activity",
+        "discover",
+        "doctor",
+        "database capabilities",
+        "engine status",
+        "configuration",
+        "resources",
+        "activity",
+      ]);
+    },
+  );
 
   it.each(["before", "after"])(
     "retains the %s-inspection idle barrier for capability-aware SQLite",
@@ -2316,7 +2446,7 @@ describe("capability-aware setup inspection", () => {
     expect(snapshot.resources).toBeUndefined();
   });
 
-  it("refuses a READY claim without positive configuration validation", async () => {
+  it("refuses a contradictory READY claim with an explicit failed configuration check", async () => {
     const { fake, calls } = sqliteClient();
     const snapshot = await inspectProject({
       workspaceName: "Contradictory Doctor",
@@ -2329,7 +2459,17 @@ describe("capability-aware setup inspection", () => {
         ) => {
           if (request.expectedCommand === "doctor") {
             calls.push("doctor");
-            return envelope("doctor", { state: "READY", checks: [] }) as {
+            return envelope("doctor", {
+              state: "READY",
+              checks: [
+                {
+                  id: "configuration",
+                  label: "Configuration",
+                  status: "fail",
+                  detail: "Configuration is invalid.",
+                },
+              ],
+            }) as {
               result: ResultEnvelope<Data>;
               exitCode: number;
             };
@@ -2341,6 +2481,50 @@ describe("capability-aware setup inspection", () => {
     expect(snapshot.availability).toBe("error");
     expect(snapshot.error?.code).toBe("invalid_cli_contract");
     expect(calls).toEqual(["activity", "doctor"]);
+  });
+
+  it("retains unsupported-host guidance without capabilities or optional infrastructure reads", async () => {
+    const { fake, calls } = sqliteClient();
+    const snapshot = await inspectProject({
+      workspaceName: "Unsupported host",
+      workspaceRoot: "/workspace",
+      trusted: true,
+      client: {
+        ...fake,
+        command: async <Data>(
+          request: Parameters<SnapshotClient["command"]>[0],
+        ) => {
+          if (request.expectedCommand === "doctor") {
+            calls.push("doctor");
+            return envelope(
+              "doctor",
+              {
+                state: "NOT READY",
+                checks: [
+                  {
+                    id: "operating-system",
+                    label: "Operating-system support",
+                    status: "fail",
+                    detail: "This host is unsupported.",
+                    remediation: "Use a supported host.",
+                  },
+                ],
+              },
+              "not_ready",
+            ) as { result: ResultEnvelope<Data>; exitCode: number };
+          }
+          return fake.command<Data>(request);
+        },
+      },
+    });
+    expect(snapshot.availability).toBe("not_ready");
+    expect(snapshot.readiness?.checks[0]?.remediation).toBe(
+      "Use a supported host.",
+    );
+    expect(snapshot.databaseCapabilities).toBeUndefined();
+    expect(snapshot.configurationMetadata).toBeUndefined();
+    expect(snapshot.resources).toBeUndefined();
+    expect(calls).toEqual(["activity", "doctor", "activity"]);
   });
 });
 

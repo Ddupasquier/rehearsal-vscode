@@ -750,10 +750,12 @@ export const inspectProject = async ({
       checks: doctor.result.data.checks,
     };
     observedReadiness = readiness;
-    const configurationValidated = readiness.checks.some(
-      ({ id, status }) => id === "configuration" && status === "pass",
+    const backendInspectionBlocked = readiness.checks.some(
+      ({ id, status }) =>
+        status === "fail" &&
+        (id === "configuration" || id === "operating-system"),
     );
-    if (negotiatesDatabase && configurationValidated) {
+    if (negotiatesDatabase && !backendInspectionBlocked) {
       const execution = await client.command<unknown>({
         ...common,
         command: ["database", "capabilities"],
@@ -780,7 +782,7 @@ export const inspectProject = async ({
       } else await inspectEngine();
     } else if (negotiatesDatabase && doctor.result.status === "success") {
       throw new ContractError(
-        "Doctor did not validate project configuration. Refresh the project.",
+        "Doctor readiness contradicts its configuration or host failure. Refresh the project.",
       );
     }
     const sqliteTarget =
@@ -790,7 +792,7 @@ export const inspectProject = async ({
       let configurationMetadata: ConfigurationMetadata | undefined;
       let resources: ResourceInventoryData | undefined;
       if (
-        (!negotiatesDatabase || configurationValidated) &&
+        (!negotiatesDatabase || !backendInspectionBlocked) &&
         version.configurationReviewSchema === 1 &&
         discovery?.configuration.activePath
       ) {

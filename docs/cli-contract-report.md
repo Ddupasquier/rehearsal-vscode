@@ -40,11 +40,13 @@ Format 6 additionally binds SQLite 3.53.4, driver 1 and codec 1. Its empty histo
 uses an explicit null cutoff. Existing PostgreSQL/Supabase schemas remain unchanged.
 
 For capability-aware Core, the idle Activity barrier precedes discovery and Doctor.
-Only a passing configuration check enables the configuration-dependent database
-capability report. Missing or invalid configuration retains Doctor's setup guidance
-without capability, engine or resource reads. A configured target's capability report
-is validated before any optional container inspection; the final Activity barrier
-still discards inspection details if work starts concurrently.
+An explicit configuration or operating-system failure retains Doctor's setup guidance
+without capability, configuration-metadata, engine or resource reads. Otherwise the
+database capability command independently reloads and validates configuration before
+the editor accepts its report or performs optional container inspection. Valid server
+Doctor reports do not emit a configuration-success row; none is required. A success
+envelope with an explicit configuration/host failure is contradictory and refused.
+The final Activity barrier still discards inspection details if work starts concurrently.
 
 SQLite inspection skips container inventory and PostgreSQL plan/Insights queries.
 Configuration presentation uses Core's reported SQLite target and hides inapplicable

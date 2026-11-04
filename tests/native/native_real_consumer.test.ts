@@ -27,6 +27,196 @@ const args = () => [
   "--code-version=1.143.0",
   "--evidence=/approved/evidence",
 ];
+describe("actual real-consumer public-read observer", () => {
+  type ReadOptions = {
+    workspaceRoot: string;
+    command: readonly string[];
+    expectedCommand: string;
+    configPath?: string;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  };
+  type Adapter = {
+    runRehearsalJson: (options: ReadOptions) => Promise<unknown>;
+    runEngineShutdown: () => Promise<unknown>;
+  };
+  const fixture = async (
+    exercise: (adapter: Adapter) => Promise<void>,
+    upstreamFailure?: Error,
+  ) => {
+    const config = {
+      scenario: "real-consumer",
+      workspace: "/owned/consumer",
+      installedExtension: "/owned/installed",
+      version: "0.1.29",
+      coreVersion: "2.3.0",
+      resultPath: "/owned/result.json",
+    };
+    const forwarded: ReadOptions[] = [],
+      reply = Object.freeze({ marker: "original-public-result" });
+    let activated = false,
+      disposed = false,
+      shutdownCalls = 0,
+      exerciseFailure: unknown;
+    const read = async (options: ReadOptions) => {
+      forwarded.push(options);
+      if (upstreamFailure) throw upstreamFailure;
+      return reply;
+    };
+    const shutdown = async () => {
+      shutdownCalls++;
+    };
+    const inspect = async () => ({});
+    const adapter: Adapter = {
+        runRehearsalJson: read,
+        runEngineShutdown: shutdown,
+      },
+      snapshots = { inspectProject: inspect };
+    const api: { run?: () => Promise<void> } = {};
+    const nativeRequire = createRequire(__filename);
+    runInNewContext(
+      readFileSync(
+        join(__dirname, "../../scripts/native/native-real-consumer-test.cjs"),
+        "utf8",
+      ),
+      {
+        exports: api,
+        require: (name: string) => {
+          if (name === "vscode")
+            return {
+              workspace: {
+                isTrusted: true,
+                workspaceFolders: [
+                  {
+                    uri: {
+                      scheme: "file",
+                      authority: "",
+                      fsPath: config.workspace,
+                    },
+                  },
+                ],
+              },
+              extensions: {
+                getExtension: () => ({
+                  packageJSON: { version: config.version },
+                  extensionPath: config.installedExtension,
+                  activate: async () => {
+                    activated = true;
+                    try {
+                      await exercise(adapter);
+                    } catch (error) {
+                      exerciseFailure = error;
+                    }
+                    // Stop after exercising the installed observer; no UI or IO phase runs.
+                    throw Error("Intentional observer fixture completion.");
+                  },
+                }),
+              },
+              window: {
+                onDidOpenTerminal: () => ({
+                  dispose: () => {
+                    disposed = true;
+                  },
+                }),
+              },
+            };
+          if (name === "node:fs/promises")
+            return { realpath: async (path: string) => path };
+          if (name === "./native-editor-driver.cjs")
+            return {
+              readConfiguration: async () => config,
+              consumerDiagnostic: () => ({ code: "FIXTURE_COMPLETION" }),
+            };
+          if (name === "./native-editor-reads.cjs")
+            return {
+              writeJson: async () => {},
+              readRegular: () => {
+                throw Error("Unexpected fixture file read.");
+              },
+            };
+          if (
+            name ===
+            join(config.installedExtension, "dist/src/project_snapshot.js")
+          )
+            return snapshots;
+          if (
+            name ===
+            join(config.installedExtension, "dist/src/process_adapter.js")
+          )
+            return adapter;
+          return nativeRequire(name);
+        },
+      },
+    );
+    await expect(api.run!()).rejects.toThrow(
+      "Native real-consumer acceptance failed",
+    );
+    expect(activated).toBe(true);
+    expect(disposed).toBe(true);
+    expect(adapter.runRehearsalJson).toBe(read);
+    expect(adapter.runEngineShutdown).toBe(shutdown);
+    expect(snapshots.inspectProject).toBe(inspect);
+    if (exerciseFailure) throw exerciseFailure;
+    return { forwarded, reply, shutdownCalls };
+  };
+
+  it("forwards database capabilities arguments and the exact upstream result unchanged", async () => {
+    const options = Object.freeze({
+      workspaceRoot: "/owned/consumer",
+      command: Object.freeze(["database", "capabilities"]),
+      expectedCommand: "database capabilities",
+      configPath: "rehearsal.config.mjs",
+      timeoutMs: 1234,
+      signal: new AbortController().signal,
+    });
+    let returned: unknown;
+    const result = await fixture(async (adapter) => {
+      returned = await adapter.runRehearsalJson(options);
+    });
+    expect(result.forwarded).toHaveLength(1);
+    expect(result.forwarded[0]).toBe(options);
+    expect(result.forwarded[0]!.command).toBe(options.command);
+    expect(returned).toBe(result.reply);
+  });
+
+  it("preserves an upstream read rejection without manufacturing a result", async () => {
+    const failure = Error("Synthetic upstream refusal");
+    const result = await fixture(async (adapter) => {
+      await expect(
+        adapter.runRehearsalJson({
+          workspaceRoot: "/owned/consumer",
+          command: ["doctor"],
+          expectedCommand: "doctor",
+        }),
+      ).rejects.toBe(failure);
+    }, failure);
+    expect(result.forwarded).toHaveLength(1);
+  });
+
+  it("refuses unknown, mutating and command-mismatched requests before forwarding", async () => {
+    const result = await fixture(async (adapter) => {
+      for (const [expectedCommand, command] of [
+        ["unknown read", ["unknown", "read"]],
+        ["run", ["run"]],
+        ["discard", ["discard"]],
+        ["engine stop", ["engine", "stop"]],
+        ["database capabilities", ["discard"]],
+      ] as const)
+        await expect(
+          adapter.runRehearsalJson({
+            workspaceRoot: "/owned/consumer",
+            command,
+            expectedCommand,
+          }),
+        ).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+      await expect(adapter.runEngineShutdown()).rejects.toThrow(
+        "Read-only consumer verification refuses shutdown.",
+      );
+    });
+    expect(result.forwarded).toEqual([]);
+    expect(result.shutdownCalls).toBe(0);
+  });
+});
 describe("failure-only native consumer diagnostics", () => {
   const api: {
     consumerDiagnostic?: (error: unknown) => unknown;
